@@ -336,7 +336,7 @@ fn struct_name(s: &StructInfo) -> String {
     s.path.last().cloned().unwrap_or_default()
 }
 
-fn member_name(m: &Member) -> String {
+pub(super) fn member_name(m: &Member) -> String {
     match m {
         Member::Named(i) => i.name.clone(),
         Member::Unnamed { index, .. } => index.to_string(),

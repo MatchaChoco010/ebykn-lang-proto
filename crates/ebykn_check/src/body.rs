@@ -12,8 +12,8 @@ mod proof;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ebykn_syntax::ast::{
-    self, Block, Expr, ExprKind, FieldPat, LoopKind, Member, PatKind, PermMode, Region,
-    RegionIndex, StmtKind, UnOp,
+    self, Block, Expr, ExprKind, FieldPat, LoopKind, PatKind, PermMode, Region, RegionIndex,
+    StmtKind, UnOp,
 };
 use ebykn_syntax::diag::{CheckMsg, DotForm, LoopPoint, Message, Mismatch, Op, PermState, Unimpl};
 use ebykn_syntax::span::Span;
@@ -1871,10 +1871,7 @@ impl<'a> Walker<'a> {
         let mut given = BTreeSet::new();
         for f in &lit.fields {
             if f.erased {
-                let name = match &f.member {
-                    Member::Named(i) => i.name.clone(),
-                    Member::Unnamed { index, .. } => index.to_string(),
-                };
+                let name = erased::member_name(&f.member);
                 match info.and_then(|s| s.erased_kind(&name)) {
                     Some(k) => {
                         self.facts.erased.insert(f.span.into(), k);
@@ -1897,10 +1894,7 @@ impl<'a> Walker<'a> {
                 d |= self.cfg_guarded(f.span, |w| w.expr(&f.expr));
             } else {
                 if self.named_erased(info, &f.member, DotForm::Literal, f.span) {
-                    given.insert(match &f.member {
-                        Member::Named(i) => i.name.clone(),
-                        Member::Unnamed { index, .. } => index.to_string(),
-                    });
+                    given.insert(erased::member_name(&f.member));
                 }
                 d |= self.expr(&f.expr);
             }
