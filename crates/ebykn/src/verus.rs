@@ -21,6 +21,8 @@ use crate::{VerusPin, verus_pin};
 pub struct Verus {
     pub dir: PathBuf,
     pub pin: VerusPin,
+    /// 外部のコマンドが失敗したときの文言の言語（`find` に渡した `--lang`）。
+    pub lang: ebykn_syntax::diag::Lang,
 }
 
 /// 固定した Verus を探し、`verus --version` で版を確かめる。
@@ -83,7 +85,7 @@ pub fn find(lang: ebykn_syntax::diag::Lang) -> Result<Verus, String> {
             )
         });
     }
-    Ok(Verus { dir, pin })
+    Ok(Verus { dir, pin, lang })
 }
 
 /// `verus --version --output-json` の版・コミットが固定値と完全に一致し、toolchain が固定値で始まるか
@@ -316,18 +318,19 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
             .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
             .args(args)
             .output()
-            .map_err(|e| format!("cannot run `cargo {}`: {e}", args.join(" ")))?;
+            .map_err(|e| cannot_run(&format!("cargo {}", args.join(" ")), &e, verus.lang))?;
         if !out.status.success() {
             return Err(command_failed(
                 &format!("cargo {}", args.join(" ")),
                 build,
                 &out,
+                verus.lang,
             ));
         }
     }
     let out = cmd
         .output()
-        .map_err(|e| format!("cannot run `cargo verus`: {e}"))?;
+        .map_err(|e| cannot_run("cargo verus", &e, verus.lang))?;
     let stdout = strip_ansi(&String::from_utf8_lossy(&out.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
     let json = parse_json(&stdout);
@@ -347,17 +350,37 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     })
 }
 
+/// 外部のコマンドを起動できなかったときの文言。
+fn cannot_run(cmd: &str, e: &std::io::Error, lang: ebykn_syntax::diag::Lang) -> String {
+    if lang == ebykn_syntax::diag::Lang::Ja {
+        format!("`{cmd}` を起動できません: {e}")
+    } else {
+        format!("cannot run `{cmd}`: {e}")
+    }
+}
+
 /// 外部のコマンドが失敗したときの文言：コマンド、走らせたディレクトリ、終了コード（シグナルで
 /// 止まったならそう書く）、コマンドの出力（#78。終了の状態を Debug 表記で出さない）。
-pub fn command_failed(cmd: &str, dir: &Path, out: &std::process::Output) -> String {
-    let how = match out.status.code() {
-        Some(c) => format!("exit code {c}"),
-        None => match signal(&out.status) {
-            Some(s) => format!("killed by signal {s}"),
-            None => "no exit code".into(),
-        },
+pub fn command_failed(
+    cmd: &str,
+    dir: &Path,
+    out: &std::process::Output,
+    lang: ebykn_syntax::diag::Lang,
+) -> String {
+    let ja = lang == ebykn_syntax::diag::Lang::Ja;
+    let how = match (out.status.code(), signal(&out.status)) {
+        (Some(c), _) if ja => format!("終了コード {c}"),
+        (Some(c), _) => format!("exit code {c}"),
+        (None, Some(s)) if ja => format!("シグナル {s} で停止"),
+        (None, Some(s)) => format!("killed by signal {s}"),
+        (None, None) if ja => "終了コードなし".into(),
+        (None, None) => "no exit code".into(),
     };
-    let mut s = format!("`{cmd}` failed in `{}` ({how})", dir.display());
+    let mut s = if ja {
+        format!("`{}` で `{cmd}` が失敗しました（{how}）", dir.display())
+    } else {
+        format!("`{cmd}` failed in `{}` ({how})", dir.display())
+    };
     let output = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -847,6 +870,7 @@ pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ebykn_syntax::diag::Lang;
 
     #[test]
     fn relative_paths() {
@@ -867,12 +891,27 @@ mod tests {
             stdout: Vec::new(),
             stderr: b"error: current package believes it's in a workspace when it's not\n".to_vec(),
         };
-        let m = command_failed("cargo clean -p app", Path::new("/w/app/build/verus"), &out);
+        let m = command_failed(
+            "cargo clean -p app",
+            Path::new("/w/app/build/verus"),
+            &out,
+            Lang::En,
+        );
         assert_eq!(
             m,
             "`cargo clean -p app` failed in `/w/app/build/verus` (exit code 101):\nerror: current package believes it's in a workspace when it's not"
         );
         assert!(!m.contains("ExitStatus"), "{m}");
+        // `--lang ja` では日本語で出す。
+        assert_eq!(
+            command_failed(
+                "cargo clean -p app",
+                Path::new("/w/app/build/verus"),
+                &out,
+                Lang::Ja
+            ),
+            "`/w/app/build/verus` で `cargo clean -p app` が失敗しました（終了コード 101）:\nerror: current package believes it's in a workspace when it's not"
+        );
         // シグナルで止まったもの（終了コードがない）。
         let out = std::process::Output {
             status: std::process::ExitStatus::from_raw(9),
@@ -880,8 +919,21 @@ mod tests {
             stderr: Vec::new(),
         };
         assert_eq!(
-            command_failed("cargo", Path::new("/w"), &out),
+            command_failed("cargo", Path::new("/w"), &out, Lang::En),
             "`cargo` failed in `/w` (killed by signal 9)"
+        );
+        assert_eq!(
+            command_failed("cargo", Path::new("/w"), &out, Lang::Ja),
+            "`/w` で `cargo` が失敗しました（シグナル 9 で停止）"
+        );
+    }
+
+    #[test]
+    fn cannot_run_follows_the_language() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(cannot_run("cargo verus", &e, Lang::En).starts_with("cannot run `cargo verus`: "));
+        assert!(
+            cannot_run("cargo verus", &e, Lang::Ja).starts_with("`cargo verus` を起動できません: ")
         );
     }
 
