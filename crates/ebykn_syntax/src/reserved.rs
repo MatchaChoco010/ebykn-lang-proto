@@ -141,6 +141,18 @@ pub const VERUS_BUILTIN_CALLS: &[&str] = &[
     "shr_ref_struct_wrap",
 ];
 
+/// Rust の版で予約語になった名前と、その版（#104）。生成する `build/verus/` は `Ebykn.toml` の
+/// `edition` でビルドするので、その版で予約語の名前は、どこに書いても（マクロの引数の中を含む）
+/// `r#` を付けないと生成コードが構文エラーになる。構文解析器（syn）が自分で予約語として拒む名前
+/// （`async`、`await`、`dyn`、`try` など）は入れない。
+pub const EDITION_KEYWORDS: &[(&str, u32)] = &[("gen", 2024)];
+
+/// `Ebykn.toml` の `edition` で、`since` の版の予約語が予約語か。数として読めない版は、予約語と
+/// みなす（cargo がその版を拒むので、通してよい場合がない）。
+pub fn edition_reserves(edition: &str, since: u32) -> bool {
+    edition.parse::<u32>().map_or(true, |e| e >= since)
+}
+
 /// 表のすべての名前と種類。
 pub fn all() -> impl Iterator<Item = (&'static str, ReservedKind)> {
     let k = |xs: &'static [&'static str], kind| xs.iter().map(move |n| (*n, kind));

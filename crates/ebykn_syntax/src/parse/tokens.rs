@@ -1,6 +1,7 @@
 //! トークン列だけで決まる検査（仕様 §4）。構文解析の成否によらず、ファイル全体を見る。
 //!
 //! - E0101：接頭辞 `__eyk_` の識別子（ライフタイムとマクロの引数の中を含む）。
+//! - E0001：Rust の版の予約語（`gen`）の、`r#` のない識別子（マクロの引数の中を含む。#104）。
 //! - E0102：`#[verifier::..]` / `#![verifier::..]`（古い形の `#[verifier(..)]`、`r#verifier`、
 //!   先頭の `::`、`cfg_attr(.., verifier::..)` の中を含む）。
 //! - 証明の属性（仕様 §5.7 の `ProofAttr`）と Verus の属性。`.eyk` には書けない。
@@ -47,6 +48,20 @@ fn scan_in(ts: &TokenStream, use_group: bool) {
         match tt {
             TokenTree::Ident(id) => {
                 let name = unraw(&id.to_string());
+                // 版の予約語（`gen`）。`r#gen` は通す。版は検査が見る（#104）。
+                if !id.to_string().starts_with("r#")
+                    && let Some((word, since)) = crate::reserved::EDITION_KEYWORDS
+                        .iter()
+                        .find(|(w, _)| *w == name)
+                {
+                    push(
+                        sp(id.span()),
+                        Message::EditionKeyword {
+                            word: (*word).into(),
+                            since: *since,
+                        },
+                    );
+                }
                 if name.starts_with("__eyk_") {
                     push(
                         sp(id.span()),
