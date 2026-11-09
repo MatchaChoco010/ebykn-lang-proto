@@ -187,6 +187,8 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | `cargo xtask verus-probes` | 設計ノート §7.2 の前提を確かめるプローブ（`tests/verus-probes/`）を走らせ、各ファイルの先頭の期待と比べる |
 | `cargo xtask formal-oracle` | 参照モデルから判定の表を作り直し、コミットされた表（`formal/oracle/`）と比べる |
 | `cargo xtask formal-oracle-write` | 参照モデルから判定の表を作り直し、`formal/oracle/` に書く。モデルを変えたら作り直してコミットする |
+| `cargo xtask slides-install` | 報告スライドの道具（`xtask/src/slides.rs` で固定した Typst とフォント）を `~/.cache/ebykn/` に入れ、sha256 を確かめる |
+| `cargo xtask slides-build <ディレクトリ>` | 報告スライドの `<ディレクトリ>/slides.typ` を `slides.pdf` に組み、はみ出し・密度・見出し・リンクを検査する（`ebykn-report-slides` スキル） |
 | `cargo test --workspace` | テスト |
 | `mdbook build book` | Ebykn Book を `book/book/` に作る（mdBook 0.5.4） |
 
