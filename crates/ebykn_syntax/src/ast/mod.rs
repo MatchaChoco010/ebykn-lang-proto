@@ -186,20 +186,10 @@ impl Attr {
     }
 }
 
-/// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む）。rustc と同じく raw の
-/// 綴り（`#[r#cfg]`、`cfg_attr(.., r#cfg(..))`）も数える（#122）。構文木への変換（ジェネリクスの
-/// 引数）と検査の両方が使う（#95）。
+/// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む。判定は
+/// [`crate::denylist::attr_has_cfg`]）。構文木への変換（ジェネリクスの引数）と検査の両方が使う（#95）。
 pub fn has_cfg(attrs: &[Attr]) -> bool {
-    fn mentions_cfg(ts: &TokenStream) -> bool {
-        ts.clone().into_iter().any(|t| match t {
-            proc_macro2::TokenTree::Ident(i) => crate::macros::token_is_name(&i, "cfg"),
-            proc_macro2::TokenTree::Group(g) => mentions_cfg(&g.stream()),
-            _ => false,
-        })
-    }
-    attrs
-        .iter()
-        .any(|a| a.is_builtin("cfg") || a.is_builtin("cfg_attr") && mentions_cfg(&a.args))
+    attrs.iter().any(crate::denylist::attr_has_cfg)
 }
 
 /// 可視性。
