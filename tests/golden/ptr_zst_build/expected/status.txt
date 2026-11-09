@@ -1,0 +1,3 @@
+verified ptr_zst_build::alloc
+verified ptr_zst_build::unit
+results 2 verified, 0 errors

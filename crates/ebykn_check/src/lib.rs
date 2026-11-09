@@ -12,6 +12,7 @@ pub mod index;
 pub mod names;
 pub mod project;
 pub mod sig;
+pub mod zst;
 
 use ebykn_syntax::ast::{self, ItemKind, Param, TraitItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
@@ -79,6 +80,7 @@ pub fn check(project: &Project) -> Checked {
     }
     project.for_each_module(|m, _, items| check_items(&index, m, items, &mut diags, &mut facts));
     names::check(project, &index, &mut diags);
+    zst::check(project, &index, &mut diags);
     let mut list = diags.list;
     sort_diags(&mut list);
     Checked {

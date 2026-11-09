@@ -29,6 +29,12 @@ pub struct StructInfo {
     /// `owns { .. }` と `spec { .. }` のフィールド（書かれた順）。
     pub erased: Vec<(String, ErasedKind, ast::Type)>,
     pub module: ItemPath,
+    /// 実行時のフィールドの型（名前付きと tuple struct のもの。書かれた順）。
+    pub runtime: Vec<ast::Type>,
+    /// 型の引数の名前（ライフタイムと定数は除く）。
+    pub params: Vec<String>,
+    /// unit struct（`struct S;`）か。
+    pub unit: bool,
 }
 
 impl StructInfo {
@@ -45,6 +51,19 @@ impl StructInfo {
             .find(|(n, _, _)| n == name)
             .map(|(_, _, t)| t)
     }
+}
+
+/// 列挙（E0517 のゼロサイズ型の判定に使う）。
+#[derive(Debug, Clone)]
+pub struct EnumInfo {
+    pub module: ItemPath,
+    /// 型の引数の名前（ライフタイムと定数は除く）。
+    pub params: Vec<String>,
+    /// 列挙子の名前、実行時のフィールドの型、フィールドのない列挙子（`A`）か。
+    pub variants: Vec<(String, Vec<ast::Type>, bool)>,
+    /// `#[repr(..)]`（`cfg_attr` の中を含む）か、`#[cfg]` の付いた列挙子があるか。
+    /// どちらも大きさや列挙子の数が定義から決まらないので、ゼロサイズ型と判定しない。
+    pub opaque: bool,
 }
 
 /// `uses` の一つ。
@@ -158,6 +177,7 @@ pub enum Resolved {
 #[derive(Debug, Default)]
 pub struct Index {
     pub structs: BTreeMap<ItemPath, StructInfo>,
+    pub enums: BTreeMap<ItemPath, EnumInfo>,
     pub fns: BTreeMap<ItemPath, FnInfo>,
     /// 固有の impl のメソッド（型のパス → 名前 → 署名）。
     pub methods: BTreeMap<ItemPath, BTreeMap<String, FnInfo>>,
@@ -257,6 +277,17 @@ pub fn fn_info(vis: &Vis, sig: &ast::Signature, contract: &ast::Contract, kind: 
         is_pub: !matches!(vis, Vis::Inherited),
         kind,
     }
+}
+
+/// 型の引数の名前（ライフタイムと定数は除く）。
+pub fn type_params(g: &ast::Generics) -> Vec<String> {
+    g.params
+        .iter()
+        .filter_map(|g| match g {
+            ast::GenericParam::Type { ident, .. } => Some(ident.name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// パターンが一つの識別子（`mut x` を含む）ならその識別子。
@@ -372,21 +403,43 @@ impl Index {
                         .insert(p, fn_info(&item.vis, &f.sig, &f.contract, FnKind::Lemma));
                 }
                 ItemKind::TypeAlias(t) => {
-                    let params = t
-                        .generics
-                        .params
-                        .iter()
-                        .filter_map(|g| match g {
-                            ast::GenericParam::Type { ident, .. } => Some(ident.name.clone()),
-                            _ => None,
-                        })
-                        .collect();
+                    let params = type_params(&t.generics);
                     self.aliases.insert(
                         p,
                         Alias {
                             module: module.to_vec(),
                             params,
                             ty: t.ty.clone(),
+                        },
+                    );
+                }
+                ItemKind::Enum(e) => {
+                    let variants = e
+                        .variants
+                        .iter()
+                        .map(|v| {
+                            let tys = match &v.fields {
+                                ast::Fields::Named(fs) | ast::Fields::Tuple(fs) => {
+                                    fs.iter().map(|f| f.ty.clone()).collect()
+                                }
+                                ast::Fields::Unit => Vec::new(),
+                            };
+                            (
+                                v.ident.name.clone(),
+                                tys,
+                                matches!(v.fields, ast::Fields::Unit),
+                            )
+                        })
+                        .collect();
+                    let opaque =
+                        has_repr(&item.attrs) || e.variants.iter().any(|v| has_cfg(&v.attrs));
+                    self.enums.insert(
+                        p,
+                        EnumInfo {
+                            module: module.to_vec(),
+                            params: type_params(&e.generics),
+                            variants,
+                            opaque,
                         },
                     );
                 }
@@ -406,6 +459,12 @@ impl Index {
                             }
                         }
                     }
+                    let runtime = match &s.fields {
+                        ast::Fields::Named(fs) | ast::Fields::Tuple(fs) => {
+                            fs.iter().map(|f| f.ty.clone()).collect()
+                        }
+                        ast::Fields::Unit => Vec::new(),
+                    };
                     self.structs.insert(
                         p.clone(),
                         StructInfo {
@@ -413,6 +472,9 @@ impl Index {
                             fields,
                             erased,
                             module: module.to_vec(),
+                            runtime,
+                            params: type_params(&s.generics),
+                            unit: matches!(s.fields, ast::Fields::Unit),
                         },
                     );
                 }
@@ -581,6 +643,17 @@ impl Index {
         };
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
         self.resolve_with(&a.module, path.leading_colon, &segs, None, true, depth + 1)
+    }
+
+    /// パスを解決する。型の別名はたどらない（`type P = Ptr<N>;` の `P` は別名のまま）。
+    pub fn resolve_exact(
+        &self,
+        module: &[String],
+        leading_colon: bool,
+        segs: &[String],
+        self_ty: Option<&ItemPath>,
+    ) -> Resolved {
+        self.resolve_with(module, leading_colon, segs, self_ty, false, 0)
     }
 
     /// パスを解決する。型の別名はたどる（`type P = Ptr<N>;` の `P::new` は prelude の `Ptr::new`）。
@@ -904,6 +977,22 @@ fn subst(ty: &ast::Type, map: &BTreeMap<&str, &ast::Type>) -> ast::Type {
         _ => {}
     }
     t
+}
+
+/// `#[repr(..)]` か、`cfg_attr` の中の `repr`（属性の最後の名前で見る。安全側）。
+pub fn has_repr(attrs: &[ast::Attr]) -> bool {
+    fn mentions_repr(ts: &TokenStream) -> bool {
+        ts.clone().into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "repr",
+            TokenTree::Group(g) => mentions_repr(&g.stream()),
+            _ => false,
+        })
+    }
+    attrs.iter().any(|a| match a.path.segments.last() {
+        Some(seg) if seg.ident.is("repr") => true,
+        Some(seg) if seg.ident.is("cfg_attr") => mentions_repr(&a.args),
+        _ => false,
+    })
 }
 
 /// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む）。

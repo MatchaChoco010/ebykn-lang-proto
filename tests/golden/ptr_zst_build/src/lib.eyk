@@ -1,0 +1,11 @@
+// ジェネリックな関数を経由して `Ptr<()>` を作る。`.eyk` の上では `T` がゼロサイズ型と分からないので
+// `ebykn check` は通し、検証も通る（検証は単相化しない）。ビルドで prelude のコンパイル時の検査が
+// `E0080` で止める（#12）。
+pub fn alloc<T>(v: T) -> T {
+    let p = Ptr::new(v);
+    p.free()
+}
+
+pub fn unit() {
+    alloc(());
+}

@@ -1,7 +1,26 @@
 //! `Ptr<T>` と `PointsTo<T>`：`vstd::simple_pptr` の包み。
 
+use core::marker::PhantomData;
+
 use vstd::prelude::*;
 use vstd::simple_pptr;
+
+/// `Ptr<T>` の `T` がゼロサイズ型でないことの、コンパイル時の検査（#12、`docs/current-spec.md` §7.1）。
+///
+/// `Ptr::new` / `Ptr::empty` の本体が [`NonZst::OK`] を参照するので、`T` がゼロサイズ型なら
+/// 単相化の時点で定数の評価が失敗し、ビルド（素の cargo、`ebykn build`）が `E0080` で止まる。
+/// 検証（Verus が `cfg(verus_keep_ghost_body)` を立てる）では参照しない。`verus!` の外の項目なので、
+/// 参照すると Verus が `is not supported` で拒否する。検証は単相化しないので、参照しても効かない。
+/// 検証の側では `assert_non_zst` の分岐が「ゼロサイズ型でない」を示す。
+pub(crate) struct NonZst<T>(PhantomData<T>);
+
+impl<T> NonZst<T> {
+    // rustc の定数の `assert!` は言語を切り替えられないので、英語（`--lang` の既定）と日本語を併記する。
+    pub const OK: () = assert!(
+        core::mem::size_of::<T>() != 0,
+        "Ptr<T> cannot point to a zero-sized type T; use Cell<T> if you need distinct identities / Ptr<T> の T にゼロサイズ型は使えません（識別が要るなら Cell<T> を使う）"
+    );
+}
 
 verus! {
 
@@ -67,14 +86,20 @@ impl<T> PointsTo<T> {
     }
 }
 
-/// `T` がゼロサイズ型でないことを確かめる。ゼロサイズ型なら戻らない（`docs/current-spec.md`）。
+/// `T` がゼロサイズ型でないことを確かめる（#12、`docs/current-spec.md` §7.1）。
 ///
-/// `size_of::<T>()` は定数なので、ゼロサイズでない型では分岐ごと消える。
+/// ゼロサイズ型の `T` は、ビルドでは先頭の [`NonZst::OK`] の評価がコンパイルエラーにする。
+/// コンパイルされるどの実体でも `size_of::<T>() != 0` なので、後ろの `loop {}` には到達しない。
+/// この分岐は、検証器に「`T` はゼロサイズ型でない」を教えるためだけにある（検証は単相化
+/// しないので、コンパイル時の検査の結果を知らない）。`size_of::<T>()` は定数なので、
+/// ゼロサイズでない型では分岐ごと消える。
 #[verifier::exec_allows_no_decreases_clause]
 fn assert_non_zst<T>()
     ensures
         vstd::layout::size_of::<T>() != 0,
 {
+    #[cfg(not(verus_keep_ghost_body))]
+    let _ = NonZst::<T>::OK;
     if core::mem::size_of::<T>() == 0 {
         loop {}
     }
