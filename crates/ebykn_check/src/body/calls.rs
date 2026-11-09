@@ -87,6 +87,10 @@ impl Walker<'_> {
             );
             return None;
         };
+        // 証明の中の移動と `&mut` の貸しは、論理の文脈でも E0520 の操作（[`Walker::proof_op`]）。
+        if mode != PermMode::Shared {
+            self.proof_op(&format!("{}@", x.name));
+        }
         if !self.logic {
             match mode {
                 PermMode::Move => self.consume(&x.name, Op::Move, x.span),
@@ -227,6 +231,10 @@ impl Walker<'_> {
     /// 渡した領域の状態を変える（移動なら R から外す）。借りた領域の移動と、共有で借りた領域の
     /// `&mut` は E0519。
     fn pass_region(&mut self, u: &RegionArg, r: &RegionRef) {
+        // 証明の中で領域を移動や `&mut` で渡すのは、論理の文脈でも E0520 の操作。
+        if u.mode != PermMode::Shared {
+            self.proof_op(&region_text(r));
+        }
         let held = match r {
             RegionRef::Var(v) => self.region_modes.get(v).copied().unwrap_or(PermMode::Move),
             // `self@x` は `self` を通して借りている。
@@ -258,9 +266,6 @@ impl Walker<'_> {
         if let RegionRef::Var(v) = r {
             if held != PermMode::Move {
                 self.facts.region_arg_refs.insert(u.span.into());
-            }
-            if u.mode == PermMode::Move {
-                self.proof_op(v);
             }
             if u.mode == PermMode::Move && !self.logic {
                 self.regions.remove(v);

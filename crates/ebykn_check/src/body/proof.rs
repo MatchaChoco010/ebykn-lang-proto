@@ -36,19 +36,32 @@ impl Walker<'_> {
         (self.env, self.regions, self.moved_regions) = before;
     }
 
-    /// `spec let` のパターンが、スコープにある名前（引数・ローカル・権限・領域）を覆うなら E0521。
-    /// `spec let` は関数の本体の `let ghost` になるので、覆うと、後ろの `.eyk` の文（`take r[p]` の
-    /// 添字、`x@f = e` の右辺、ループの句など、Verus が ghost として読む位置）の指すものが変わる。
+    /// `spec let` が束縛する名前は、新しい名前だけを許す（E0521）：スコープにない（引数・ローカル・
+    /// 権限・領域でない）、クレートの `.eyk` に識別子として現れない、索引で何にも解決しない（項目・
+    /// prelude の名前でない）。`spec let` は関数の本体の `let ghost` になるので、覆うと、後ろの `.eyk` の文
+    /// （`take r[p]` の添字、`x@f = e` の右辺、ループの句など、Verus が ghost として読む位置）の指すものが
+    /// 変わる。分からない名前は通さない。
     fn spec_let_shadow(&mut self, l: &ast::Local) {
         let saved = std::mem::take(&mut self.locals);
         self.add_locals(&l.pat);
         let bound = std::mem::replace(&mut self.locals, saved);
         for name in bound {
+            let resolves = !matches!(
+                self.cx.index.resolve(
+                    self.cx.module,
+                    false,
+                    std::slice::from_ref(&name),
+                    self.cx.self_ty
+                ),
+                crate::index::Resolved::Unknown
+            );
             let taken = self.locals.contains(&name)
                 || self.env.contains_key(&name)
                 || self.known.contains(&name)
                 || self.regions.contains(&name)
-                || self.var_types.contains_key(&name);
+                || self.var_types.contains_key(&name)
+                || self.cx.index.source_idents.contains(&name)
+                || resolves;
             if taken {
                 self.push(l.pat.span, CheckMsg::SpecLetShadows { name });
             }
@@ -65,7 +78,9 @@ impl Walker<'_> {
                 self.expr(expr);
                 match by {
                     Some(AssertBy::Block(b)) => {
+                        let prev = std::mem::replace(&mut self.in_assert_by, true);
                         self.block(b);
+                        self.in_assert_by = prev;
                     }
                     Some(AssertBy::Prover { requires, .. }) => {
                         self.exprs(requires);
@@ -89,7 +104,9 @@ impl Walker<'_> {
                 }
                 self.triggers(triggers);
                 self.expr(body);
+                let prev = std::mem::replace(&mut self.in_assert_by, true);
                 self.block(by);
+                self.in_assert_by = prev;
             }
             ProofStmt::SpecLet(l) => {
                 self.spec_let_shadow(l);

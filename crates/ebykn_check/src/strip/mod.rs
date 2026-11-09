@@ -30,14 +30,20 @@ use tokens::Tok;
 /// （[`crate::index::PRELUDE_TYPES`]）も使えない。
 const IMPLICIT_METHODS: &[&str] = &["invariant", "view"];
 
+/// クレートの `.eyk` に識別子として現れる名前（`r#` を外す。マクロと属性の引数の中も含む）。
+pub fn source_idents(project: &Project) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for m in &project.modules {
+        tokens::idents(&project.file(m.file).text, &mut out);
+    }
+    out
+}
+
 /// プロジェクトのすべての証明ファイルを検査する。
 pub fn check(project: &Project, diags: &mut Diags) {
     // `.eyk` に現れる名前。`.eykp` だけの項目がこの名前を持つと、glob の import（暗黙の
     // `use ebykn_prelude::*;` を含む）やトレイトのメソッドを覆い、`.eyk` の契約とコードの意味を変えうる。
-    let mut taken = std::collections::HashSet::new();
-    for m in &project.modules {
-        tokens::idents(&project.file(m.file).text, &mut taken);
-    }
+    let mut taken = source_idents(project);
     taken.extend(
         IMPLICIT_METHODS
             .iter()

@@ -503,6 +503,8 @@ pub enum CheckMsg {
     NotARegionArg {
         name: String,
     },
+    /// `assert .. by { }` の本体の中の `borrow r[p] { }`（Verus はその中で権限を借りられない。#67）。
+    BorrowInAssertBy,
     /// `lemma group` の要素が、モジュールの直下の `lemma fn` に解決しない（#67）。
     LemmaGroupMember {
         written: String,
@@ -728,6 +730,7 @@ impl CheckMsg {
             | NotARegionArg { .. }
             | InvariantImplShape
             | LemmaGroupMember { .. }
+            | BorrowInAssertBy
             | ViewImplShape
             | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
@@ -844,11 +847,13 @@ impl CheckMsg {
                 names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join("、")
             ),
             (SpecLetShadows { name }, En) => format!(
-                "`spec let` cannot bind `{name}`, which is already a name in scope (a parameter, a local, a permission or a region); the code after it would refer to the ghost value instead, so the source without its proofs would mean something else; give it another name"
+                "`spec let` cannot bind `{name}`: a `spec let` may only introduce a new name, one that is not in scope (a parameter, a local, a permission or a region), does not appear in the source (`.eyk`) and does not name an item; otherwise the code after it could refer to the ghost value instead, so the source without its proofs would mean something else; give it another name"
             ),
             (SpecLetShadows { name }, Ja) => format!(
-                "`spec let` で `{name}` を束縛できません。スコープにある名前（引数・ローカル・権限・領域）です。覆うと後ろのコードがこの ghost の値を指し、証明を剥がしたソースと意味が変わるので、別の名前にします"
+                "`spec let` で `{name}` を束縛できません。`spec let` で束縛できるのは新しい名前だけです。スコープにある名前（引数・ローカル・権限・領域）、ソース（`.eyk`）に現れる名前、項目の名前は使えません。覆うと後ろのコードがこの ghost の値を指し、証明を剥がしたソースと意味が変わりうるので、別の名前にします"
             ),
+            (BorrowInAssertBy, En) => "syntax error: `borrow r[p] { .. }` cannot be written in the body of `assert .. by { .. }`, because Verus cannot borrow a permission there; write it in a `proof { .. }` block instead (`proof { borrow r[p] { assert P; } }`)".into(),
+            (BorrowInAssertBy, Ja) => "構文エラー: `assert .. by { .. }` の本体の中には `borrow r[p] { .. }` を書けません。Verus がそこでは権限を借りられないためです。`proof { .. }` の中に書きます（`proof { borrow r[p] { assert P; } }`）".into(),
             (LemmaGroupMember { written }, En) => format!(
                 "syntax error: `{written}` in `lemma group` is not a `lemma fn` at the module level of this crate; a lemma group can list only such lemmas (they become Verus `broadcast proof fn`s), not lemmas in an `impl` or in a function body, nor other groups"
             ),

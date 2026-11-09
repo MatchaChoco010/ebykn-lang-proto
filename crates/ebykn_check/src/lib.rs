@@ -76,7 +76,10 @@ pub fn check(project: &Project) -> Checked {
 
 /// モジュールを `view` のファイルで見て、索引・事実・診断を作る。
 fn check_view(project: &Project, view: View) -> (Index, Facts, Vec<Diagnostic>) {
-    let mut index = Index::default();
+    let mut index = Index {
+        source_idents: strip::source_idents(project),
+        ..Index::default()
+    };
     project.for_each_module_in(view, |m, f, items| index.add_module(m, f, items));
     // モジュールのファイルの先頭の `#![cfg(..)]`。
     for m in &project.modules {

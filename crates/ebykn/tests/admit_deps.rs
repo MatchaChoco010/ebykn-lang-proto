@@ -91,3 +91,27 @@ fn broadcast_use_reaches_the_group_members() {
         "{st:?}"
     );
 }
+
+/// 値の位置のパス、マクロの引数、入れ子の関数の中からも届く（#149 の再レビューの N2）。
+#[test]
+fn values_macro_arguments_and_nested_items_reach_the_lemma() {
+    let src = "lemma fn bogus() ensures false;\npub fn one() -> (r: u64) ensures r == 1 { 0 }\npub fn mac3() -> (r: bool) ensures r { matches!(one(), 1) }\npub fn val() -> (r: u64) ensures r == 1 { let h = one; h() }\npub fn outer() -> (r: u64) ensures r == 1 {\n    fn inner() -> (r: u64) ensures r == 1 { 0 }\n    inner()\n}\n";
+    let proof = src
+        .replace(
+            "ensures r == 1 { 0 }\npub fn mac3",
+            "ensures r == 1 { proof { bogus(); } 0 }\npub fn mac3",
+        )
+        .replace(
+            "    fn inner() -> (r: u64) ensures r == 1 { 0 }",
+            "    fn inner() -> (r: u64) ensures r == 1 { proof { bogus(); } 0 }",
+        );
+    assert_ne!(proof, src);
+    let st = status_of(src, &proof);
+    for item in ["one", "mac3", "val", "outer"] {
+        assert!(
+            st.iter()
+                .any(|l| l.starts_with(&format!("unverified single::{item} "))),
+            "{item}: {st:?}"
+        );
+    }
+}

@@ -124,6 +124,8 @@ pub struct Walker<'a> {
     bound_source: Option<SpanKey>,
     /// 証明の文の中なら、その中で権限・領域を変えた操作の名前（E0520。[`perms`]）。
     proof_ops: Option<Vec<String>>,
+    /// `assert .. by { }` の本体の中か（`borrow` を書けない。Verus がその中の `borrow` を拒む）。
+    in_assert_by: bool,
 }
 
 impl<'a> Walker<'a> {
@@ -149,6 +151,7 @@ impl<'a> Walker<'a> {
             attr_ok: false,
             attr_lead: None,
             proof_ops: None,
+            in_assert_by: false,
         }
     }
 
@@ -1327,6 +1330,7 @@ impl<'a> Walker<'a> {
                     .as_ref()
                     .is_some_and(|(env, _)| env.contains_key(&x.name));
             if method.is("free") && args.is_empty() && uses.is_empty() && held {
+                self.proof_op(&format!("{}@", x.name));
                 if !self.logic {
                     self.consume(&x.name, Op::Free, e.span);
                     self.facts.frees.insert(e.span.into(), x.name.clone());
@@ -1401,6 +1405,9 @@ impl<'a> Walker<'a> {
 
     fn borrow(&mut self, e: &Expr, mutable: bool, ri: &RegionIndex, body: &Block) -> bool {
         let keyword = if mutable { "borrow mut" } else { "borrow" };
+        if self.in_assert_by {
+            self.push(e.span, CheckMsg::BorrowInAssertBy);
+        }
         let region = self.region(ri, keyword);
         let x = region.as_ref().and_then(|_| self.index_ident(ri));
         if let Some(r) = region {

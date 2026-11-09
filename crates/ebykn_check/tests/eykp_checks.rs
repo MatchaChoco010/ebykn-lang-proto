@@ -163,3 +163,79 @@ fn lemma_group_members_are_module_level_lemmas() {
         );
     }
 }
+
+/// `spec let` は新しい名前だけを束縛できる（#149 の再レビューの N1）。項目の名前（関数）と `.eyk` に
+/// 現れる名前は覆えない。
+#[test]
+fn spec_let_cannot_shadow_items_or_source_names() {
+    // 消去フィールドへの代入の右辺が、モジュールの `spec fn` を指す。
+    let src = "pub spec fn val(z: int) -> int = 8;\npub struct S { a: u64 } spec { n: int }\nimpl S {\n    fn f(&mut self) ensures final(self)@n == 7 {\n        self@n = val(0);\n    }\n}\n";
+    let proof = src.replace(
+        "        self@n = val(0);",
+        "        spec let val = |z: int| 7int;\n        self@n = val(0);",
+    );
+    let d = run(src, &proof);
+    assert!(
+        d.iter().any(|l| l.contains("E0521") && l.contains("`val`")),
+        "{d:?}"
+    );
+    // ループの句が、モジュールの関数を指す。
+    let src2 = "pub spec fn lim() -> int = 10;\npub fn g(n: u64) {\n    let mut i = 0;\n    while i < n\n        invariant i <= n, lim() == 10\n        decreases n - i\n    {\n        i = i + 1;\n    }\n}\n";
+    let proof2 = src2.replace(
+        "    let mut i = 0;\n",
+        "    let mut i = 0;\n    spec let lim = || 10int;\n",
+    );
+    let d = run(src2, &proof2);
+    assert!(
+        d.iter().any(|l| l.contains("E0521") && l.contains("`lim`")),
+        "{d:?}"
+    );
+    // `.eyk` に現れる名前（ここでは型の名前）も覆えない。
+    let src3 = "pub struct Node { pub v: u64 }\npub fn h() { }\n";
+    let d = run(
+        src3,
+        &src3.replace("pub fn h() { }", "pub fn h() { spec let Node = 1int; }"),
+    );
+    assert!(d.iter().any(|l| l.contains("E0521")), "{d:?}");
+}
+
+/// `assert .. by { }` の中の `borrow` は書けない（Verus がそこで権限を借りられない。N3）。
+#[test]
+fn borrow_inside_assert_by_is_rejected() {
+    let src = format!(
+        "{NODE}pub fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> requires old(r).contains(p) {{ }}\n"
+    );
+    let proof = src.replace(
+        "{ }",
+        "{ assert true by { borrow r[p] { assert (*p).v == (*p).v; } }; }",
+    );
+    let d = run(&src, &proof);
+    assert!(
+        d.iter()
+            .any(|l| l.contains("E0001") && l.contains("assert .. by")),
+        "{d:?}"
+    );
+}
+
+/// 証明の中の `free`、権限の移動と `&mut` の `uses`、領域の `&mut` の `uses` も E0520（N4）。論理の文脈で
+/// 検査を飛ばす操作も数える。
+#[test]
+fn proofs_cannot_free_or_pass_permissions_mutably() {
+    let src = format!(
+        "{NODE}fn touch(p: Ptr<Node>) uses &mut p@ {{ }}\nfn take_it(p: Ptr<Node>) uses p@ {{ leak p@; }}\nfn reg(q: Ptr<Node>) uses r: &mut Region<Ptr<Node>> {{ }}\npub fn f(p: Ptr<Node>, q: Ptr<Node>) uses p@, r: &mut Region<Ptr<Node>> {{ leak p@; }}\n"
+    );
+    for (body, name) in [
+        ("{ proof { p.free(); } leak p@; }", "`p@`"),
+        ("{ proof { touch(p); } leak p@; }", "`p@`"),
+        ("{ proof { take_it(p); } leak p@; }", "`p@`"),
+        ("{ proof { reg(q, uses &mut r); } leak p@; }", "`r`"),
+    ] {
+        let proof = src.replace("{ leak p@; }\n", &format!("{body}\n"));
+        assert_ne!(proof, src);
+        let d = run(&src, &proof);
+        assert!(
+            d.iter().any(|l| l.contains("E0520") && l.contains(name)),
+            "{body}: {d:?}"
+        );
+    }
+}

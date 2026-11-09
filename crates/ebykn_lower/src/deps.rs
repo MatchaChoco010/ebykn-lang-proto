@@ -155,9 +155,12 @@ pub fn reaches_admit(
         for d in deps.get(&cur).into_iter().flatten().chain(in_module) {
             match d {
                 Dep::Item(n) => stack.push(n.clone()),
+                // 状態の一覧の項目に加えて、辺の始点（入れ子の項目など、一覧にない項目）も探す。
                 Dep::Name(n) => stack.extend(
                     items
                         .iter()
+                        .chain(deps.keys())
+                        .chain(admitted.iter())
                         .filter(|i| i.rsplit("::").next() == Some(n.as_str()))
                         .cloned(),
                 ),
