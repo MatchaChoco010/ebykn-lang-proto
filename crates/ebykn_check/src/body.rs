@@ -5,6 +5,7 @@
 //! `OPEN.md` に書いた（分岐の比べ方、`borrow` の借用の扱い、`gives` の戻し方など）。
 
 mod calls;
+mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -688,47 +689,6 @@ impl<'a> Walker<'a> {
                 self.logic = prev;
                 false
             }
-        }
-    }
-
-    fn proof_stmt(&mut self, p: &ast::ProofStmt, span: Span) {
-        use ast::{AssertBy, ProofStmt};
-        match p {
-            ProofStmt::Block(b) => {
-                self.block(b);
-            }
-            ProofStmt::Assert { expr, by } => {
-                self.expr(expr);
-                match by {
-                    Some(AssertBy::Block(b)) => {
-                        self.block(b);
-                    }
-                    Some(AssertBy::Prover { requires, .. }) => {
-                        self.exprs(requires);
-                    }
-                    None => {}
-                }
-            }
-            ProofStmt::AssertForall {
-                binders, body, by, ..
-            } => {
-                for b in binders {
-                    if let ast::BinderKind::In(x) = &b.kind {
-                        self.expr(x);
-                    }
-                }
-                self.expr(body);
-                self.block(by);
-            }
-            ProofStmt::SpecLet(l) => {
-                self.local(l, span);
-            }
-            ProofStmt::Reveal { fuel, .. } => {
-                if let Some(e) = fuel {
-                    self.expr(e);
-                }
-            }
-            ProofStmt::Hide(_) => {}
         }
     }
 
