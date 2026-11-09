@@ -232,6 +232,85 @@ fn s4_try_inside_borrow_mut_needs_option_or_result() {
     ));
 }
 
+/// `&&` / `||` の右辺は評価しないことがある。右辺だけが抜けても、式は必ず抜けるとは数えない
+/// （PR #51 のレビューの B1）。
+#[test]
+fn s4_short_circuit_rhs_does_not_always_diverge() {
+    // 前は `let` が必ず抜けると数え、本体の末尾の E0505 を見なかった。
+    rejects(
+        &in_pool(
+            "pub fn f(c: bool) { let _b = c && { return; }; let p = Ptr::new(Node { val: 1 }); }",
+        ),
+        "E0505",
+        "`p@`",
+    );
+    rejects(
+        &in_pool(
+            "pub fn f(c: bool) { let _b = c || { return; }; let p = Ptr::new(Node { val: 1 }); }",
+        ),
+        "E0505",
+        "`p@`",
+    );
+    // 右辺で権限が変われば、評価したときとしないときで食い違う。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, q: Ptr<Node>, c: bool) { let _b = c && { take self@nodes[q]; true }; }",
+        ),
+        "E0510",
+        "`q@`",
+    );
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, c: bool) { borrow mut self@nodes[p] { let _b = c && { return; }; } }",
+    ));
+}
+
+/// マクロの引数の中の `return` / `break` / `continue` / `?` は E0003（PR #51 のレビューの B2）。
+#[test]
+fn s4_jumps_inside_macro_arguments_are_e0003() {
+    for body in [
+        "let _v = vec![{ if c { return; } 1u8 }];",
+        "loop { let _v = vec![{ if c { break; } 1u8 }]; }",
+        "loop { let _v = vec![{ if c { continue; } 1u8 }]; break; }",
+        "let _v = vec![o?];",
+    ] {
+        rejects(
+            &in_pool(&format!(
+                "pub fn f(&mut self, p: Ptr<Node>, c: bool, o: Option<u8>) -> Option<u8> {{ borrow mut self@nodes[p] {{ {body} }} None }}"
+            )),
+            "E0003",
+            "inside the arguments of a macro",
+        );
+    }
+    // `borrow` の外でも拒む。
+    rejects(
+        &in_pool("pub fn f(c: bool) { let _v = vec![{ if c { return; } 1u8 }]; }"),
+        "E0003",
+        "inside the arguments of a macro",
+    );
+    // 式として読むマクロの引数も同じ。
+    rejects(
+        &in_pool("pub fn f(c: bool) { assert!({ if c { return; } true }); }"),
+        "E0003",
+        "inside the arguments of a macro",
+    );
+    // 文字列の中の `?` は抜ける式ではない。
+    accepts(&in_pool(
+        "pub fn f(x: u8) { let _s = format!(\"{:?}\", x); }",
+    ));
+}
+
+/// 戻り値の型の名前が `Option` でも、クレートで定義した型なら `?` を展開できない（E0003）。
+#[test]
+fn s4_try_with_a_crate_type_named_option_is_e0003() {
+    rejects(
+        &format!(
+            "{PRELUDE}pub enum Option<T> {{ Some(T), None }}\nimpl Pool {{ pub fn f(&mut self, p: Ptr<Node>, o: core::option::Option<u64>) -> Option<u64> {{ borrow mut self@nodes[p] {{ (*p).val = o?; }} Option::None }} }}\n"
+        ),
+        "E0003",
+        "`?` inside `borrow mut`",
+    );
+}
+
 // ---- S5：外してもどのテストも落ちなかったチェック ----
 
 #[test]
@@ -523,7 +602,6 @@ fn cfg_inside_functions_is_e0003() {
 fn attributes_inside_std_macro_arguments_are_e0003() {
     for src in [
         "pub fn f() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }",
-        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
         "pub fn h() { assert!({ #[inline] let y = 1; y == 1 }); }",
         "pub fn k() { assert!({ #![allow(unused)] true }); }",
     ] {
@@ -533,6 +611,13 @@ fn attributes_inside_std_macro_arguments_are_e0003() {
             "attributes (`#[..]`) inside the arguments of this macro",
         );
     }
+    // 属性の付いた `return` は、属性とマクロの中の `return`（#21 の既定 D）の両方で E0003。
+    let (_, lines) = run(
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
+    );
+    assert_eq!(lines.len(), 2, "{}", lines.join("\n"));
+    assert!(lines[0].contains("attributes (`#[..]`) inside the arguments of this macro"));
+    assert!(lines[1].contains("inside the arguments of a macro"));
     // 属性でない `#` は今のまま（文字列の中や、`[` の続かない `#`）。
     accepts("pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }");
 }

@@ -156,6 +156,8 @@ pub enum Unimpl {
     NestedItem,
     /// 中を読まないマクロの引数の中の権限の操作。
     PermInMacro,
+    /// マクロの引数の中の `return` / `break` / `continue` / `?`（#21 の既定 D。抜ける前に権限を戻せない）。
+    JumpInMacro,
     /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
@@ -269,6 +271,12 @@ impl Unimpl {
             }
             (Unimpl::CfgInBody, Lang::Ja) => {
                 "関数の中（文・式・match の腕・欄・引数）の `cfg!` と `#[cfg(..)]` はまだ扱えません。Verus が検証するコードと Verus なしでビルドするコードが食い違いうるためです。条件付きのコードは別の項目に分けます"
+            }
+            (Unimpl::JumpInMacro, Lang::En) => {
+                "`return`, `break`, `continue` and `?` inside the arguments of a macro are not supported yet, because Ebykn does not rewrite them: a jump out of a `borrow mut` block there would skip putting the permission back, and the permission checks would not see it; move the jump out of the macro"
+            }
+            (Unimpl::JumpInMacro, Lang::Ja) => {
+                "マクロの引数の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこれらを書き換えないので、そこから `borrow mut` のブロックを抜けると権限を戻さずに抜け、権限の検査も見ないためです。抜ける文をマクロの外に出します"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"

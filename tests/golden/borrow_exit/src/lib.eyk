@@ -13,7 +13,7 @@ impl Pool {
     // #21 のコメントの例：while の中で borrow mut から break する。
     fn find_zero(&mut self, p: Ptr<Node>, n: u64)
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         let mut i = 0;
         while i < n
@@ -30,7 +30,7 @@ impl Pool {
     // 戻さずに抜ける（take と leak で書く）と、不変条件を示せない。
     fn find_zero_leaked(&mut self, p: Ptr<Node>, n: u64)
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         let mut i = 0;
         while i < n
@@ -46,7 +46,7 @@ impl Pool {
 
     fn skip_zero(&mut self, p: Ptr<Node>, n: u64)
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         let mut i = 0;
         while i < n
@@ -63,7 +63,7 @@ impl Pool {
 
     fn big_or_zero(&mut self, p: Ptr<Node>) -> u64
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         borrow mut self@nodes[p] {
             if (*p).val > 10 { return (*p).val; }
@@ -74,7 +74,7 @@ impl Pool {
 
     fn set_some(&mut self, p: Ptr<Node>, o: Option<u64>) -> Option<u64>
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         borrow mut self@nodes[p] { (*p).val = o?; }
         Some(0)
@@ -82,16 +82,26 @@ impl Pool {
 
     fn set_ok(&mut self, p: Ptr<Node>, o: Result<u64, u8>) -> Result<u64, u8>
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         borrow mut self@nodes[p] { (*p).val = o?; }
         Ok(0)
     }
 
+    // `&&` の右辺だけが抜ける：通常の経路でも本体の後で権限を戻す（PR #51 のレビューの B1）。
+    fn short_circuit(&mut self, p: Ptr<Node>, c: bool)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures final(self).invariant(),
+    {
+        borrow mut self@nodes[p] {
+            let _b = c && { return; };
+        }
+    }
+
     // 入れ子の borrow を一度に抜ける（内側から戻す）。
     fn nested(&mut self, p: Ptr<Node>, q: Ptr<Node>, n: u64)
         requires old(self).invariant(), old(self)@order.contains(p), old(self)@order.contains(q), p != q,
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         let mut i = 0;
         while i < n
@@ -110,7 +120,7 @@ impl Pool {
     // ブロックの中で閉じたループの break は、権限を戻さない。
     fn inner_loop(&mut self, p: Ptr<Node>)
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         borrow mut self@nodes[p] {
             let v = (*p).val;
@@ -130,7 +140,7 @@ impl Pool {
     // ブロックで閉じる break は、権限を戻さない。
     fn labeled(&mut self, p: Ptr<Node>) -> u64
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         let v = 'a: {
             borrow mut self@nodes[p] {
@@ -148,7 +158,7 @@ impl Pool {
     // loop を抜けた後に take / put が通る。
     fn loop_then_take(&mut self, p: Ptr<Node>)
         requires old(self).invariant(), old(self)@order.contains(p),
-        ensures self.invariant(),
+        ensures final(self).invariant(),
     {
         loop
             invariant self@order.contains(p), self.invariant(),

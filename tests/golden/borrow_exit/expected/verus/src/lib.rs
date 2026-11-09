@@ -40,9 +40,12 @@ impl Pool {
                         };
                     }
                 };
-                proof {
-                    self.nodes.borrow_mut().insert(__eyk_perm_p);
-                }
+                #[allow(unreachable_code)] let __eyk_res = {
+                    proof {
+                        self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    }
+                    __eyk_res
+                };
                 __eyk_res
             }
             i = i + 1;
@@ -88,9 +91,12 @@ impl Pool {
                     }
                     p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = (*p.read(Tracked(&__eyk_perm_p))).val - 1;
                 };
-                proof {
-                    self.nodes.borrow_mut().insert(__eyk_perm_p);
-                }
+                #[allow(unreachable_code)] let __eyk_res = {
+                    proof {
+                        self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    }
+                    __eyk_res
+                };
                 __eyk_res
             }
         }
@@ -113,9 +119,12 @@ impl Pool {
                 }
                 p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 0;
             };
-            proof {
-                self.nodes.borrow_mut().insert(__eyk_perm_p);
-            }
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
             __eyk_res
         }
         0
@@ -136,9 +145,12 @@ impl Pool {
                     }
                 };
             };
-            proof {
-                self.nodes.borrow_mut().insert(__eyk_perm_p);
-            }
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
             __eyk_res
         }
         Some(0)
@@ -159,12 +171,40 @@ impl Pool {
                     }
                 };
             };
-            proof {
-                self.nodes.borrow_mut().insert(__eyk_perm_p);
-            }
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
             __eyk_res
         }
         Ok(0)
+    }
+
+    fn short_circuit(&mut self, p: Ptr < Node >, c: bool)
+    requires old(self).invariant(), old(self).order@.contains(p),
+    ensures final(self).invariant(), {
+        {
+            let tracked __eyk_perm_p = self.nodes.borrow_mut().remove(p);
+            let __eyk_res = {
+                let _b = c && {
+                    {
+                        proof {
+                            self.nodes.borrow_mut().insert(__eyk_perm_p);
+                        }
+                        return
+                    };
+                };
+            };
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
+            __eyk_res
+        }
     }
 
     fn nested(&mut self, p: Ptr < Node >, q: Ptr < Node >, n: u64)
@@ -190,15 +230,21 @@ impl Pool {
                                 };
                             }
                         };
-                        proof {
-                            self.nodes.borrow_mut().insert(__eyk_perm_q);
-                        }
+                        #[allow(unreachable_code)] let __eyk_res = {
+                            proof {
+                                self.nodes.borrow_mut().insert(__eyk_perm_q);
+                            }
+                            __eyk_res
+                        };
                         __eyk_res
                     }
                 };
-                proof {
-                    self.nodes.borrow_mut().insert(__eyk_perm_p);
-                }
+                #[allow(unreachable_code)] let __eyk_res = {
+                    proof {
+                        self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    }
+                    __eyk_res
+                };
                 __eyk_res
             }
             i = i + 1;
@@ -223,9 +269,12 @@ impl Pool {
                 }
                 p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = k;
             };
-            proof {
-                self.nodes.borrow_mut().insert(__eyk_perm_p);
-            }
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
             __eyk_res
         }
     }
@@ -253,9 +302,12 @@ impl Pool {
                         };
                     }
                 };
-                proof {
-                    self.nodes.borrow_mut().insert(__eyk_perm_p);
-                }
+                #[allow(unreachable_code)] let __eyk_res = {
+                    proof {
+                        self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    }
+                    __eyk_res
+                };
                 __eyk_res
             }
             0
@@ -271,14 +323,21 @@ impl Pool {
         decreases 1int, {
             {
                 let tracked __eyk_perm_p = self.nodes.borrow_mut().remove(p);
-                {
+                let __eyk_res = {
                     {
                         proof {
                             self.nodes.borrow_mut().insert(__eyk_perm_p);
                         }
                         break
                     };
-                }
+                };
+                #[allow(unreachable_code)] let __eyk_res = {
+                    proof {
+                        self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    }
+                    __eyk_res
+                };
+                __eyk_res
             }
         }
         let tracked __eyk_perm_p = self.nodes.borrow_mut().remove(p);

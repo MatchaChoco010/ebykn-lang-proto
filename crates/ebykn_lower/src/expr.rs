@@ -971,16 +971,8 @@ impl Cx<'_> {
             let b = self.block(body);
             self.exits.pop();
             restore(&mut self.perms, &p, saved);
-            if self
-                .facts
-                .diverging_borrows
-                .contains(&SpanKey::from(e.span))
-            {
-                // 本体は必ず抜ける文で終わり、その前で権限を戻している。
-                return format!("{{ let tracked {v} = {rx}.remove({p}); {b} }}");
-            }
             format!(
-                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; proof {{ {rx}.insert({v}); }} __eyk_res }}"
+                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ proof {{ {rx}.insert({v}); }} __eyk_res }}; __eyk_res }}"
             )
         } else {
             let saved = self.perms.insert(p.clone(), PermKind::Ref);

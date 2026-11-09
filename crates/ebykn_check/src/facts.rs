@@ -57,9 +57,6 @@ pub struct Facts {
     pub erased: BTreeMap<SpanKey, ErasedKind>,
     /// 関数に足す契約（関数名の識別子の位置）。
     pub expansions: BTreeMap<SpanKey, FnExpansion>,
-    /// 本体が必ず抜ける（`break` / `continue` / `return` などで終わる）`borrow mut` の式。書き下しは
-    /// 本体の後の、権限を戻す文を置かない（届かないので。抜ける文の前で戻す。#21 の既定 D）。
-    pub diverging_borrows: std::collections::BTreeSet<SpanKey>,
     /// 量化子の `x in e` の `e` のうち、型が `Map<..>` と分かるもの（§7.4 の `e.dom().contains(x)`）。
     pub map_binders: std::collections::BTreeSet<SpanKey>,
     /// `impl Invariant for T` の入れ子（`T` → フィールド、型、包み）。

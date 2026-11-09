@@ -183,7 +183,7 @@ fn regions_and_spec_fields() {
     );
     has(
         &src,
-        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res",
+        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; #[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res",
     );
 }
 
@@ -248,17 +248,22 @@ fn jumps_out_of_borrow_mut_put_the_permission_back() {
     );
 }
 
-/// 本体が必ず抜ける `borrow mut` は、本体の後に（届かない）戻す文を置かない。
+/// 本体の後の、権限を戻す文は、発散の解析に頼らず常に置く（届かないときの rustc の警告は
+/// `#[allow(unreachable_code)]` で止める。PR #51 のレビューの B1）。
 #[test]
-fn diverging_borrow_mut_bodies_have_no_trailing_insert() {
-    let src = format!(
-        "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>) requires old(self)@r.contains(p), {{ loop {{ borrow mut self@r[p] {{ break; }} }} }} }}"
-    );
-    has(
-        &src,
-        "{ let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); { { proof { self.r.borrow_mut().insert(__eyk_perm_p); } break }; } }",
-    );
-    lacks(&src, "__eyk_res");
+fn borrow_mut_bodies_always_have_the_trailing_insert() {
+    const TAIL: &str = "#[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res";
+    for body in [
+        "loop { borrow mut self@r[p] { break; } }",
+        // 右辺だけが抜ける `&&` / `||`：通常の経路で戻す文が要る。
+        "borrow mut self@r[p] { let _b = c && { return; }; }",
+        "borrow mut self@r[p] { let _b = c || { return; }; }",
+    ] {
+        let src = format!(
+            "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>, c: bool) requires old(self)@r.contains(p), {{ {body} }} }}"
+        );
+        has(&src, TAIL);
+    }
 }
 
 #[test]

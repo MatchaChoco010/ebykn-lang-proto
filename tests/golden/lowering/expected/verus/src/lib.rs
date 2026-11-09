@@ -78,9 +78,12 @@ impl Pool {
             let __eyk_res = {
                 p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 0;
             };
-            proof {
-                self.nodes.borrow_mut().insert(__eyk_perm_p);
-            }
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                }
+                __eyk_res
+            };
             __eyk_res
         }
     }
