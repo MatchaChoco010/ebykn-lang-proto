@@ -1,2 +1,6 @@
 #!/bin/sh
+# ebykn-limited があれば、その下で走らせる（AGENTS.md の「マシンの資源」）。ない環境では、そのまま走らせる。
+if command -v ebykn-limited > /dev/null 2>&1; then
+  exec ebykn-limited cargo xtask precommit
+fi
 exec cargo xtask precommit

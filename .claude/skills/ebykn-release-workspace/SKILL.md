@@ -10,6 +10,7 @@ description: ebykn-lang-proto の release のワークスペース（作者の�
 - ここでは実装しない。`release` にコミットせず、push もしない。`develop` と `main` にも直接書かない。直す作業は Issue にしてコーディネーターに渡し、コーディネーターがワーカーに割り振る（手順 3）。
 - 作業ツリーのファイルは作者のもの。作者が試しに書いたファイルを、`git stash`・`git checkout -- .`・`git clean`・`git reset` で戻したり消したりしない。作者に頼まれて試しのファイルを書いたり動かしたりするのはよいが、コミットしない。
 - 作者にレビューや確認を催促しない。作者が聞いたことに答える。
+- このエージェントが重い処理（`cargo`、`ebykn verify`、Verus）を走らせるときは、AGENTS.md の「マシンの資源」のとおり、`ebykn-limited` の下で 1 つずつ走らせる。作者がターミナルで打つコマンドを案内するときは、付けなくてよい。
 - コマンドのブロックは `bash -euo pipefail <<'EOF'` … `EOF` で包んで打つ（理由は `ebykn-release` の冒頭）。`<scratchpad>` は実際の値に置き換える。
 
 ## 1. 今の状態を知る
