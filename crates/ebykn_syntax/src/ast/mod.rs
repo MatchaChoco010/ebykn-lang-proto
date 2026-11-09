@@ -206,7 +206,7 @@ pub struct WhereClause {
 }
 
 /// マクロの呼び出し。`tokens` は引数のトークン列。vstd の仕様用のマクロ（`seq!`、`set!`、
-/// `map!`）は引数を Ebykn の式として読み、`args` に持つ（`OPEN.md`）。
+/// `map!`）は引数を Ebykn の式として読み、`args` に持つ（`docs/current-spec.md`）。
 #[derive(Debug, Clone)]
 pub struct Macro {
     pub path: Path,

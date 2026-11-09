@@ -1,7 +1,7 @@
 //! `Cell<T>` と `CellPointsTo<T>`：`vstd::cell::pcell_maybe_uninit::PCell` の包み。
 //!
 //! 仕様 §7.1 の `vstd::cell::PCell` は固定した vstd で非推奨になり、
-//! 初期化しない状態を持てる `pcell_maybe_uninit::PCell` が同じ役割を持つ（`OPEN.md`）。
+//! 初期化しない状態を持てる `pcell_maybe_uninit::PCell` が同じ役割を持つ（`docs/current-spec.md`）。
 
 use vstd::cell::pcell_maybe_uninit as pcell;
 use vstd::prelude::*;
@@ -80,7 +80,7 @@ impl<T> Cell<T> {
         self.0.borrow(Tracked(&perm.perm))
     }
 
-    /// 中身に `v` を書く。初期化済みなら前の値は drop せずに捨てる（`OPEN.md`）。
+    /// 中身に `v` を書く。初期化済みなら前の値は drop せずに捨てる（`docs/current-spec.md`）。
     pub fn write(&self, Tracked(perm): Tracked<&mut CellPointsTo<T>>, v: T)
         requires
             old(perm).id() == self.id(),

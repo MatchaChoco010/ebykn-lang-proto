@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn fails_when_a_pipe_in_code_splits_a_cell() {
         let src = real(FILE);
-        let broken = mutate(&src, "`forall\\|x\\|`", "`forall|x|`");
+        let broken = mutate(&src, "`\\|x\\| -> (r: T)", "`|x| -> (r: T)");
         assert_fails(&repo(&broken).run(run), "が見出し");
     }
 

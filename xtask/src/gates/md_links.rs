@@ -136,6 +136,7 @@ mod tests {
             "AGENTS.md",
             "docs/ebykn-thesis.md",
             "docs/ebykn-spec.md",
+            "docs/current-spec.md",
             "docs/ebykn-design-notes.md",
             "book/src/ch00-00-introduction.md",
         ] {

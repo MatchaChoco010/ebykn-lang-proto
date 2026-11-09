@@ -15,7 +15,7 @@ use crate::ast;
 use crate::diag::{Expected, Message};
 
 /// 消去フィールド `e@name` の `name` になれない語。契約の句とループ句のキーワードで、
-/// `requires x == p@ ensures ..` のように権限 `p@` の直後に来る（`OPEN.md`）。
+/// `requires x == p@ ensures ..` のように権限 `p@` の直後に来る（`docs/current-spec.md`）。
 pub(super) const CLAUSE_KEYWORDS: &[&str] = &[
     "requires",
     "ensures",

@@ -128,7 +128,7 @@ pub enum ExprKind {
     },
     /// 権限 `p@`。
     Perm(Ident),
-    /// 消去フィールド `self@x`（`base` は `self` に限らない。`OPEN.md`）。
+    /// 消去フィールド `self@x`（`base` は `self` に限らない。`docs/current-spec.md`）。
     Erased {
         base: Box<Expr>,
         field: Ident,

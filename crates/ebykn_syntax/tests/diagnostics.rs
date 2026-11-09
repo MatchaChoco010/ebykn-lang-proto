@@ -20,7 +20,7 @@ fn format_is_file_line_col_code_message() {
     assert_eq!(Lang::default(), Lang::En);
 }
 
-/// 列は `char` で数える（`OPEN.md`）。位置のバイトは別に持つ。
+/// 列は `char` で数える（`docs/current-spec.md`）。位置のバイトは別に持つ。
 #[test]
 fn columns_count_chars_not_bytes() {
     let src = "fn f() { let s = \"あいう\"; let __eyk_x = 1; }";
