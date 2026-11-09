@@ -228,6 +228,7 @@ pub fn compare(tsv: &str, eyk: &str, exceptions: &[Exception]) -> Report {
         "{} ケースのうち {agreed} ケースでモデルと実装のコードが一致（位置は比べていない）",
         rows.len()
     ));
+    r.notes.push(format!("例外の一覧: {} 件", exceptions.len()));
     r.notes.extend(listed);
     for (issue, n) in excepted {
         r.notes.push(format!(
@@ -305,6 +306,36 @@ mod tests {
         );
     }
 
+    /// 両方が拒否しても、コードが違えば落ちる。
+    #[test]
+    fn fails_when_the_codes_differ() {
+        let (tsv, eyk) = head(20);
+        let tsv = mutate(
+            &tsv,
+            "c00004\tcore\tp=-\t{ free p }\tE0504\t",
+            "c00004\tcore\tp=-\t{ free p }\tE0509\t",
+        );
+        assert_fails(
+            &compare(&tsv, &eyk, &[]),
+            "c00004: モデルは E0509、実装は E0504 です",
+        );
+    }
+
+    /// モデルが受理するケースを実装が拒否すると落ちる。
+    #[test]
+    fn fails_when_the_implementation_over_rejects() {
+        let (tsv, eyk) = head(20);
+        let eyk = mutate(
+            &eyk,
+            "fn c00001(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {\n}\n",
+            "fn c00001(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {\n    p.free();\n}\n",
+        );
+        assert_fails(
+            &compare(&tsv, &eyk, &[]),
+            "c00001: モデルは ok、実装は E0504 です",
+        );
+    }
+
     /// 一覧にある食い違いは通し、出力に出す。
     #[test]
     fn passes_with_a_listed_disagreement() {
@@ -317,7 +348,8 @@ mod tests {
         let report = compare(&tsv, &eyk, &[X]);
         assert_passes(&report);
         assert!(
-            report.notes.iter().any(|n| n.contains("1 個（#1）"))
+            report.notes.iter().any(|n| n == "例外の一覧: 1 件")
+                && report.notes.iter().any(|n| n.contains("1 個（#1）"))
                 && report
                     .notes
                     .iter()
