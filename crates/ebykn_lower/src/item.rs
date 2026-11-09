@@ -44,6 +44,7 @@ fn is_test(a: &[ast::Attr]) -> bool {
 fn item_pieces(cx: &Cx, item: &ast::Item, indent: usize, out: &mut Vec<Piece>) {
     match &item.kind {
         ItemKind::Mod(m) => {
+            cx.note_macros(&item.attrs, || cx.item_path(&m.ident.name));
             let head = format!(
                 "{}{}mod {}",
                 attrs(&item.attrs),
@@ -106,6 +107,7 @@ impl Cx<'_> {
 
 /// 項目（`mod` と `impl` 以外）の書き下しと、検証の結果を出す項目の名前。
 fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
+    note_item_macros(cx, item);
     let a = attrs(&item.attrs);
     let v = vis(&item.vis);
     match &item.kind {
@@ -204,6 +206,89 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
             (String::new(), None)
         }
     }
+}
+
+/// 項目（`mod`・`impl`・`trait` 以外）の属性の手続きマクロを前提として記録する（#49）。
+/// `mod`・`impl`・`trait` は [`item_pieces`]・[`impl_pieces`]・[`trait_pieces`] で記録する。
+fn note_item_macros(cx: &Cx, item: &ast::Item) {
+    let name = match &item.kind {
+        ItemKind::Fn(f) => &f.sig.ident,
+        ItemKind::SpecFn(f) => &f.sig.ident,
+        ItemKind::LemmaFn(f) => &f.sig.ident,
+        ItemKind::Struct(s) => &s.ident,
+        ItemKind::Enum(e) => &e.ident,
+        ItemKind::TypeAlias(t) => &t.ident,
+        ItemKind::Subset(t) => &t.ident,
+        ItemKind::Const(c) => &c.ident,
+        ItemKind::Static(s) => &s.ident,
+        // 属性は AST にもトークン列の先頭にもある。AST の属性を見る。`extern` ブロックの中の宣言は
+        // AST を持たないので、トークン列から宣言ごとの属性を見る（PR #57 のレビューの N1）。
+        ItemKind::Use(tk) | ItemKind::Rust(tk) => {
+            cx.note_macros(&item.attrs, || rust_item_name(cx, &tk.tokens));
+            for decl in foreign_items(&tk.tokens) {
+                cx.note_macros_in_tokens(&decl, || rust_item_name(cx, &decl));
+            }
+            return;
+        }
+        ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) => return,
+    };
+    cx.note_macros(&item.attrs, || cx.item_path(&name.name));
+}
+
+/// `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）なら、中の宣言ごとのトークン列。
+fn foreign_items(ts: &proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let is_extern = tts
+        .iter()
+        .any(|t| matches!(t, TokenTree::Ident(i) if i == "extern"))
+        && !tts
+            .iter()
+            .any(|t| matches!(t, TokenTree::Ident(i) if i == "crate"));
+    let Some(TokenTree::Group(g)) = tts.last() else {
+        return Vec::new();
+    };
+    if !is_extern || g.delimiter() != Delimiter::Brace {
+        return Vec::new();
+    }
+    let mut out = vec![proc_macro2::TokenStream::new()];
+    for t in g.stream() {
+        let end = matches!(&t, TokenTree::Punct(p) if p.as_char() == ';');
+        out.last_mut().expect("空でない").extend([t]);
+        if end {
+            out.push(proc_macro2::TokenStream::new());
+        }
+    }
+    out.retain(|d| !d.is_empty());
+    out
+}
+
+/// トークン列のまま持つ項目の表示：属性と可視性を除いた先頭（`union U`、`use a::b`）。
+fn rust_item_name(cx: &Cx, ts: &proc_macro2::TokenStream) -> String {
+    use proc_macro2::TokenTree;
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let mut i = 0;
+    while matches!(tts.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+        i += 2;
+    }
+    if matches!(tts.get(i), Some(TokenTree::Ident(x)) if x == "pub") {
+        i += 1;
+        if matches!(tts.get(i), Some(TokenTree::Group(g)) if g.delimiter() == proc_macro2::Delimiter::Parenthesis)
+        {
+            i += 1;
+        }
+    }
+    let head: proc_macro2::TokenStream = tts[i.min(tts.len())..]
+        .iter()
+        .take_while(|t| {
+            !matches!(t, TokenTree::Group(g) if g.delimiter() == proc_macro2::Delimiter::Brace)
+                && !matches!(t, TokenTree::Punct(p) if p.as_char() == ';')
+        })
+        .cloned()
+        .collect();
+    let mut p = vec![cx.crate_name.to_string()];
+    p.extend(cx.module.iter().cloned());
+    format!("{} in {}", head, p.join("::"))
 }
 
 pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
@@ -780,6 +865,7 @@ fn lemma_text(cx: &Cx, a: &str, v: &str, f: &ast::LemmaFn, name: &str) -> String
 /// trait（契約のないもの。契約のある trait は検査が E0003 にする）。本体のある既定のメソッドは
 /// 検証の結果を出す項目にする（`stack::Tr::m`）。
 fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &mut Vec<Piece>) {
+    cx.note_macros(&item.attrs, || cx.item_path(&t.ident.name));
     let pad = "    ".repeat(indent);
     out.push(Piece::Raw(format!(
         "{pad}{}{}{}{}trait {}{}{}{} {{",
@@ -800,6 +886,14 @@ fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &
     p.push(t.ident.name.clone());
     c.self_ty = Some(p);
     for ti in &t.items {
+        match &ti.kind {
+            TraitItemKind::Fn(f) => c.note_macros(&ti.attrs, || c.item_path(&f.sig.ident.name)),
+            TraitItemKind::SpecFn(f) => c.note_macros(&ti.attrs, || c.item_path(&f.sig.ident.name)),
+            TraitItemKind::LemmaFn(f) => {
+                c.note_macros(&ti.attrs, || c.item_path(&f.sig.ident.name))
+            }
+            TraitItemKind::Rust(tk) => c.note_macros(&ti.attrs, || rust_item_name(&c, &tk.tokens)),
+        }
         match &ti.kind {
             TraitItemKind::Fn(f) => {
                 let mut fc = fn_cx(&c, &f.sig, &f.contract);
@@ -836,6 +930,10 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
     let g = generics(cx, &imp.generics);
     let w = where_clause(&imp.where_clause);
     let st = cx.ty(&imp.self_ty);
+    cx.note_macros(&item.attrs, || match &imp.trait_ {
+        Some(t) => format!("impl {} for {st}", cx.path(t)),
+        None => format!("impl {st}"),
+    });
     if self_ty.is_none() {
         c.foreign_impl = Some(match &imp.trait_ {
             Some(t) => format!("<{st} as {}>", cx.path(t)),
@@ -844,6 +942,9 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
     }
     match cx.index.impl_trait(&cx.module, imp) {
         ImplTrait::Invariant => {
+            for m in &imp.items {
+                note_item_macros(&c, m);
+            }
             let Some(f) = ebykn_check::invariant_fn(imp) else {
                 return;
             };
@@ -903,6 +1004,7 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
             for m in &imp.items {
                 match &m.kind {
                     ItemKind::SpecFn(f) if kind == ImplTrait::View => {
+                        note_item_macros(&c, m);
                         let kwv = if f.closed.is_some() { "closed" } else { "open" };
                         let mut fc = fn_cx(&c, &f.sig, &f.contract);
                         let sig = sig_text(&mut fc, &f.sig, &f.contract, &FnExpansion::default());

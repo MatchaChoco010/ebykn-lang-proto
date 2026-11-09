@@ -564,6 +564,20 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 文・式・`let`・match の腕に付ける属性は、Rust の組み込みのものだけ（#49）。安定版の Rust は
+    /// ここに属性マクロを許さないが、Verus は `stmt_expr_attributes` などを有効にして動くので、
+    /// `#![feature(proc_macro_hygiene)]` がなくても検証では効きうる。拒否して、検証されないコードが
+    /// verified の陰に入らないようにする。
+    fn builtin_attrs_only(&mut self, attrs: &[ast::Attr]) {
+        for a in attrs {
+            if let Some(written) =
+                ebykn_syntax::macros::non_builtin(a, ebykn_syntax::macros::AttrPosition::StmtExpr)
+            {
+                self.diags.push(a.span, Message::AttrPosition { written });
+            }
+        }
+    }
+
     /// 関数の中の `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は E0003（#27 の既定 B）。
     fn no_cfg(&mut self, attrs: &[ast::Attr], span: Span) {
         if crate::index::has_cfg(attrs) {
@@ -736,6 +750,7 @@ impl<'a> Walker<'a> {
 
     fn local(&mut self, l: &ast::Local, span: Span) -> bool {
         self.no_cfg(&l.attrs, span);
+        self.builtin_attrs_only(&l.attrs);
         let mut diverges = false;
         if let Some(init) = &l.init {
             let prev = self.bound_source.take();
@@ -963,6 +978,7 @@ impl<'a> Walker<'a> {
     /// 式。発散するなら `true`。
     fn expr(&mut self, e: &Expr) -> bool {
         self.no_cfg(&e.attrs, e.span);
+        self.builtin_attrs_only(&e.attrs);
         match &e.kind {
             ExprKind::Array(es) | ExprKind::Tuple(es) => self.exprs(es),
             ExprKind::Repeat { expr, len } => self.expr(expr) | self.expr(len),
@@ -1491,6 +1507,7 @@ impl<'a> Walker<'a> {
             self.env = start.clone();
             let saved = self.save_scope();
             self.no_cfg(&arm.attrs, arm.span);
+            self.builtin_attrs_only(&arm.attrs);
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
                 self.expr(g);

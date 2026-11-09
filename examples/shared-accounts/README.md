@@ -35,7 +35,7 @@ verified shared-accounts::Bank::transfer
 verified shared-accounts::demo
 unchecked shared-accounts::main
 results 5 verified, 0 errors
-ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): shared-accounts::main (unchecked)
+ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): shared-accounts::main (unchecked)
 $ ebykn build
 $ echo $?
 0
