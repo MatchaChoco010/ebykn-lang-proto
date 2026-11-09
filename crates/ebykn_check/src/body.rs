@@ -1597,12 +1597,6 @@ impl<'a> Walker<'a> {
     /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
     /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
-        if self.logic && first_last_in_tokens(m.tokens.clone()) {
-            self.diags.push(
-                m.span,
-                Message::Check(CheckMsg::Unimplemented(Unimpl::MacroFirstLast)),
-            );
-        }
         if self.perm_in_tokens(m.tokens.clone()) {
             self.diags.push(
                 m.span,
@@ -1768,21 +1762,6 @@ impl<'a> Walker<'a> {
         }
         d
     }
-}
-
-/// トークン列に `.first()` / `.last()`（引数なし）があるか。
-fn first_last_in_tokens(ts: proc_macro2::TokenStream) -> bool {
-    use proc_macro2::{Delimiter, TokenTree};
-    let tts: Vec<TokenTree> = ts.into_iter().collect();
-    tts.iter().enumerate().any(|(i, t)| match t {
-        TokenTree::Group(g) => first_last_in_tokens(g.stream()),
-        TokenTree::Ident(id) => {
-            (id == "first" || id == "last")
-                && matches!(i.checked_sub(1).and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.')
-                && matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().is_empty())
-        }
-        _ => false,
-    })
 }
 
 fn is_compound_assign(op: ast::BinOp) -> bool {

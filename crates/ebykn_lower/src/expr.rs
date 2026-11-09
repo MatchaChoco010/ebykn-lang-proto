@@ -610,12 +610,9 @@ impl Cx<'_> {
         }
         let recv = self.expr(receiver);
         if self.logic && args.is_empty() && turbofish.is_none() {
-            // `v.view()` ⇒ `v@`（§7.4）。`.first()` / `.last()` ⇒ `first_opt` / `last_opt`（#11 の既定）。
-            match method.name.as_str() {
-                "view" => return format!("{recv}@"),
-                "first" => return format!("{recv}.first_opt()"),
-                "last" => return format!("{recv}.last_opt()"),
-                _ => {}
+            // `v.view()` ⇒ `v@`（§7.4）。`.first()` / `.last()` は vstd のまま（#11 の既定 B）。
+            if method.name == "view" {
+                return format!("{recv}@");
             }
         }
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();

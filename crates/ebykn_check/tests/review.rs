@@ -434,14 +434,10 @@ fn nested_assumptions_are_e0003() {
 }
 
 #[test]
-fn first_last_in_logical_macro_tokens_are_e0003() {
-    // B5：#11 の置き換えはトークンのまま持つマクロの引数に届かない。
-    rejects(
-        "spec fn nonempty(s: Seq<Option<int>>) -> bool = matches!(s.first(), Some(_));",
-        "E0003",
-        "`.first()` / `.last()`",
-    );
-    // 実行文脈の `Vec::first` はそのまま。
+fn first_last_in_logical_macro_tokens_are_accepted() {
+    // #11 の既定 B：`.first()` / `.last()` は書き換えないので、マクロの引数の中でも外でも vstd の
+    // 意味になる（M2 の E0003 は、置き換えが引数に届かず意味が食い違うのを防ぐためのものだった）。
+    accepts("spec fn nonempty(s: Seq<Option<int>>) -> bool = matches!(s.first(), Some(_));");
     accepts("pub fn f(v: Vec<u64>) -> bool { matches!(v.first(), Some(_)) }");
 }
 

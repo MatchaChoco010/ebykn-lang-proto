@@ -31,14 +31,25 @@ fn method_body(f: &File, n: usize, name: &str) -> Vec<String> {
     panic!("{name} がない");
 }
 
-/// 付録 B を書き写したものであること（仕様と食い違ったら golden の入力が古い）。
+/// 付録 B の `.first()`（`Option` と比べる）を、vstd の意味で正しい `.get(0)` に書き直した箇所（#11 の
+/// 既定 B。`OPEN.md`）。
+const STACK_FIRST: (&str, &str) = (
+    "self.head == self@order.first(),",
+    "self.head == self@order.get(0),",
+);
+
+/// 付録 B を書き写したものであること（仕様と食い違ったら golden の入力が古い）。違うのは
+/// [`STACK_FIRST`] の 1 か所だけ。
 #[test]
 fn stack_fixture_is_the_appendix() {
     let spec = include_str!("../../../docs/ebykn-spec.md");
     let b = &spec[spec.find("## 付録 B").expect("付録 B")..];
     let code = &b[b.find("```\n").unwrap() + 4..];
     let code = &code[..code.find("```").unwrap()];
-    assert_eq!(STACK, code);
+    let (from, to) = STACK_FIRST;
+    // 書き直しが付録に当たること（当たらなければ、付録が変わったので書き直しを見直す）。
+    assert_eq!(code.matches(from).count(), 1, "付録 B に {from:?} がない");
+    assert_eq!(STACK, code.replacen(from, to, 1));
     let a = &spec[spec.find("### A.1").expect("付録 A.1")..];
     let code = &a[a.find("```\n").unwrap() + 4..];
     let code = &code[..code.find("```").unwrap()];
@@ -61,7 +72,7 @@ fn stack_reads() {
         impl_items(&f, 2),
         ["closed spec fn invariant(&self) -> bool = (and \
           (forall [p in (@ self order)] (.contains (@ self nodes) p)) \
-          (== (. self head) (.first (@ self order))) \
+          (== (. self head) (.get (@ self order) 0)) \
           (forall [i in (.. 0 (.len (@ self order)))] (== (. (index (@ self nodes) (index (@ self order) i)) next) (.get (@ self order) (+ i 1)))))"]
     );
     assert_eq!(

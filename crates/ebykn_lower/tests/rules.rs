@@ -94,14 +94,20 @@ fn bare_mut_parameters_in_ensures_are_final() {
 }
 
 #[test]
-fn first_and_last_in_logic_are_opt() {
-    // #11 の既定：論理文脈の引数なしの `.first()` / `.last()`。実行文脈はそのまま。
-    let src = "pub spec fn f(s: Seq<u64>) -> Option<u64> = s.first();\npub fn g(v: Vec<u64>) -> Option<&u64> { v.first() }";
-    has(src, "{ s.first_opt() }");
+fn first_and_last_are_written_as_is() {
+    // #11 の既定 B：論理文脈の `.first()` / `.last()` も vstd の意味（要素を返す）のまま写す。
+    // M2 で入れた旧既定 A（`first_opt` / `last_opt` への置き換え）を戻すと、ここで落ちる。
+    let src = "pub spec fn f(s: Seq<u64>) -> u64 = s.first();\npub fn g(v: Vec<u64>) -> Option<&u64> { v.first() }";
+    has(src, "{ s.first() }");
     has(src, "{ v.first() }");
+    lacks(src, "first_opt");
+    let src = "pub spec fn f(s: Seq<u64>) -> u64 = s.last();";
+    has(src, "{ s.last() }");
+    lacks(src, "last_opt");
+    // `Option` が要るときは `get(i)`。
     has(
-        "pub spec fn f(s: Seq<u64>) -> Option<u64> = s.last();",
-        "s.last_opt()",
+        "pub spec fn f(s: Seq<u64>) -> Option<u64> = s.get(0);",
+        "{ s.get(0) }",
     );
 }
 
