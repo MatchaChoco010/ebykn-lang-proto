@@ -410,12 +410,13 @@ fn field_text(cx: &Cx, f: &ast::Field, wrap: Option<&str>) -> String {
         Some(w) => format!("{w}<{ty}>"),
         None => ty,
     };
-    format!(
-        "{}{}{}: {ty},",
-        attrs(&f.attrs),
-        vis(&f.vis),
-        f.ident.as_ref().map(ident).unwrap_or_default()
-    )
+    // 消去フィールドは、`.eyk` から `.` で届かない名前にする（#99）。
+    let name = match (wrap, &f.ident) {
+        (Some(_), Some(i)) => crate::expr::erased_field(i),
+        (None, Some(i)) => ident(i),
+        (_, None) => String::new(),
+    };
+    format!("{}{}{name}: {ty},", attrs(&f.attrs), vis(&f.vis))
 }
 
 /// 構造体（§7.3）：`owns` は `Tracked<..>`、`spec` は `Ghost<..>` のフィールドになる。

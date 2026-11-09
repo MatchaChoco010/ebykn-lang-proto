@@ -52,45 +52,45 @@ ensures x + 0 == x, { vstd::prelude::admit() }
 #[verifier::external_body] fn ffi(x: u64) -> u64 { x }
 
 pub struct Pool {
-    len: u64, nodes: Tracked < Region < Ptr < Node >>>, order: Ghost < Seq < Ptr < Node >>>,
+    len: u64, __eyk_erased_nodes: Tracked < Region < Ptr < Node >>>, __eyk_erased_order: Ghost < Seq < Ptr < Node >>>,
 }
 
 impl View for Pool {
     type V = Seq < Ptr < Node >>;
 
-    closed spec fn view(&self) -> Seq < Ptr < Node >> { self.order@ }
+    closed spec fn view(&self) -> Seq < Ptr < Node >> { self.__eyk_erased_order@ }
 
 }
 
 impl Pool {
     pub fn new() -> Self {
         Pool {
-            len: 0, nodes: Tracked(Region::empty()), order: Ghost(Seq::empty())
+            len: 0, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty())
         }
     }
 
     fn add(&mut self, v: u64) -> (p: Ptr < Node >)
-    ensures final(self).nodes@.contains(p), final(self).nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), final(self).order@.len() == old(self).order@.len() + 1, {
+    ensures final(self).__eyk_erased_nodes@.contains(p), final(self).__eyk_erased_nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), final(self).__eyk_erased_order@.len() == old(self).__eyk_erased_order@.len() + 1, {
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
-            self.nodes.borrow_mut().insert(__eyk_perm_p);
+            self.__eyk_erased_nodes.borrow_mut().insert(__eyk_perm_p);
         }
         proof {
-            self.order = Ghost(self.order@.push(p));
+            self.__eyk_erased_order = Ghost(self.__eyk_erased_order@.push(p));
         }
         p
     }
 
     fn bump(&mut self, p: Ptr < Node >)
-    requires old(self).nodes@.contains(p), {
+    requires old(self).__eyk_erased_nodes@.contains(p), {
         {
-            let tracked __eyk_perm_p = self.nodes.borrow_mut().remove(p);
+            let tracked __eyk_perm_p = self.__eyk_erased_nodes.borrow_mut().remove(p);
             let __eyk_res = {
                 p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 0;
             };
             #[allow(unreachable_code)] let __eyk_res = {
                 proof {
-                    self.nodes.borrow_mut().insert(__eyk_perm_p);
+                    self.__eyk_erased_nodes.borrow_mut().insert(__eyk_perm_p);
                 }
                 __eyk_res
             };
@@ -99,9 +99,9 @@ impl Pool {
     }
 
     fn peek(&self, p: Ptr < Node >) -> u64
-    requires self.nodes@.contains(p), {
+    requires self.__eyk_erased_nodes@.contains(p), {
         {
-            let tracked __eyk_perm_p = self.nodes.borrow().borrow(p);
+            let tracked __eyk_perm_p = self.__eyk_erased_nodes.borrow().borrow(p);
             { (*p.read(Tracked(&*__eyk_perm_p))).val }
         }
     }
@@ -152,24 +152,24 @@ pub open spec fn all_pos(s: Seq < int >) -> bool { (forall | i: int | 0 <= i < s
 
 pub open spec fn some_pos(s: Seq < int >) -> bool { (exists | x | s.contains(x) && ((x == 1) || (x == 2))) }
 
-pub struct Bag { items: Tracked < Region < Ptr < Node >>>, }
+pub struct Bag { __eyk_erased_items: Tracked < Region < Ptr < Node >>>, }
 
 impl Bag {
     fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
-    ensures (forall | q | r.contains(q) ==> b.items@.contains(q)), {
+    ensures (forall | q | r.contains(q) ==> b.__eyk_erased_items@.contains(q)), {
         let tracked mut r = r;
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
             r.insert(__eyk_perm_p);
         }
-        Bag { items: Tracked(r) }
+        Bag { __eyk_erased_items: Tracked(r) }
     }
 
 }
 
 pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
     let tracked mut items = items;
-    Bag { items: Tracked(items) }
+    Bag { __eyk_erased_items: Tracked(items) }
 }
 
 fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)

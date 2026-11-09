@@ -14,7 +14,7 @@ use verus_syn::parse::Parser as _;
 
 use super::{push, sp, span_of, span_of_tokens};
 use crate::ast;
-use crate::diag::Message;
+use crate::diag::{BindingForm, Message};
 
 /// 名前に使えない語（`r#` を付ければ使える）。
 pub(super) const RESERVED_WORDS: &[&str] = &["uses"];
@@ -34,6 +34,29 @@ pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
         raw,
         span: sp(i.span()),
     }
+}
+
+/// 局所の名前を束縛する位置の名前（パターンの名前、量化子の変数、名前付きの戻り値、`uses` の
+/// 領域、消去フィールドのパターン、const generics の引数）。Rust の予約語の raw の綴り（`r#type`）は
+/// Verus が検証できないので E0103（#119。[`crate::reserved::RAW_KEYWORDS`]）。版で予約語になった
+/// 名前の診断は、検査が `Ebykn.toml` の `edition` で捨てる。
+pub(in crate::parse) fn binding(i: &proc_macro2::Ident) -> ast::Ident {
+    binding_as(i, BindingForm::Name)
+}
+
+/// [`binding`] の、束縛の書き方（`form`）で直し方の案内を変える版。
+pub(in crate::parse) fn binding_as(i: &proc_macro2::Ident, form: BindingForm) -> ast::Ident {
+    let id = ident(i);
+    if id.raw && crate::reserved::raw_keyword_since(&id.name).is_some() {
+        push(
+            id.span,
+            Message::RawKeywordBinding {
+                word: id.name.clone(),
+                form,
+            },
+        );
+    }
+    id
 }
 
 pub(super) fn lifetime(l: &syn::Lifetime) -> ast::Lifetime {
@@ -61,6 +84,32 @@ pub(super) fn lit(l: &syn::Lit) -> ast::Lit {
         text: l.to_token_stream().to_string(),
         span: span_of(l),
     }
+}
+
+/// 型・パターンのパスの最後の名前が Verus の ghost の包み（`Tracked` / `Ghost`）なら、裸の名前と先頭が
+/// `::` のものは診断にし、それ以外は検査に任せる（#99）。`suffix` は書き方の後ろ（`<..>`、`(..)`）。
+pub(super) fn wrapper_path(p: &syn::Path, suffix: &str) {
+    let segs: Vec<String> = p
+        .segments
+        .iter()
+        .map(|s| {
+            let n = s.ident.to_string();
+            n.strip_prefix("r#").unwrap_or(&n).to_string()
+        })
+        .collect();
+    let lead = if p.leading_colon.is_some() { "::" } else { "" };
+    // 型の引数がなければ `<..>` を付けない（`Ptr<Ghost>` の `Ghost`）。
+    let suffix = match p.segments.last().map(|s| &s.arguments) {
+        Some(syn::PathArguments::None) if suffix == "<..>" => "",
+        _ => suffix,
+    };
+    super::reserved_path(
+        &segs,
+        p.leading_colon.is_some(),
+        crate::reserved::is_wrapper,
+        format!("{lead}{}{suffix}", segs.join("::")),
+        span_of(p),
+    );
 }
 
 pub(super) fn path(p: &syn::Path) -> ast::Path {
@@ -135,10 +184,13 @@ pub(super) fn qself(q: &Option<syn::QSelf>) -> Option<ast::QSelf> {
 pub(super) fn ty(t: &syn::Type) -> ast::Type {
     let span = span_of(t);
     let kind = match t {
-        syn::Type::Path(p) => ast::TypeKind::Path {
-            qself: qself(&p.qself),
-            path: path(&p.path),
-        },
+        syn::Type::Path(p) => {
+            wrapper_path(&p.path, "<..>");
+            ast::TypeKind::Path {
+                qself: qself(&p.qself),
+                path: path(&p.path),
+            }
+        }
         syn::Type::Reference(r) => ast::TypeKind::Ref {
             lifetime: r.lifetime.as_ref().map(lifetime),
             mutable: r.mutability.is_some(),
@@ -233,7 +285,7 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
                 attrs: attrs(&c.attrs),
-                ident: ident(&c.ident),
+                ident: binding(&c.ident),
                 ty: ty(&c.ty),
                 default: c.default.clone().map(expr),
             },

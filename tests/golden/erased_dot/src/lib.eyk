@@ -1,0 +1,35 @@
+// E0404：消去フィールド（`owns` / `spec`）を `.` で書く（#99）。`self.nodes` などは書き下しの後の
+// `Tracked` / `Ghost` のフィールドに届き、領域の権限をまとめて捨てても verified になった。受け手によらず、
+// 構造体リテラルとパターンのフィールドの名前でも拒否する。`Tracked` / `Ghost` は Verus の ghost の包みで、
+// `.eyk` には書けない（E0001）。
+
+pub struct Node { val: u64 }
+
+pub struct S { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl S {
+    pub fn new() -> S { S { len: 0, @nodes: Region::empty(), @order: Seq::empty() } }
+
+    pub fn add(&mut self, v: u64) {
+        let n = Ptr::new(Node { val: v });
+        put self@nodes[n];
+    }
+
+    // #99 の再現：権限をすべて捨てる。
+    pub fn wipe(&mut self) { self.nodes = Tracked(Region::empty()); }
+
+    // ほかの値の消去フィールドと入れ替える。
+    pub fn steal(&mut self, other: &mut S) { std::mem::swap(&mut self.nodes, &mut other.nodes); }
+
+    // 権限付きの `*p` の消去フィールド。
+    pub fn through(p: Ptr<S>) uses &mut p@ { let r = &mut (*p).order; }
+
+    // `..base` で残りを引き継ぎながら、消去フィールドを名前で与える。
+    pub fn replace(base: S) -> S { S { len: 0, nodes: base.len, ..base } }
+
+    // パターンで消去フィールドを名前で取り出す。
+    pub fn take_all(x: S) { let S { len, nodes, @.. } = x; }
+
+    // 論理文脈でも `.` では書かない（`final(self)@order` と書く）。
+    pub fn keep(&mut self) ensures final(self).order == old(self).order, { }
+}

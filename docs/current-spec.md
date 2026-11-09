@@ -95,6 +95,23 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 * 根拠：#19。呼び出しの引数の `uses &r` は、`uses` が変数なら `uses & r`（ビット積）と区別できない。
 * 状態：判断待ちの既定（#19 の P1 に伴う）。
 
+### Rust の予約語の raw の綴りは、局所の名前に使えない
+
+Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#gen` など）は、局所の名前に使えません（`E0103`）。局所の名前とは、`let`・`match`・`if let`・`for`・関数とクロージャの引数のパターンの束縛（構造体のパターンの省略形 `S { r#type }` と消去フィールドの `@r#type` を含む）、量化子の変数、名前付きの戻り値（`-> (r#type: T)`）、`uses` の領域の名前、const generics の引数です。診断は、書き方ごとに書き換え方を案内します。
+
+- 名前を書いて束縛するところは、`type_` のような別の名前にします。
+- 構造体のパターンの省略形（`S { r#type }`、`S { r#type, @g }`）は、`S { r#type: type_ }` のように別の名前で束縛します。`ref` / `mut` の付いた省略形は、`S { r#type: ref type_ }` のように付けたまま書きます。
+- 消去フィールドのパターン（`@r#type`）には、別の名前で束縛する書き方がありません。`spec` フィールドなら、パターンでは `@..` で外し、構造体の値から `s@r#type` のように読みます。`owns` フィールドなら、フィールドの名前を変えます（`@..` で外すと、権限を `leak` するのと同じになるため）。
+- 対象の語は `crates/ebykn_syntax/src/reserved.rs` の `RAW_KEYWORDS` です。厳格な予約語と将来のための予約語（`abstract`、`yield` など）と、版で予約語になった `async`・`await`・`dyn`・`try`（2018）、`gen`（2024）です。版で予約語になった語は、`Ebykn.toml` の `edition` がその版より前なら拒否しません（2021 の `r#gen` は通ります）。`edition` が数として読めなければ拒否します。
+- 予約語でない名前の raw の綴り（`r#foo`、弱いキーワードの `r#union`・`r#raw`、Verus の句の `r#requires`）は通ります。
+- 関数・型・モジュール・トレイト・型の別名・構造体のフィールド・型の引数の名前は、raw の綴りのまま通します（Verus が通すので、`fn r#gen` や `s.r#type` はそのまま書けます）。`const`・`static`・列挙子・列挙子のフィールドの raw の名前は、Verus が予約語でない `r#foo` でも拒否します。これは別の問題で、#147 で扱います。
+- 中を読まないトークン列（マクロの引数など）の中の束縛は見ません。そこに書いたものは、Verus の `function body check` のままです。
+- パターンの名前は字句で判定するので、予約語の raw の綴りの unit struct をパターンに書くと（`pub struct r#type;` の後の `let r#type = x;`）、Rust ではパスのパターンでも `E0103` になります。`r#type {}` か `crate::r#type` と書きます。
+
+* 元の仕様：§4 は識別子を Rust のものとし、raw の綴りに触れない。
+* 根拠：#119。固定した Verus は、予約語を `r#` で名前にした局所の名前を SMT の記号に `r#type@` のまま書き、z3 が読めないので、検証条件に出ると `function body check` で失敗する（`spec fn` の引数なら定義が効かず、使う側が `postcondition not satisfied` になる）。`ebykn check` は通るので、`verify` で初めて分かり、文言から原因が分からない（`tests/verus-probes/raw_keyword_local.rs`。2021 の `r#gen` が通ることは `raw_keyword_local_2021.rs`）。書き下しで別の名前に変えない理由は `OPEN.md` の 2026-11-10 の行。
+* 状態：基準で決めた。
+
 ### `borrow` は式の位置にも書ける
 
 `borrow r[p] { .. }` / `borrow mut r[p] { .. }` は、式が始まる位置ならどこにでも書けます。`if` / `match` と同じブロック式で、値を持ちます。match の腕に書いたときは、続く腕の前に `,` が要ります（構文解析器のフォークが、Ebykn の式をブロック式と見なさないため）。
@@ -105,7 +122,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### Rust の版の予約語は `r#` を付けて名前にする
 
-`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は `r#gen` と書くよう案内します。`r#gen` は書き下しでも `r#gen` のままです。
+`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は、関数・型・モジュール・フィールドの名前なら `r#gen` と書き、局所の名前なら `gen_` などの別の名前を使うよう案内します（局所の名前の `r#gen` は `E0103`。§4「Rust の予約語の raw の綴りは、局所の名前に使えない」）。`r#gen` は書き下しでも `r#gen` のままです。
 
 - 生成する `build/verus/` は `Ebykn.toml` の `edition`（既定は `2024`）でビルドするので、`r#` のない `gen` は生成コードの構文エラーになります。rustc の edition 2024 と同じく、書いた所で拒否します。
 - 書いた所とは、識別子の位置すべてです（関数・変数・引数・フィールド・型・モジュールの名前、パス、マクロの引数の中）。トークン列で判定するので、`stringify!(gen)` のように Rust 2024 でも書ける形も拒否します。
@@ -149,10 +166,11 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - 属性は、`#[verifier::..]`（`E0102`）に加えて `#[verus::..]` も拒否します。どちらも `r#`、先頭の `::`、`cfg_attr(条件, ..)` の中まで見ます。
 - `self@`・`Self@` は、権限ではなく Verus の view として拒否します。権限は `Ident "@"`、view は `.view()` です。
 - `broadcast`・`uninterp`・`assume_specification` は、後ろに Verus の形（`broadcast use / group / proof / fn / axiom`、`uninterp spec`、`assume_specification [` / `<`）が続くときだけ Verus の構文とし、それ以外は識別子として読みます。
-- Verus の句・証明・モード変換の組み込み関数（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_BUILTIN_CALLS`）、証明の構文の関数、Verus のマクロ、`Invariant` / `View` の名前は、綴りによらずパスの最後の名前で判定します。裸の名前の呼び出しと、先頭が `::` のパスは `E0001` です。そのほかのパス（`crate::` / `self::` / `super::`、モジュール経由、改名する `use`）は、クレートの中の定義に解決するときだけ通します。診断は、同じ名前の自分の関数を `crate::..::requires(..)` のパスで呼べることを案内します。裸の名前を値として参照する形（`let r = requires;`、`(requires)(..)`）は、ローカル変数でなければ `E0001` です。中を読まないマクロの引数の中は名前解決しないので、どの綴りの呼び出しも拒否します。値を求めるだけの仕様の関数（`equal`、`imply`、`add` など）と、Ebykn が使う `old` は表に入れません。`crates/ebykn_check/tests/reserved.rs` が、表のすべての名前について綴りを総当たりで試します。
+- Verus の句・証明・モード変換の組み込み関数（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_BUILTIN_CALLS`）、証明の構文の関数、Verus のマクロ、`Invariant` / `View` の名前は、綴りによらずパスの最後の名前で判定します。裸の名前の呼び出しと、先頭が `::` のパスは `E0001` です。そのほかのパス（`crate::` / `self::` / `super::`、モジュール経由、改名する `use`）は、クレートの中の定義（列挙の列挙子 `St::Tracked` を含む）に解決するときだけ通します。診断は、同じ名前の自分の関数を `crate::..::requires(..)` のパスで呼べることを案内します。裸の名前を値として参照する形（`let r = requires;`、`(requires)(..)`）は、ローカル変数でなければ `E0001` です。中を読まないマクロの引数の中は名前解決しないので、どの綴りの呼び出しも拒否します。値を求めるだけの仕様の関数（`equal`、`imply`、`add` など）と、Ebykn が使う `old` は表に入れません。`crates/ebykn_check/tests/reserved.rs` が、表のすべての名前について綴りを総当たりで試します。
+- Verus の ghost の包み `Tracked` / `Ghost`（`reserved.rs` の `VERUS_WRAPPERS`）も、同じ判定で拒否します。見るのは、式（`Tracked(e)`）、型（`Tracked<T>`、`Option<Ghost<T>>`）、パターン（`Tracked(x)`）、`use`、中を読まないマクロの引数です。実行コードの `Tracked(e)` / `Ghost(e)` は、`e` を証明のモードで評価するモードの変換で、`.eyk` に証明を書けてしまいます。ghost の状態は `owns` / `spec` フィールドで、領域の引数は `uses r: Region<..>` で書きます（#99）。
 
 * 元の仕様：§5 は「Rust の文法（syn が受理する範囲）を土台」とし、Verus の構文の扱いを定めていない。
-* 根拠：#7（PR #15）、#16（PR #20）、#64（`.eykp`）。設計ノート §3.2「同じ概念を複数の形で書けるようにしない」、§9「`admit` / `assume` は文法上書けない」。黙って受理すると、書き下しで Verus の意味になる（glob の `use vstd::prelude::*;` の下では、本体の `requires(x == 0);` が黙って事前条件になる）。
+* 根拠：#7（PR #15）、#16（PR #20）、#64（`.eykp`）、#99。設計ノート §3.2「同じ概念を複数の形で書けるようにしない」、§9「`admit` / `assume` は文法上書けない」。黙って受理すると、書き下しで Verus の意味になる（glob の `use vstd::prelude::*;` の下では、本体の `requires(x == 0);` が黙って事前条件になる。`self.nodes = Tracked(Region::empty());` は領域の権限をすべて捨てて verified になった）。
 * 状態：基準で決めた。
 
 ### マクロ
@@ -264,7 +282,7 @@ into_graph(a, b, uses g)                                         // 移動
 | --- | --- |
 | `&mut r` / `&r`（局所の領域、値で受けた領域） | `Tracked(&mut r)` / `Tracked(&r)` |
 | `&mut r` / `&r`（`r` が `uses r: &mut Region<..>` / `&Region<..>` で受けた参照） | `Tracked(&mut *r)` / `Tracked(&*r)` |
-| `&mut self@nodes` / `&self@nodes` | `Tracked(self.nodes.borrow_mut())` / `Tracked(self.nodes.borrow())` |
+| `&mut self@nodes` / `&self@nodes` | `Tracked(self.__eyk_erased_nodes.borrow_mut())` / `Tracked(self.__eyk_erased_nodes.borrow())` |
 | `r`（移動） | `Tracked(r)` |
 
 呼ばれる側を引けない呼び出し（クロージャ、外のクレートの関数など）には、書いた領域を書いた順に足します。受け取らなければ Verus が型の誤りとして拒みます。
@@ -274,6 +292,24 @@ into_graph(a, b, uses g)                                         // 移動
 * 元の仕様：宣言の書き下し（§7.3）だけがあり、呼び出し側の書き方がない。
 * 根拠：#19（PR #20）。構造体を作る前の補助関数、二つの領域を行き来する再帰、領域の共有、補助関数の使い回しに要る。
 * 状態：専用の構文を作ることは作者が決めた。構文の形は判断待ちの既定（#19）。案は P1（括弧の中の末尾に `uses`。既定）、P2（`@` を付けて括弧の中の末尾。`build_chain(n, @&mut r)`）、P3（括弧の後ろに `@( )`。`build_chain(n)@(&mut r)`）の 3 つ。呼び出し側に `&` / `&mut` を書くかも判断待ちで、既定は「書く」。違う案に決まっても、作り直すのは呼び出しの構文の読み取り（`crates/ebykn_syntax` の差し込み口）だけで、AST の `RegionArg` から先の検査と書き下しは変わらない。
+
+### §5.4 消去フィールドは `@` でだけ書く
+
+`owns` / `spec` のフィールドは `x@f` でだけ読み書きします。`.` の形は `E0404` です。
+
+- 拒否する形は、フィールドの読み書き `e.f`、構造体リテラルの `f: e`、パターンの `f` / `f: p`（分解代入の左辺を含む）です。受け手によりません（`self`、ほかの値、`*p`、`old(self)` / `final(self)`）。実行コードでも論理文脈でも同じです。
+- `.` の前の値の型が分かり、それがクレートの構造体で、`f` がその通常のフィールドなら通します。消去フィールドなら拒否します。
+- 型が分からないものは、`f` がクレートのどれかの構造体の消去フィールドと同じ名前で、クレートのどの構造体も `f` を通常のフィールドに持たないときだけ拒否します。診断は、別の型の値なら型を書く（`let x: T = ..`）よう案内します。通常のフィールドに `f` を持つ構造体があれば、その値かもしれないので通します。消去フィールドに届く形なら、書き下しの名前（§7.3「消去フィールドの名前」）のため Verus のビルドで止まります。
+- 型が分かるとするのは、`self`、型を書いた引数と変数、`*e`（参照と `Ptr` / `Cell` の指す値）、`old(e)` / `final(e)`、型の引数のない構造体のフィールド `e.g` です。次の型は、分からないものとして扱います。
+  - `f` を自分のフィールドに持たないクレートの構造体。`Deref` でほかの型に届きうるからです。
+  - 型の引数（`T`、`T::Target`、`<T as Tr>::A`）と、クレートの構造体でない型の `impl` や trait の既定のメソッドの `self`。
+  - 型の引数か型の別名の先に、`f` を消去フィールドに持つ構造体か型の引数を書いた型（`Box<S>`、`type A = S;` の `A`、`Box<T>`）。
+  - `_` と `dyn Trait` など。
+- 中を読まないマクロ（`println!` など）の引数の `.f` も、同じ規則で判定します（メソッドの呼び出し `.f(..)` は除く）。受け手の型は、`.` の直前が裸の名前（`self` か、型を書いた変数）のときだけ見ます。それ以外は型が分からないものとして扱います。
+
+* 元の仕様：§5.4 は `self@x` と `@name` の形を定めるが、`.` で書いたものの扱いを定めていない。`owns` フィールドへの代入の `E0516` は `self@x = e;` の形だけ。
+* 根拠：#99。`self.nodes = Tracked(Region::empty());` が、書き下しの `Tracked` のフィールドに届いて領域の権限をすべて捨て、verified になった（P0）。
+* 状態：基準で決めた。
 
 ### §5.4 match の腕の本体に直接書いたループの句
 
@@ -440,7 +476,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 ### §7.3 構造体と資源の書き下し
 
 - `put r[p];` は `proof { <r>.insert(__eyk_perm_p); }` です。`borrow mut` の末尾の `insert` も `proof { }` に入れます。実行コードに文として置くと、proof のモードの関数を呼べないエラーになります。
-- 論理文脈の `<r>` は `self.r@` です（`r[p]` は `self.r@.index(p)`）。
+- 論理文脈の `<r>` は `self.__eyk_erased_r@` です（`r[p]` は `self.__eyk_erased_r@.index(p)`。名前は次の「消去フィールドの名前」）。
 - `uses &mut p@` には、`requires __eyk_perm_p.pptr() == p` に加えて `ensures final(__eyk_perm_p).pptr() == p` を足します（呼び出しの後も `*p` を使えるように）。`Cell` は `.id() == c.id()` で、`&Ptr<T>` の引数は `*p` と比べます。
 - `-> (q: Ptr<T>) gives q@` は `-> (__eyk_ret: (Ptr<T>, Tracked<PointsTo<T>>))` にします。`ensures` の `q` を `__eyk_ret.0`、`q@` を `__eyk_ret.1@` に付け替え、`ensures __eyk_ret.1@.pptr() == __eyk_ret.0` を足します。本体の末尾と `return e` は `(e, Tracked(__eyk_perm_q))` です。§7.3 の `-> (q: Ptr<T>, Tracked<PointsTo<T>>)` は Verus の構文にありません。
 - 権限の変数を渡すときは、権限そのものなら `Tracked(&x)` / `Tracked(&mut x)`、借用（`uses &p@`、`uses &mut p@`、`borrow`）なら `Tracked(&*x)` / `Tracked(&mut *x)` です。
@@ -450,6 +486,16 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 元の仕様：§7.3 の表（`put` は `<r>.insert(..);`、論理の `<r>` は `self.r.borrow()`、`gives` は `-> (q: Ptr<T>, Tracked<PointsTo<T>>)`、`uses r: Region<L>` は `Tracked(r): Tracked<Region<L>>` だけ）。
 * 根拠：#6（PR #13、プローブ `tracked_field_forms.rs`、`tracked_field_a3_literal.rs`）、#17（PR #26）、#90、#102（`tests/golden/lowering` の `Bag`、`set_owned`、`set_and_put`）。
 * 状態：`put`、論理の `<r>`、値で受けた領域と移動で受けた権限の束縛し直しは実測で決めた。ほかは基準で決めた。
+
+### §7.3 消去フィールドの名前
+
+消去フィールド `f`（`owns` / `spec`）は、生成する Verus では `__eyk_erased_f` という名前のフィールドにします。`struct S { a: A } owns { r: R } spec { q: Q }` は `struct S { a: A, __eyk_erased_r: Tracked<R>, __eyk_erased_q: Ghost<Q> }` です。`self@r` は `self.__eyk_erased_r.borrow_mut()` / `self.__eyk_erased_r.borrow()` / `self.__eyk_erased_r@`、リテラルの `@r: e` は `__eyk_erased_r: Tracked(e)`、パターンの `@r` は `__eyk_erased_r: Tracked(r)`、`self@q = e;` は `proof { self.__eyk_erased_q = Ghost(e); }` です。
+
+`.eyk` の `x.r` は、`ebykn check` が見逃しても（§5.4「消去フィールドは `@` でだけ書く」）、生成した Verus にそのフィールドがないのでビルドで止まります。`__eyk_` は利用者が書けないので（`E0101`）、`.eyk` から生成した名前にも届きません。
+
+* 元の仕様：§7.3 の表は、消去フィールドを同じ名前で書き下す（`struct S { a: A, r: Tracked<..>, q: Ghost<..> }`、`self.r.borrow_mut()`、`self.q@`）。
+* 根拠：#99。同じ名前だと、`.eyk` の `self.r` が `Tracked` のフィールドに直接届いた。
+* 状態：基準で決めた。
 
 ### §7.4 式の書き下し
 
@@ -539,6 +585,17 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
 * 状態：基準で決めた。
 
+### 生成クレートの成果物は `build/verus/target`
+
+`check`・`verify`・`build` が生成クレート（`build/verus/`）で走らせる cargo（`cargo metadata`、`cargo clean -p`、`cargo verus ...`）は、どれも `CARGO_TARGET_DIR` に `build/verus/target` の絶対パスを渡します。最終の成果物（`build` が作る実行ファイルなど）は、利用者の環境の `CARGO_TARGET_DIR` や、親のディレクトリの `.cargo/config.toml` の `build.target-dir` によらず、`build/verus/target` の下にできます（`cargo verus focus` の成果物は `build/verus/target/verus-partial`）。中間の成果物は、`build.build-dir` を設定すればその下に移ります。親の設定で移しても、`verify` と `build` の結果は設定のないときと同じです。
+
+- 置き場を cargo の設定に任せると、各実行の前の `cargo clean -p` が消す成果物と cargo が使う成果物が食い違います。前の成果物が残ると、cargo はクレートを作り直さず Verus を呼ばないので、`verify` の項目がすべて `unknown` になります。
+- cargo の呼び出しは `crates/ebykn/src/verus.rs` の `cargo` でだけ作ります（単体テストが数える）。置き場は `target_dir` の 1 か所で決め、`build` が示す置き場もそこから作ります。`build.target-dir` を設定した親の下（`build.build-dir` も設定したものと、しないもの）のプロジェクトで `verify` を 2 回と `build` を走らせ、`build` が示す置き場に成果物があることも確かめるテスト（`crates/ebykn/tests/target_dir.rs`。Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
+
+* 元の仕様：§9 は `build/verus/` に書き下すとするが、cargo の成果物の置き場を定めていない。
+* 根拠：#137（PR #146）。
+* 状態：基準で決めた。
+
 ### `ebykn sync` の決めごと
 
 `sync` は `proof/` の下の各 `.eykp` を、仕様 §9 のとおり `git merge-file` で更新します（`proof/<p>.eykp` ↔ `src/<p>.eyk` ↔ 基準 `.ebykn/sync/<p>.eyk`）。仕様が定めていない場合は、次のように扱います。
@@ -592,7 +649,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 ### §10.1 仕様にないコード
 
-元の仕様の §10.1 の表にないコードです。元の仕様は、構文エラー、プロジェクトの誤り、未実装の機能、§6.4 の `&mut` の事後条件、ZST の `Ptr`、呼び出しで渡す領域に当たるコードを持ちません。
+元の仕様の §10.1 の表にないコードです。元の仕様は、構文エラー、プロジェクトの誤り、未実装の機能、§6.4 の `&mut` の事後条件、消去フィールドの `.`、ZST の `Ptr`、呼び出しで渡す領域、局所の名前の raw の綴りに当たるコードを持ちません。
 
 | コード | 内容 | 元の仕様 | 根拠 | 状態 |
 | --- | --- | --- | --- | --- |
@@ -600,11 +657,13 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
 | `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
+| `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
+| `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |
 | `E0519` | 呼び出しで渡す領域の状態の誤り：移動した領域を使う、借りた領域か `self@x` を移動で渡す、`&` で借りた領域を `&mut` で渡す、同じ呼び出しで同じ領域を `&mut` か移動を含めて二度渡す（§5.2） | 同上 | #19 | 判断待ちの既定 |
 
-`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0517`〜`E0519` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
+`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0103` は字句の番号帯の続きです。`E0404` は構造体の番号帯の、`E0517`〜`E0519` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
 
 ### §10.1 位置の数え方
 
@@ -658,7 +717,8 @@ M3 の `.eykp` で示す義務は次のとおりです。
 | 付録 A.1 の `remove` の `ensures` の左辺 | `self.view() == ..` | `final(self).view() == ..` | #10 |
 | 付録 A.2 の `push_back` | A.1 と同じ `ensures` | A.1 と同じく `final(self)` | #10 |
 | 付録 A.3 の生成 Verus | `ensures self.invariant(), self@ == old(self)@.push(v), self.has(h)` | `ensures final(self).invariant(), final(self)@ == old(self)@.push(v), final(self).has(h)` | #10 |
-| 付録 A.3 の生成 Verus | `self.nodes.borrow_mut().insert(__eyk_perm_n);`（文） | `proof { self.nodes.borrow_mut().insert(__eyk_perm_n); }`（§7.3） | #6 |
+| 付録 A.3 の生成 Verus | `self.nodes.borrow_mut().insert(__eyk_perm_n);`（文） | `proof { self.__eyk_erased_nodes.borrow_mut().insert(__eyk_perm_n); }`（§7.3） | #6、#99 |
+| 付録 A.3・§7.3 の生成 Verus の消去フィールド | `nodes: Tracked<..>`、`self.nodes.borrow_mut()`、`self.order@` | `__eyk_erased_nodes: Tracked<..>`、`self.__eyk_erased_nodes.borrow_mut()`、`self.__eyk_erased_order@`（§7.3「消去フィールドの名前」） | #99 |
 | 付録 B の不変条件 | `self.head == self@order.first()` | `self.head == self@order.get(0)`。`tests/golden/stack/src/lib.eyk` が付録 B と違うのはこの 1 か所だけ（`crates/ebykn_syntax/tests/appendix.rs` が確かめる） | #11 |
 | §7.1 の `Seq` の拡張 | `first() -> Option<T>`、`last() -> Option<T>` | prelude に置かない。vstd の `first()` / `last()`（要素を返す）を使う | #11 |
 | §7.1 の `Ptr::new` / `empty` | `-> (p: Ptr<T>, Tracked<PointsTo<T>>)` | `-> (r: (Ptr<T>, Tracked<PointsTo<T>>))`（§7.1） | #6 |

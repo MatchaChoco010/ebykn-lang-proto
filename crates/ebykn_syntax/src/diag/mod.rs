@@ -8,7 +8,7 @@ mod check;
 
 use std::fmt::Write as _;
 
-pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
+pub use check::{CheckMsg, DotForm, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
 
 use crate::span::{SourceFile, Span};
 
@@ -29,6 +29,8 @@ pub enum Code {
     E0101,
     /// `#[verifier::..]` の使用。
     E0102,
+    /// 局所の名前に Rust の予約語の raw の綴り（`r#type`）（仕様 §10.1 にない。#119）。
+    E0103,
     /// 対応する `.eyk` のない `.eykp`。
     E0301,
     /// `.eykp` の置き場所の誤り。
@@ -51,6 +53,8 @@ pub enum Code {
     E0004,
     /// 消去フィールドの欠落。
     E0402,
+    /// 消去フィールドを `.` で書いた（仕様 §10.1 にない。#99、`docs/current-spec.md` §10.1）。
+    E0404,
     /// `uses` / `gives` の対象の型が直接 `Ptr` / `Cell` でない。
     E0501,
     /// 領域添字が識別子でない。
@@ -89,6 +93,7 @@ impl Code {
             Code::E0001 => "E0001",
             Code::E0101 => "E0101",
             Code::E0102 => "E0102",
+            Code::E0103 => "E0103",
             Code::E0301 => "E0301",
             Code::E0302 => "E0302",
             Code::E0303 => "E0303",
@@ -96,6 +101,7 @@ impl Code {
             Code::E0305 => "E0305",
             Code::E0401 => "E0401",
             Code::E0403 => "E0403",
+            Code::E0404 => "E0404",
             Code::E0002 => "E0002",
             Code::E0003 => "E0003",
             Code::E0004 => "E0004",
@@ -205,6 +211,8 @@ pub enum Message {
     ReservedPrefix { ident: String },
     /// E0102。
     VerifierAttr,
+    /// E0103。局所の名前を束縛する位置の、Rust の予約語の raw の綴り（#119）。
+    RawKeywordBinding { word: String, form: BindingForm },
     /// E0401。
     ErasedOnNonNamed {
         section: &'static str,
@@ -217,8 +225,32 @@ pub enum Message {
     Check(CheckMsg),
     /// Verus の句・証明の組み込み関数（[`crate::reserved::VERUS_BUILTIN_CALLS`]）。
     VerusBuiltin { name: String, written: String },
+    /// Verus の ghost の包み（[`crate::reserved::VERUS_WRAPPERS`]。#99）。
+    VerusWrapper { written: String },
     /// 構文解析では判定できず検査に任せる名前（診断としては出さない。[`crate::Parsed::deferred`]）。
     Deferred(crate::reserved::DeferredName),
+}
+
+/// [`Message::RawKeywordBinding`] の束縛の書き方。書き方ごとに直し方の案内が違う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingForm {
+    /// 名前を書いて束縛する（`let r#type`、引数、量化子の変数、戻り値の名前など）。
+    Name,
+    /// 構造体のパターンの省略形（`S { r#type }`、`S { ref mut r#type }`）。フィールドの名前で束縛する。
+    /// 案内で `ref` / `mut` を落とさないよう、付いていたかを持つ。
+    Shorthand { by_ref: bool, mutable: bool },
+    /// 消去フィールドのパターン（`S { @r#type }`）。別の名前で束縛する書き方がない。
+    Erased,
+}
+
+/// 省略形の束縛に付いていた `ref` / `mut` を、案内の書き方の前に付ける形にする。
+fn shorthand_modes(by_ref: bool, mutable: bool) -> &'static str {
+    match (by_ref, mutable) {
+        (true, true) => "ref mut ",
+        (true, false) => "ref ",
+        (false, true) => "mut ",
+        (false, false) => "",
+    }
 }
 
 /// [`Message::Expected`] の対象。
@@ -336,6 +368,7 @@ impl Message {
         match self {
             Message::ReservedPrefix { .. } => Code::E0101,
             Message::VerifierAttr => Code::E0102,
+            Message::RawKeywordBinding { .. } => Code::E0103,
             Message::ProofSyntax { .. } => Code::E0303,
             Message::ErasedOnNonNamed { .. } => Code::E0401,
             Message::DirectInvariantOrView { .. } => Code::E0403,
@@ -360,6 +393,12 @@ impl Message {
             ),
             (Message::VerusBuiltin { name, written }, Ja) => format!(
                 "構文エラー: `{written}` は Verus の書き方で、`{src}` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
+            ),
+            (Message::VerusWrapper { written }, En) => format!(
+                "syntax error: `{written}` is Verus's ghost wrapper and cannot be written in `.eyk`; write ghost state as `owns` / `spec` fields (`self@f`) and region arguments as `uses r: Region<..>`"
+            ),
+            (Message::VerusWrapper { written }, Ja) => format!(
+                "構文エラー: `{written}` は Verus の ghost の包みで、`.eyk` には書けません。ghost の状態は `owns` / `spec` フィールド（`self@f`）、領域の引数は `uses r: Region<..>` で書きます"
             ),
             (Message::Deferred(n), _) => n.written.clone(),
             (Message::Lex, En) => {
@@ -428,11 +467,41 @@ impl Message {
                 "構文エラー: `{word}` は Ebykn の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
             ),
             (Message::EditionKeyword { word, since }, En) => format!(
-                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name"
+                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name of a function, type, module, or field, and another name such as `{word}_` for a local name (variable, parameter, pattern binding)"
             ),
             (Message::EditionKeyword { word, since }, Ja) => format!(
-                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
+                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。関数・型・モジュール・フィールドの名前に使うなら `r#{word}` と書き、局所の名前（変数、引数、パターンの束縛）には `{word}_` などの別の名前を使います"
             ),
+            (Message::RawKeywordBinding { word, form }, En) => {
+                let fix = match form {
+                    BindingForm::Name => format!("use another name such as `{word}_`"),
+                    BindingForm::Shorthand { by_ref, mutable } => format!(
+                        "bind the field to another name, such as `r#{word}: {}{word}_`",
+                        shorthand_modes(*by_ref, *mutable)
+                    ),
+                    BindingForm::Erased => format!(
+                        "an erased field pattern binds the field's own name; for a `spec` field, leave it out of the pattern with `@..` and read it from the struct value, such as `s@r#{word}`; for an `owns` field, rename the field"
+                    ),
+                };
+                format!(
+                    "`r#{word}` cannot be used as a local name (variable, parameter, pattern binding, quantified variable, return value name, region, const generic parameter) because Verus cannot verify it; {fix}"
+                )
+            }
+            (Message::RawKeywordBinding { word, form }, Ja) => {
+                let fix = match form {
+                    BindingForm::Name => format!("`{word}_` などの別の名前を使います"),
+                    BindingForm::Shorthand { by_ref, mutable } => format!(
+                        "`r#{word}: {}{word}_` のように、別の名前で束縛します",
+                        shorthand_modes(*by_ref, *mutable)
+                    ),
+                    BindingForm::Erased => format!(
+                        "消去フィールドのパターンはフィールドの名前で束縛します。`spec` フィールドなら、パターンでは `@..` で外し、構造体の値から `s@r#{word}` のように読みます。`owns` フィールドなら、フィールドの名前を変えます"
+                    ),
+                };
+                format!(
+                    "`r#{word}` は局所の名前（変数、引数、パターンの束縛、量化子の変数、戻り値の名前、領域、const generics の引数）には使えません。Verus が検証できないためです。{fix}"
+                )
+            }
             (Message::UsesOutsideCall, En) => {
                 "syntax error: `uses` passes regions only at the end of the arguments of a call (`f(x, uses &mut r)`)".into()
             }

@@ -108,9 +108,11 @@ pub fn check_items(
 ) {
     for item in items {
         match &item.kind {
-            ItemKind::Fn(f) => check_fn(index, module, None, false, &item.vis, f, diags, facts),
-            ItemKind::SpecFn(f) => check_spec_fn(index, module, None, f, diags, facts),
-            ItemKind::LemmaFn(f) => check_lemma_fn(index, module, None, f, diags, facts),
+            ItemKind::Fn(f) => {
+                check_fn(index, module, None, &[], false, &item.vis, f, diags, facts)
+            }
+            ItemKind::SpecFn(f) => check_spec_fn(index, module, None, &[], f, diags, facts),
+            ItemKind::LemmaFn(f) => check_lemma_fn(index, module, None, &[], f, diags, facts),
             ItemKind::Impl(imp) => check_impl(index, module, imp, item.span, diags, facts),
             ItemKind::Trait(t) => check_trait(index, module, t, diags, facts),
             ItemKind::ImplSpec(_) => diags.push(
@@ -188,10 +190,20 @@ fn plain_expr(index: &Index, module: &[String], e: &ast::Expr, d: &mut Diags, f:
         module,
         self_ty: None,
         has_self: false,
+        type_params: Vec::new(),
         linear: true,
         gives: Vec::new(),
     };
     Walker::new(cx, d, f).pure_body(e);
+}
+
+/// 型の引数の名前（外の `impl` / `trait` のものと、関数のもの）。
+fn type_params(outer: &[String], g: &ast::Generics) -> Vec<String> {
+    let own = g.params.iter().filter_map(|p| match p {
+        ast::GenericParam::Type { ident, .. } => Some(ident.name.clone()),
+        _ => None,
+    });
+    outer.iter().cloned().chain(own).collect()
 }
 
 fn has_receiver(sig: &ast::Signature) -> bool {
@@ -205,6 +217,7 @@ fn check_fn(
     index: &Index,
     module: &[String],
     self_ty: Option<&ItemPath>,
+    outer: &[String],
     own_impl: bool,
     vis: &ast::Vis,
     f: &ast::Fn,
@@ -229,6 +242,7 @@ fn check_fn(
         module,
         self_ty,
         has_self: has_receiver(&f.sig),
+        type_params: type_params(outer, &f.sig.generics),
         // `unchecked fn` の本体は検査しない（仕様 §6.2）。
         linear: f.unchecked.is_none(),
         // 名前付き戻り値でない `gives` は E0501 にしたので、Γ の検査には使わない。
@@ -259,6 +273,7 @@ fn logic_cx<'a>(
     index: &'a Index,
     module: &'a [String],
     self_ty: Option<&'a ItemPath>,
+    outer: &[String],
     sig: &ast::Signature,
 ) -> FnCx<'a> {
     FnCx {
@@ -266,6 +281,7 @@ fn logic_cx<'a>(
         module,
         self_ty,
         has_self: has_receiver(sig),
+        type_params: type_params(outer, &sig.generics),
         linear: false,
         gives: Vec::new(),
     }
@@ -275,11 +291,16 @@ fn check_spec_fn(
     index: &Index,
     module: &[String],
     self_ty: Option<&ItemPath>,
+    outer: &[String],
     f: &ast::SpecFn,
     diags: &mut Diags,
     facts: &mut Facts,
 ) {
-    let mut w = Walker::new(logic_cx(index, module, self_ty, &f.sig), diags, facts);
+    let mut w = Walker::new(
+        logic_cx(index, module, self_ty, outer, &f.sig),
+        diags,
+        facts,
+    );
     w.enter(&f.sig, &f.contract);
     w.contract(&f.contract);
     if let Some(e) = &f.body {
@@ -291,13 +312,18 @@ fn check_lemma_fn(
     index: &Index,
     module: &[String],
     self_ty: Option<&ItemPath>,
+    outer: &[String],
     f: &ast::LemmaFn,
     diags: &mut Diags,
     facts: &mut Facts,
 ) {
     sig::check_perm_targets(&f.sig, &f.contract, &mut diags.list);
     ensures::check(&f.sig, &f.contract, &mut diags.list);
-    let mut w = Walker::new(logic_cx(index, module, self_ty, &f.sig), diags, facts);
+    let mut w = Walker::new(
+        logic_cx(index, module, self_ty, outer, &f.sig),
+        diags,
+        facts,
+    );
     w.enter(&f.sig, &f.contract);
     w.contract(&f.contract);
     if let Some(b) = &f.body {
@@ -315,6 +341,7 @@ fn check_impl(
 ) {
     let self_ty = index.type_path(module, &imp.self_ty, None);
     let self_ty = self_ty.as_ref();
+    let outer = type_params(&[], &imp.generics);
     let unimpl = |diags: &mut Diags, span: Span, u: Unimpl| {
         diags.push(span, Message::Check(CheckMsg::Unimplemented(u)));
     };
@@ -327,7 +354,7 @@ fn check_impl(
         }
         ImplTrait::Invariant => {
             match invariant_fn(imp) {
-                Some(f) => check_spec_fn(index, module, self_ty, f, diags, facts),
+                Some(f) => check_spec_fn(index, module, self_ty, &outer, f, diags, facts),
                 None => diags.push(span, Message::Check(CheckMsg::InvariantImplShape)),
             }
             return;
@@ -335,7 +362,9 @@ fn check_impl(
         ImplTrait::View => {
             for item in &imp.items {
                 match &item.kind {
-                    ItemKind::SpecFn(f) => check_spec_fn(index, module, self_ty, f, diags, facts),
+                    ItemKind::SpecFn(f) => {
+                        check_spec_fn(index, module, self_ty, &outer, f, diags, facts)
+                    }
                     ItemKind::TypeAlias(_) => {}
                     _ => diags.push(item.span, Message::Check(CheckMsg::ViewImplShape)),
                 }
@@ -379,10 +408,12 @@ fn check_impl(
                         continue;
                     }
                 }
-                check_fn(index, module, self_ty, own_impl, &item.vis, f, diags, facts);
+                check_fn(
+                    index, module, self_ty, &outer, own_impl, &item.vis, f, diags, facts,
+                );
             }
-            ItemKind::SpecFn(f) => check_spec_fn(index, module, self_ty, f, diags, facts),
-            ItemKind::LemmaFn(f) => check_lemma_fn(index, module, self_ty, f, diags, facts),
+            ItemKind::SpecFn(f) => check_spec_fn(index, module, self_ty, &outer, f, diags, facts),
+            ItemKind::LemmaFn(f) => check_lemma_fn(index, module, self_ty, &outer, f, diags, facts),
             ItemKind::Const(c) => {
                 if let Some(e) = &c.expr {
                     plain_expr(index, module, e, diags, facts);
@@ -448,6 +479,7 @@ fn check_trait(
     diags: &mut Diags,
     facts: &mut Facts,
 ) {
+    let outer = type_params(&[], &t.generics);
     for item in &t.items {
         match &item.kind {
             TraitItemKind::SpecFn(_) | TraitItemKind::LemmaFn(_) => diags.push(
@@ -463,6 +495,7 @@ fn check_trait(
                     index,
                     module,
                     None,
+                    &outer,
                     false,
                     &ast::Vis::Inherited,
                     f,

@@ -37,10 +37,10 @@ fn e0517_structs_without_runtime_fields() {
     // owns / spec だけの構造体（消去されるフィールドは実行時に 0 バイト）。
     rejects(
         "pub struct Node { pub val: u64 }\n\
-         pub struct Ghost {} owns { nodes: Region<Ptr<Node>> } spec { n: nat }\n\
-         pub fn f(p: Ptr<Ghost>) uses p@ { leak p@; }",
+         pub struct Hidden {} owns { nodes: Region<Ptr<Node>> } spec { n: nat }\n\
+         pub fn f(p: Ptr<Hidden>) uses p@ { leak p@; }",
         "E0517",
-        "`Ghost`",
+        "`Hidden`",
     );
     // ゼロサイズ型のフィールドしかない構造体。
     rejects(

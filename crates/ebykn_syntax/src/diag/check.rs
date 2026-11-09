@@ -142,6 +142,17 @@ impl Op {
     }
 }
 
+/// 消去フィールドを `.` で書いた位置（E0404。#99）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DotForm {
+    /// フィールドの読み書き `e.f`。
+    Access,
+    /// 構造体リテラルの `f: e`。
+    Literal,
+    /// 構造体パターンの `f` / `f: p`。
+    Pattern,
+}
+
 /// ループの中で Γ を比べた点（仕様 §6.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopPoint {
@@ -522,6 +533,16 @@ pub enum CheckMsg {
         field: String,
     },
 
+    // E0404
+    /// 消去フィールド（`owns` / `spec`）を `.` で読み書きした（#99）。`sure` は受け手の型が `ty` だと
+    /// 分かっているか（分からないときは、名前が `ty` の消去フィールドと同じなので拒否した）。
+    ErasedFieldDot {
+        ty: String,
+        field: String,
+        form: DotForm,
+        sure: bool,
+    },
+
     // E0501
     UsesNotParam {
         name: String,
@@ -702,6 +723,7 @@ impl CheckMsg {
             | ViewImplShape
             | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
+            ErasedFieldDot { .. } => Code::E0404,
             UsesNotParam { .. }
             | UsesType { .. }
             | UsesRegionType { .. }
@@ -937,6 +959,55 @@ impl CheckMsg {
             }
             (NotErasedField { ty, field }, Ja) => {
                 format!("`{field}` は `{ty}` の `owns` / `spec` フィールドではありません")
+            }
+
+            (
+                ErasedFieldDot {
+                    ty,
+                    field,
+                    form,
+                    sure,
+                },
+                En,
+            ) => {
+                let how = match form {
+                    DotForm::Access => format!("write `self@{field}` or `x@{field}`"),
+                    DotForm::Literal => format!("write `@{field}: ..`"),
+                    DotForm::Pattern => format!("write `@{field}`"),
+                };
+                if *sure {
+                    format!(
+                        "`{field}` is an erased (`owns` / `spec`) field of `{ty}` and cannot be written with `.`; {how}"
+                    )
+                } else {
+                    format!(
+                        "`{field}` may be the erased (`owns` / `spec`) field of `{ty}` (the value before `.` is not known to have its own field `{field}`), and erased fields cannot be written with `.`; {how}, or write the type of the value if it is of another type (`let x: T = ..`)"
+                    )
+                }
+            }
+            (
+                ErasedFieldDot {
+                    ty,
+                    field,
+                    form,
+                    sure,
+                },
+                Ja,
+            ) => {
+                let how = match form {
+                    DotForm::Access => format!("`self@{field}` や `x@{field}` と書きます"),
+                    DotForm::Literal => format!("`@{field}: ..` と書きます"),
+                    DotForm::Pattern => format!("`@{field}` と書きます"),
+                };
+                if *sure {
+                    format!(
+                        "`{field}` は `{ty}` の消去フィールド（`owns` / `spec`）で、`.` では書けません。{how}"
+                    )
+                } else {
+                    format!(
+                        "`.` の前の値が自分のフィールド `{field}` を持つと分からず、`{field}` は `{ty}` の消去フィールド（`owns` / `spec`）かもしれません。消去フィールドは `.` では書けません。{how}。別の型の値なら、その型を書きます（`let x: T = ..`）"
+                    )
+                }
             }
 
             (UsesNotParam { name }, En) => {

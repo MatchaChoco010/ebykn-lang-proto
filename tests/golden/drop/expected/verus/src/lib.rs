@@ -25,7 +25,7 @@ impl core::ops::Drop for Full {
 
 }
 
-pub struct Owner { p: Ptr < u64 >, cells: Tracked < Region < Ptr < u64 >>>, }
+pub struct Owner { p: Ptr < u64 >, __eyk_erased_cells: Tracked < Region < Ptr < u64 >>>, }
 
 impl Drop for Owner {
     fn drop(&mut self) opens_invariants none

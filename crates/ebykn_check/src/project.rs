@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use ebykn_syntax::ast::{self, ItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
-use ebykn_syntax::reserved::DeferredName;
+use ebykn_syntax::reserved::{DeferredName, edition_reserves, raw_keyword_since};
 use ebykn_syntax::reserved::{RESERVED_CRATE_NAMES, RESERVED_DEPENDENCY_NAMES};
 use ebykn_syntax::span::{FileId, SourceFile, Span};
 use ebykn_syntax::{parse_eyk, parse_eykp};
@@ -442,12 +442,14 @@ fn parse_file(
     Some(id)
 }
 
-/// 版の予約語の診断（`gen`）を、`Ebykn.toml` の `edition` がその版より前なら捨てる（#104）。
-/// ほかの診断はそのまま残す。
+/// 版の予約語の診断を、`Ebykn.toml` の `edition` がその版より前なら捨てる。ほかの診断はそのまま
+/// 残す。`gen` を `r#` なしで書いた診断（#104）と、版で予約語になった名前の raw の綴りの局所の名前
+/// （#119。2021 の `r#gen` は、rustc が `r#` を外して Verus に渡すので通る）。
 fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
     match &d.message {
-        Message::EditionKeyword { since, .. } => {
-            ebykn_syntax::reserved::edition_reserves(edition, *since)
+        Message::EditionKeyword { since, .. } => edition_reserves(edition, *since),
+        Message::RawKeywordBinding { word, .. } => {
+            raw_keyword_since(word).is_none_or(|since| edition_reserves(edition, since))
         }
         _ => true,
     }
