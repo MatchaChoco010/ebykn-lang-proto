@@ -953,26 +953,34 @@ impl CheckMsg {
             ),
 
             (RegionArgCount { callee, expected, found }, En) => {
-                let want = if expected.is_empty() {
-                    "no regions".to_string()
-                } else {
-                    format!("`uses {}`", expected.join(", "))
-                };
-                format!(
-                    "`{callee}` takes {want} (in the order of its `uses` clause), but this call passes {found}"
-                )
-            }
-            (RegionArgCount { callee, expected, found }, Ja) => {
-                let want = if expected.is_empty() {
-                    "領域を受け取りません".to_string()
+                let list = expected.join(", ");
+                if expected.is_empty() {
+                    format!("`{callee}` takes no regions; remove `uses ..` from this call")
+                } else if *found == 0 {
+                    format!(
+                        "`{callee}` takes regions; pass them at the end of the arguments as `uses {list}`"
+                    )
                 } else {
                     format!(
-                        "領域を `uses {}` の {} つ受け取ります（`uses` の宣言の順）",
-                        expected.join(", "),
+                        "`{callee}` takes {} regions, `uses {list}` in this order, but this call passes {found}",
                         expected.len()
                     )
-                };
-                format!("`{callee}` は{want}が、この呼び出しは {found} つ渡しています")
+                }
+            }
+            (RegionArgCount { callee, expected, found }, Ja) => {
+                let list = expected.join(", ");
+                if expected.is_empty() {
+                    format!("`{callee}` は領域を受け取りません。この呼び出しの `uses ..` を消します")
+                } else if *found == 0 {
+                    format!(
+                        "`{callee}` は領域を受け取ります。引数の末尾に `uses {list}` と書いて渡します"
+                    )
+                } else {
+                    format!(
+                        "`{callee}` が受け取る領域は `uses {list}` の {} 個（この順）ですが、この呼び出しは {found} 個渡しています",
+                        expected.len()
+                    )
+                }
             }
             (
                 RegionArgMode {

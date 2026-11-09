@@ -614,3 +614,21 @@ fn region_arguments_are_never_dropped() {
         assert!(got.contains(&squash(want)), "{want:?} がない:\n{got}");
     }
 }
+
+#[test]
+fn region_arguments_survive_missing_facts() {
+    // 検査の事実（`facts.calls`）に並びがない呼び出しでも、書き下しは書いた領域を末尾に足す
+    // （`ebykn_lower` の予備の経路）。
+    let src = format!(
+        "{PRE}fn rd(n: u64) uses r: &Region<Ptr<Node>> {{ }}\nfn f() {{ let mut r: Region<Ptr<Node>> = Region::empty(); rd(1, uses &r); rd(2, uses &mut r); }}"
+    );
+    let (p, d) = project::single(&src);
+    assert!(d.is_empty(), "{d:?}");
+    let mut c = ebykn_check::check(&p);
+    assert!(!c.facts.calls.is_empty());
+    c.facts.calls.clear();
+    let got = squash(&lower(&p, &c).unwrap().files[0].text);
+    for want in ["rd(1, Tracked(&r))", "rd(2, Tracked(&mut r))"] {
+        assert!(got.contains(&squash(want)), "{want:?} がない:\n{got}");
+    }
+}

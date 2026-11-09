@@ -629,7 +629,8 @@ impl Cx<'_> {
             (ast::Region::SelfField { field, .. }, PermMode::Mut) => {
                 format!("self.{}.borrow_mut()", ident(field))
             }
-            // 検査が E0519 で止める。書き下すなら `Tracked` の欄をそのまま渡す（型が合わず Verus が拒む）。
+            // ここに届くのは `unchecked fn` の中だけ（ほかは検査が E0519 で止める）。`self.x` は
+            // `Tracked<Region<..>>` で、受け取る側の引数の型そのものなので、欄をそのまま渡す。
             (ast::Region::SelfField { field, .. }, PermMode::Move) => {
                 return format!("self.{}", ident(field));
             }

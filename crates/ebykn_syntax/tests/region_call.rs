@@ -74,6 +74,22 @@ fn only_region_expressions_can_follow_uses() {
     ] {
         rejects(src, "a region after `uses`");
     }
+    // 裸の `uses`（後ろが `)`・`,`）は、領域がないとして診断にする（予約語の診断にしない）。
+    for src in [
+        "fn f() { g(n, uses); }",
+        "fn f() { g(uses, x); }",
+        "fn f() { g(uses,); }",
+    ] {
+        let d = diags(src);
+        assert!(
+            d.iter().any(|d| d.contains("a region after `uses`")),
+            "{d:?}\n---\n{src}"
+        );
+        assert!(
+            !d.iter().any(|d| d.contains("is a keyword in Ebykn")),
+            "{d:?}\n---\n{src}"
+        );
+    }
     // `uses` の後は全部が領域なので、実行時の引数を後ろに書くと領域として読む（検査が拒む）。
     assert_eq!(e("g(uses &r, x)"), "(call g (uses &r, x))");
 }
@@ -87,7 +103,6 @@ fn uses_is_a_reserved_word() {
         "struct S { uses: u64 }",
         "fn f(s: S) -> u64 { s.uses }",
         "fn f() { uses::g(); }",
-        "fn f() { g(uses); }",
         "fn f() { uses(1); }",
     ] {
         rejects(src, "`uses` is a keyword in Ebykn");

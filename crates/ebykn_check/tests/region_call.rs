@@ -47,12 +47,12 @@ fn e0518_counts_and_modes_must_match_the_declaration() {
     rejects(
         &with_helpers("fn f() { write(1); }"),
         "E0518",
-        "`write` takes `uses &mut r`",
+        "`write` takes regions; pass them at the end of the arguments as `uses &mut r`",
     );
     rejects(
         &with_helpers(&format!("fn f() {{ {LOCAL} two(1, uses &mut r); }}")),
         "E0518",
-        "but this call passes 1",
+        "`two` takes 2 regions, `uses &mut a, &b` in this order, but this call passes 1",
     );
     // 受け取らない関数に渡した。
     rejects(
@@ -60,7 +60,7 @@ fn e0518_counts_and_modes_must_match_the_declaration() {
             "fn plain(n: u64) {{ }}\nfn f() {{ {LOCAL} plain(1, uses &r); }}"
         )),
         "E0518",
-        "`plain` takes no regions",
+        "`plain` takes no regions; remove `uses ..` from this call",
     );
     rejects(
         &with_helpers(&format!("fn f() {{ {LOCAL} write(1, uses &r); }}")),
@@ -88,7 +88,7 @@ fn e0518_counts_and_modes_must_match_the_declaration() {
     rejects(
         &with_helpers("unchecked fn f() { write(1); }"),
         "E0518",
-        "`write` takes",
+        "`write` takes regions",
     );
 }
 
@@ -116,6 +116,24 @@ fn e0519_moved_regions_cannot_be_used() {
     accepts(&with_helpers(&format!(
         "fn f() {{ {LOCAL} write(1, uses &mut r); write(2, uses &mut r); take_all(1, uses r); }}"
     )));
+}
+
+#[test]
+fn unchecked_fns_do_not_get_e0519() {
+    // `unchecked fn` の本体は §6.2 の検査をしない（E0519 も出さない）。宣言との照合（E0518）は出す。
+    accepts(&with_helpers(&format!(
+        "unchecked fn f() {{ {LOCAL} take_all(1, uses r); read(1, uses &r); }}"
+    )));
+    accepts(&with_helpers(
+        "unchecked fn f() uses r: &Region<Ptr<Node>> { write(1, uses &mut r); take_all(1, uses r); }",
+    ));
+    rejects(
+        &with_helpers(&format!(
+            "unchecked fn f() {{ {LOCAL} read(1, uses &mut r); }}"
+        )),
+        "E0518",
+        "`uses r: &Region<..>`",
+    );
 }
 
 #[test]

@@ -5,7 +5,8 @@
 //! 領域の状態（`docs/current-spec.md` §5.2、`OPEN.md`）：
 //! - 移動（`r`）で渡した領域変数は R から外し、同じブロックの中で後から使えば E0519。ブロックを
 //!   出ると R はブロックの前に戻るので、ブロックの外で使った誤りは Rust の所有権の検査に任せる
-//!   （Verus が拒む。黙って通ることはない）。
+//!   （Verus が拒む。黙って通ることはない）。`unchecked fn` の中では E0519 を出さず、本体は
+//!   `external_body` で Verus が見ないので、移動した領域を使っても通る（`unchecked` の前提として出る）。
 //! - 借用（`&r` / `&mut r`）は呼び出しの間だけで、状態を変えない。
 
 use ebykn_syntax::ast::{self, Expr, PermMode, Region, RegionArg};

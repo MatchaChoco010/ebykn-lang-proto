@@ -82,10 +82,14 @@ pub(super) enum AtomKind {
 
 pub(super) fn peek_atom(input: ParseStream) -> Option<AtomKind> {
     let t = peek_tts(input, 4);
-    // 後ろが `&` か名前のときだけ領域の並び。`uses::f`・`uses.x` などは名前として読み、
-    // 写すときに予約語の診断にする。
+    // 後ろが `&`・名前・`,`・入力の終わり（呼び出しの `)` の前）のときは領域の並び（裸の `uses` は
+    // 領域がないとして診断にする）。`uses::f`・`uses.x` などは名前として読み、写すときに予約語の
+    // 診断にする。
     if is_ident(t.first(), "uses")
-        && (is_punct(t.get(1), '&') || matches!(t.get(1), Some(TokenTree::Ident(_))))
+        && (is_punct(t.get(1), '&')
+            || is_punct(t.get(1), ',')
+            || t.get(1).is_none()
+            || matches!(t.get(1), Some(TokenTree::Ident(_))))
     {
         return Some(AtomKind::Uses);
     }
