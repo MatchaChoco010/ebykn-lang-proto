@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "ptr_zst_build"
 version = "0.1.0"
