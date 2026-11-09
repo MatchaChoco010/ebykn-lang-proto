@@ -578,6 +578,39 @@ mod tests {
     }
 
     #[test]
+    fn fails_when_try_install_fetches_outside_fetch_asset() {
+        // fetch_asset を通らない取得は sha256 の照合をすり抜ける。
+        let src = real("xtask/src/verus.rs");
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
+        assert!(
+            !body.contains("use crate::fetch::"),
+            "fetch の関数を名前だけで取り込まない（呼び出しを数えられなくなる）"
+        );
+        let call = "fetch::download(";
+        assert_eq!(
+            body.matches(call).count(),
+            1,
+            "fetch::download は try_install の中で fetch_asset に渡す閉包からだけ呼ぶ"
+        );
+        let at = body.find(call).unwrap();
+        let start = body[..at]
+            .rfind("fetch_asset(")
+            .expect("fetch::download の前に fetch_asset がない");
+        assert!(
+            !body[start..at].contains(';'),
+            "fetch::download が fetch_asset の引数の中にない: {}",
+            &body[start..at]
+        );
+        let f = body.find("fn try_install(").expect("try_install がない");
+        let end = f + body[f..].find("\n}\n").expect("try_install の終わりがない");
+        assert!(
+            (f..end).contains(&start),
+            "fetch_asset の呼び出しが try_install の中にない"
+        );
+    }
+
+    #[test]
     fn passes_a_verified_crate() {
         assert_eq!(judge(Some((5, 0)), true), Ok(5));
     }
