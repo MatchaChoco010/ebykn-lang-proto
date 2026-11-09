@@ -86,6 +86,32 @@ pub(super) fn lit(l: &syn::Lit) -> ast::Lit {
     }
 }
 
+/// 型・パターンのパスの最後の名前が Verus の ghost の包み（`Tracked` / `Ghost`）なら、裸の名前と先頭が
+/// `::` のものは診断にし、それ以外は検査に任せる（#99）。`suffix` は書き方の後ろ（`<..>`、`(..)`）。
+pub(super) fn wrapper_path(p: &syn::Path, suffix: &str) {
+    let segs: Vec<String> = p
+        .segments
+        .iter()
+        .map(|s| {
+            let n = s.ident.to_string();
+            n.strip_prefix("r#").unwrap_or(&n).to_string()
+        })
+        .collect();
+    let lead = if p.leading_colon.is_some() { "::" } else { "" };
+    // 型の引数がなければ `<..>` を付けない（`Ptr<Ghost>` の `Ghost`）。
+    let suffix = match p.segments.last().map(|s| &s.arguments) {
+        Some(syn::PathArguments::None) if suffix == "<..>" => "",
+        _ => suffix,
+    };
+    super::reserved_path(
+        &segs,
+        p.leading_colon.is_some(),
+        crate::reserved::is_wrapper,
+        format!("{lead}{}{suffix}", segs.join("::")),
+        span_of(p),
+    );
+}
+
 pub(super) fn path(p: &syn::Path) -> ast::Path {
     ast::Path {
         leading_colon: p.leading_colon.is_some(),
@@ -158,10 +184,13 @@ pub(super) fn qself(q: &Option<syn::QSelf>) -> Option<ast::QSelf> {
 pub(super) fn ty(t: &syn::Type) -> ast::Type {
     let span = span_of(t);
     let kind = match t {
-        syn::Type::Path(p) => ast::TypeKind::Path {
-            qself: qself(&p.qself),
-            path: path(&p.path),
-        },
+        syn::Type::Path(p) => {
+            wrapper_path(&p.path, "<..>");
+            ast::TypeKind::Path {
+                qself: qself(&p.qself),
+                path: path(&p.path),
+            }
+        }
         syn::Type::Reference(r) => ast::TypeKind::Ref {
             lifetime: r.lifetime.as_ref().map(lifetime),
             mutable: r.mutability.is_some(),

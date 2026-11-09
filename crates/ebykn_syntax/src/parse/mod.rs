@@ -315,6 +315,7 @@ pub(crate) fn reserved_path(
                 crate::reserved::proof_call_message(&name, written, in_proof())
             }
             ReservedKind::VerusCall => Message::VerusBuiltin { name, written },
+            ReservedKind::VerusWrapper => Message::VerusWrapper { written },
             ReservedKind::VerusMacro => Message::VerusOnly { written },
             ReservedKind::EbyknTrait => Message::NotAllowedHere { written },
         };

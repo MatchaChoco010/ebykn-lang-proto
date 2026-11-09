@@ -1,0 +1,9 @@
+src/lib.eyk:19:35: E0404: `nodes` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@nodes` や `x@nodes` と書きます
+src/lib.eyk:19:43: E0001: 構文エラー: `Tracked(..)` は Verus の ghost の包みで、`.eyk` には書けません。ghost の状態は `owns` / `spec` フィールド（`self@f`）、領域の引数は `uses r: Region<..>` で書きます
+src/lib.eyk:22:71: E0404: `nodes` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@nodes` や `x@nodes` と書きます
+src/lib.eyk:22:89: E0404: `nodes` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@nodes` や `x@nodes` と書きます
+src/lib.eyk:25:64: E0404: `order` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@order` や `x@order` と書きます
+src/lib.eyk:28:48: E0404: `nodes` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`@nodes: ..` と書きます
+src/lib.eyk:31:42: E0404: `nodes` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`@nodes` と書きます
+src/lib.eyk:34:48: E0404: `order` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@order` や `x@order` と書きます
+src/lib.eyk:34:67: E0404: `order` は `S` の消去フィールド（`owns` / `spec`）で、`.` では書けません。`self@order` や `x@order` と書きます

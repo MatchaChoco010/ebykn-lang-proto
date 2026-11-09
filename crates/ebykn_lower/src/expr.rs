@@ -273,7 +273,7 @@ impl Cx<'_> {
                             parts.push(format!(
                                 "{}{}: {wrap}({})",
                                 crate::attrs(attrs),
-                                ident(i),
+                                erased_field(i),
                                 ident(i)
                             ));
                         }
@@ -507,7 +507,9 @@ impl Cx<'_> {
                 format!("({})", parts.join(op))
             }
             ExprKind::Perm(x) => self.perm_term(&x.name),
-            ExprKind::Erased { base, field } => format!("{}.{}@", self.expr(base), ident(field)),
+            ExprKind::Erased { base, field } => {
+                format!("{}.{}@", self.expr(base), erased_field(field))
+            }
             ExprKind::Borrow {
                 mutable,
                 region,
@@ -639,7 +641,7 @@ impl Cx<'_> {
     }
 
     /// 呼び出しで渡す領域（#19 の既定 P1）：`&mut r` ⇒ `Tracked(&mut r)`（`r` が `uses` で受けた参照なら
-    /// `Tracked(&mut *r)`）、`&mut self@x` ⇒ `Tracked(self.x.borrow_mut())`、移動の `r` ⇒ `Tracked(r)`。
+    /// `Tracked(&mut *r)`）、`&mut self@x` ⇒ `Tracked(self.__eyk_erased_x.borrow_mut())`、移動の `r` ⇒ `Tracked(r)`。
     fn region_arg(&self, u: &ast::RegionArg) -> String {
         let by_ref = self.facts.region_arg_refs.contains(&SpanKey::from(u.span));
         let inner = match (&u.region, u.mode) {
@@ -649,15 +651,15 @@ impl Cx<'_> {
             (ast::Region::Var(v), PermMode::Mut) if by_ref => format!("&mut *{}", ident(v)),
             (ast::Region::Var(v), PermMode::Mut) => format!("&mut {}", ident(v)),
             (ast::Region::SelfField { field, .. }, PermMode::Shared) => {
-                format!("self.{}.borrow()", ident(field))
+                format!("self.{}.borrow()", erased_field(field))
             }
             (ast::Region::SelfField { field, .. }, PermMode::Mut) => {
-                format!("self.{}.borrow_mut()", ident(field))
+                format!("self.{}.borrow_mut()", erased_field(field))
             }
-            // ここに届くのは `unchecked fn` の中だけ（ほかは検査が E0519 で止める）。`self.x` は
+            // ここに届くのは `unchecked fn` の中だけ（ほかは検査が E0519 で止める）。`self.__eyk_erased_x` は
             // `Tracked<Region<..>>` で、受け取る側の引数の型そのものなので、欄をそのまま渡す。
             (ast::Region::SelfField { field, .. }, PermMode::Move) => {
-                return format!("self.{}", ident(field));
+                return format!("self.{}", erased_field(field));
             }
         };
         format!("Tracked({inner})")
@@ -684,7 +686,7 @@ impl Cx<'_> {
                 let mut fields = Vec::new();
                 let mut root = arg;
                 while let ExprKind::Erased { base, field } = &root.kind {
-                    fields.push(format!(".{}@", ident(field)));
+                    fields.push(format!(".{}@", erased_field(field)));
                     root = base;
                 }
                 fields.reverse();
@@ -898,7 +900,7 @@ impl Cx<'_> {
                     _ => "Ghost",
                 };
                 let v = self.in_logic(&f.expr);
-                parts.push(format!("{attrs}{}: {wrap}({v})", member_str(&f.member)));
+                parts.push(format!("{attrs}{}: {wrap}({v})", erased_member(&f.member)));
             } else if f.shorthand {
                 parts.push(format!("{attrs}{}", self.expr(&f.expr)));
             } else {
@@ -1004,12 +1006,12 @@ impl Cx<'_> {
     /// 論理文脈の領域（`self.r@` / 領域変数）。
     fn region_logic(&self, r: &RegionRef) -> String {
         match r {
-            RegionRef::SelfField(f) => format!("self.{f}@"),
+            RegionRef::SelfField(f) => format!("self.{}@", erased_name(f)),
             RegionRef::Var(v) => v.clone(),
             RegionRef::At { old, region } => {
                 let at = if *old { "old" } else { "final" };
                 match &**region {
-                    RegionRef::SelfField(f) => format!("{at}(self).{f}@"),
+                    RegionRef::SelfField(f) => format!("{at}(self).{}@", erased_name(f)),
                     r => format!("{at}({})", self.region_logic(r)),
                 }
             }
@@ -1020,7 +1022,11 @@ impl Cx<'_> {
     fn region_exec(&self, r: &RegionRef, write: bool) -> String {
         match r {
             RegionRef::SelfField(f) => {
-                format!("self.{f}.{}()", if write { "borrow_mut" } else { "borrow" })
+                format!(
+                    "self.{}.{}()",
+                    erased_name(f),
+                    if write { "borrow_mut" } else { "borrow" }
+                )
             }
             RegionRef::Var(v) => v.clone(),
             // `old` / `final` を付けた領域は論理文脈の添字にしか現れない（`take` などの文は
@@ -1164,7 +1170,7 @@ impl Cx<'_> {
                 };
                 let b = self.expr(base);
                 let v = self.in_logic(value);
-                format!("proof {{ {b}.{} = Ghost({v}); }}", ident(field))
+                format!("proof {{ {b}.{} = Ghost({v}); }}", erased_field(field))
             }
         }
     }
@@ -1251,6 +1257,23 @@ pub fn ident(i: &ast::Ident) -> String {
         format!("r#{}", i.name)
     } else {
         i.name.clone()
+    }
+}
+
+/// 消去フィールド（`owns` / `spec`）の書き下しの名前。`.eyk` の `x.name` が届かないよう、利用者が
+/// 書けない接頭辞 `__eyk_`（E0101）を付ける（#99）。
+pub fn erased_name(name: &str) -> String {
+    format!("__eyk_erased_{name}")
+}
+
+pub fn erased_field(i: &ast::Ident) -> String {
+    erased_name(&i.name)
+}
+
+fn erased_member(m: &Member) -> String {
+    match m {
+        Member::Named(i) => erased_field(i),
+        Member::Unnamed { index, .. } => erased_name(&index.to_string()),
     }
 }
 

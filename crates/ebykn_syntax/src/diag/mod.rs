@@ -8,7 +8,7 @@ mod check;
 
 use std::fmt::Write as _;
 
-pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
+pub use check::{CheckMsg, DotForm, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
 
 use crate::span::{SourceFile, Span};
 
@@ -53,6 +53,8 @@ pub enum Code {
     E0004,
     /// 消去フィールドの欠落。
     E0402,
+    /// 消去フィールドを `.` で書いた（仕様 §10.1 にない。#99、`docs/current-spec.md` §10.1）。
+    E0404,
     /// `uses` / `gives` の対象の型が直接 `Ptr` / `Cell` でない。
     E0501,
     /// 領域添字が識別子でない。
@@ -99,6 +101,7 @@ impl Code {
             Code::E0305 => "E0305",
             Code::E0401 => "E0401",
             Code::E0403 => "E0403",
+            Code::E0404 => "E0404",
             Code::E0002 => "E0002",
             Code::E0003 => "E0003",
             Code::E0004 => "E0004",
@@ -222,6 +225,8 @@ pub enum Message {
     Check(CheckMsg),
     /// Verus の句・証明の組み込み関数（[`crate::reserved::VERUS_BUILTIN_CALLS`]）。
     VerusBuiltin { name: String, written: String },
+    /// Verus の ghost の包み（[`crate::reserved::VERUS_WRAPPERS`]。#99）。
+    VerusWrapper { written: String },
     /// 構文解析では判定できず検査に任せる名前（診断としては出さない。[`crate::Parsed::deferred`]）。
     Deferred(crate::reserved::DeferredName),
 }
@@ -388,6 +393,12 @@ impl Message {
             ),
             (Message::VerusBuiltin { name, written }, Ja) => format!(
                 "構文エラー: `{written}` は Verus の書き方で、`{src}` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
+            ),
+            (Message::VerusWrapper { written }, En) => format!(
+                "syntax error: `{written}` is Verus's ghost wrapper and cannot be written in `.eyk`; write ghost state as `owns` / `spec` fields (`self@f`) and region arguments as `uses r: Region<..>`"
+            ),
+            (Message::VerusWrapper { written }, Ja) => format!(
+                "構文エラー: `{written}` は Verus の ghost の包みで、`.eyk` には書けません。ghost の状態は `owns` / `spec` フィールド（`self@f`）、領域の引数は `uses r: Region<..>` で書きます"
             ),
             (Message::Deferred(n), _) => n.written.clone(),
             (Message::Lex, En) => {

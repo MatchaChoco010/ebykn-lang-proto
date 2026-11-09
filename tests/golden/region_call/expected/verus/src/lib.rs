@@ -46,12 +46,12 @@ ensures v == r.index(p).val, {
 }
 
 pub struct Pair {
-    a: Ptr < Node >, b: Ptr < Node >, nodes: Tracked < Region < Ptr < Node >>>,
+    a: Ptr < Node >, b: Ptr < Node >, __eyk_erased_nodes: Tracked < Region < Ptr < Node >>>,
 }
 
 impl Pair {
     pub closed spec fn invariant(&self) -> bool {
-        self.nodes@.contains(self.a) && self.nodes@.contains(self.b)
+        self.__eyk_erased_nodes@.contains(self.a) && self.__eyk_erased_nodes@.contains(self.b)
     }
 
 }
@@ -62,17 +62,17 @@ impl Pair {
         let tracked mut r: Region < Ptr < Node >> = Region::empty();
         let a = alloc(x, Tracked(&mut r));
         let b = alloc(y, Tracked(&mut r));
-        Pair { a, b, nodes: Tracked(r) }
+        Pair { a, b, __eyk_erased_nodes: Tracked(r) }
     }
 
     pub fn set_a(&mut self, v: u64)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
-        set(self.a, v, Tracked(self.nodes.borrow_mut()));
+        set(self.a, v, Tracked(self.__eyk_erased_nodes.borrow_mut()));
     }
 
     pub fn get_b(&self) -> u64
-    requires self.invariant(), { get(self.b, Tracked(self.nodes.borrow())) }
+    requires self.invariant(), { get(self.b, Tracked(self.__eyk_erased_nodes.borrow())) }
 
     pub fn set_a_wrong(&mut self, v: u64)
     requires old(self).invariant(),
@@ -83,10 +83,10 @@ impl Pair {
 
 }
 
-pub struct Single { p: Ptr < Node >, items: Tracked < Region < Ptr < Node >>>, }
+pub struct Single { p: Ptr < Node >, __eyk_erased_items: Tracked < Region < Ptr < Node >>>, }
 
 impl Single {
-    pub closed spec fn invariant(&self) -> bool { self.items@.contains(self.p) }
+    pub closed spec fn invariant(&self) -> bool { self.__eyk_erased_items@.contains(self.p) }
 
 }
 
@@ -95,13 +95,13 @@ impl Single {
     ensures __eyk_r.invariant(), {
         let tracked mut items: Region < Ptr < Node >> = Region::empty();
         let p = alloc(x, Tracked(&mut items));
-        Single { p, items: Tracked(items) }
+        Single { p, __eyk_erased_items: Tracked(items) }
     }
 
     pub fn set(&mut self, v: u64)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
-        set(self.p, v, Tracked(self.items.borrow_mut()));
+        set(self.p, v, Tracked(self.__eyk_erased_items.borrow_mut()));
     }
 
 }
@@ -145,12 +145,12 @@ ensures final(to).contains(p), final(to).index(p) == old(from).index(p), {
 pub struct Vertex { pub out: u64, }
 
 pub struct Graph {
-    a: Ptr < Vertex >, b: Ptr < Vertex >, verts: Tracked < Region < Ptr < Vertex >>>,
+    a: Ptr < Vertex >, b: Ptr < Vertex >, __eyk_erased_verts: Tracked < Region < Ptr < Vertex >>>,
 }
 
 impl Graph {
     pub closed spec fn invariant(&self) -> bool {
-        self.verts@.contains(self.a) && self.verts@.contains(self.b)
+        self.__eyk_erased_verts@.contains(self.a) && self.__eyk_erased_verts@.contains(self.b)
     }
 
 }
@@ -195,7 +195,7 @@ fn into_graph(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked < Region
 requires g.contains(a), g.contains(b),
 ensures __eyk_r.invariant(), {
     let tracked mut g = g;
-    Graph { a, b, verts: Tracked(g) }
+    Graph { a, b, __eyk_erased_verts: Tracked(g) }
 }
 
 pub fn triangle() -> (__eyk_r: Graph)
