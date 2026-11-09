@@ -51,8 +51,14 @@ pub fn judge(expected: &str, stdout: &str, success: bool) -> Result<(), String> 
 }
 
 /// Verus が要るので `#[ignore]` にしたテスト（パッケージ、テストのターゲット、テストの名前）。
-pub const IGNORED: &[(&str, &str, &str)] =
-    &[("ebykn", "no_cheating", "smuggled_assumptions_fail_verify")];
+pub const IGNORED: &[(&str, &str, &str)] = &[
+    ("ebykn", "no_cheating", "smuggled_assumptions_fail_verify"),
+    (
+        "ebykn",
+        "target_dir",
+        "verify_ignores_the_parent_target_dir",
+    ),
+];
 
 /// `cargo test` の出力が、ちょうど一つのテストが走って通ったことを示すか。0 件で通ったもの（名前の誤り
 /// など）を通さない。
@@ -502,6 +508,42 @@ mod tests {
             assert!(src.contains(&format!("fn {name}()")), "{target}::{name}");
             assert!(src.contains("#[ignore"), "{target}");
         }
+    }
+
+    #[test]
+    fn every_ignored_test_is_listed() {
+        // IGNORED にない `#[ignore]` のテストは、どこでも走らない。
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let files = crate::list_files(root).unwrap();
+        let mut found = Vec::new();
+        for f in &files {
+            let Some(target) = f
+                .strip_prefix("crates/ebykn/tests/")
+                .and_then(|t| t.strip_suffix(".rs"))
+            else {
+                continue;
+            };
+            let src = real(f);
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, l) in lines.iter().enumerate() {
+                if !l.trim_start().starts_with("#[ignore") {
+                    continue;
+                }
+                let name = lines[i + 1..]
+                    .iter()
+                    .find_map(|l| l.trim_start().strip_prefix("fn "))
+                    .and_then(|r| r.split('(').next())
+                    .unwrap_or_else(|| panic!("{f}:{}: #[ignore] の後に fn がない", i + 1));
+                found.push((target.to_string(), name.to_string()));
+            }
+        }
+        let mut listed: Vec<(String, String)> = IGNORED
+            .iter()
+            .map(|(_, t, n)| (t.to_string(), n.to_string()))
+            .collect();
+        found.sort();
+        listed.sort();
+        assert_eq!(found, listed, "#[ignore] のテストと IGNORED が食い違う");
     }
 
     #[test]
