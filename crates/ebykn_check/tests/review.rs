@@ -641,9 +641,34 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
         "pub fn n(#[r#cfg(test)] x: u32) {}",
         "pub fn o() { #[r#cfg(test)] let y = 1; }",
         "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> B { let B { #[cfg(test)] @items } = b; B { @items: items } }",
-        "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> u32 { let B { #[cfg(test)] @.. } = b; 0 }",
     ] {
         rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
+    // `..` と `@..` の前の属性は、rustc と同じく E0001（PR #129 のレビュー。書き下しは `..` に属性を
+    // 付けられないので、cfg でない属性も落ちていた）。
+    for (src, rest) in [
+        (
+            "pub struct S { pub x: u32, pub y: u32 }\npub fn p(s: S) -> u32 { let S { x, #[allow(unused)] .. } = s; x }",
+            "..",
+        ),
+        (
+            "pub struct S { pub x: u32, pub y: u32 }\npub fn p(s: S) -> u32 { match s { S { x, #[r#cfg(any())] .. } => x } }",
+            "..",
+        ),
+        (
+            "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> u32 { let B { #[cfg(test)] @.. } = b; 0 }",
+            "@..",
+        ),
+        (
+            "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> u32 { let B { #[allow(unused)] @.. } = b; 0 }",
+            "@..",
+        ),
+    ] {
+        rejects(
+            src,
+            "E0001",
+            &format!("an attribute cannot be written on `{rest}` in a struct pattern"),
+        );
     }
     for src in [
         "pub fn f<#[cfg(any())] T>(a: u32) -> u32 { a }",
@@ -654,6 +679,16 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
     ] {
         rejects(src, "E0003", "`#[cfg(..)]` on a generic parameter");
     }
+    // 診断は cfg の属性を指す（前に cfg でない属性があっても）。
+    let (_, lines) = run("pub fn f<#[allow(unused)] #[cfg(any())] T>(a: u32) -> u32 { a }");
+    assert!(
+        lines.iter().any(|l| l.contains(":1:27: E0003")),
+        "{lines:?}"
+    );
+    // Ebykn が中を読まずに Rust のまま渡す項目（`union`、trait の `type`）のジェネリクスの引数は、
+    // rustc が verify と素のビルドで同じに評価するので通す（現行仕様 §5「マクロ」）。
+    accepts("pub union U<#[cfg(any())] T> { a: u32 }");
+    accepts("pub trait Tr { type A<#[cfg(any())] T>; }");
     // cfg でない属性は通す（書き下しに残す。`crates/ebykn_lower/tests/rules.rs`）。
     accepts("pub fn f<#[allow(unused)] T>(a: u32) -> u32 { a }");
     accepts("pub fn g() -> u32 { let c = |#[allow(unused)] a: u32| a; c(1) }");

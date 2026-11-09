@@ -1123,7 +1123,13 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
                     }
                 })
                 .collect(),
-            rest: s.rest.is_some(),
+            rest: {
+                // `..` の前の属性は rustc が拒否する。落とさずに拒否する（#95）。
+                if let Some(a) = s.rest.as_ref().and_then(|r| r.attrs.first()) {
+                    push(span_of(a), Message::AttrOnRest { rest: ".." });
+                }
+                s.rest.is_some()
+            },
         },
         syn::Pat::Reference(r) => P::Ref {
             mutable: r.mutability.is_some(),

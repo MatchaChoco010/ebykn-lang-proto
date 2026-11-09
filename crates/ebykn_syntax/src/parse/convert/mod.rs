@@ -244,8 +244,10 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
         let (ast::GenericParam::Lifetime { attrs, .. }
         | ast::GenericParam::Type { attrs, .. }
         | ast::GenericParam::Const { attrs, .. }) = p;
-        if ast::has_cfg(attrs)
-            && let Some(a) = attrs.first()
+        // 診断は cfg の属性を指す（`<#[allow(unused)] #[cfg(x)] T>` の `allow` ではない）。
+        if let Some(a) = attrs
+            .iter()
+            .find(|a| ast::has_cfg(std::slice::from_ref(*a)))
         {
             push(
                 a.span,

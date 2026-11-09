@@ -72,8 +72,8 @@ fn header_imports_names_explicitly() {
 }
 
 /// #95：書き下しは、属性を付けられるどの位置の属性も落とさない。位置ごとに別の印の属性を付け、
-/// すべての印が書き下しに残ることを確かめる（位置を足したら、ここにも足す）。`@..` は Rust の `..`
-/// に畳むので、属性を付ける場所がない（`cfg` は検査が E0003 にし、ほかの属性は意味を持たない）。
+/// すべての印が書き下しに残ることを確かめる（位置を足したら、ここにも足す）。`..` と `@..` の前の
+/// 属性は、rustc と同じく構文解析が拒否する（`AttrOnRest`）。
 #[test]
 fn attributes_survive_lowering_in_every_position() {
     let src = "#[allow(m01)] pub struct S<#[allow(m02)] 'a, #[allow(m03)] T, #[allow(m04)] const N: usize> { #[allow(m05)] pub x: u32, pub t: &'a T }
@@ -86,9 +86,11 @@ pub struct B { } owns { #[allow(m10)] items: Region<Ptr<u64>> }
     let v = match x { #[allow(m18)] 0 => 1, _ => 2 };
     let w = S { #[allow(m19)] x: 1, t: &0u8 };
     #[allow(m20)] c(v)
-}";
+}
+pub struct R { a: u32 }
+impl R { pub fn m(#[allow(m21)] &self) -> u32 { self.a } }";
     let got = lowered_ignoring_errors(src);
-    for i in 1..=20 {
+    for i in 1..=21 {
         let m = format!("m{i:02}");
         assert!(
             got.contains(&format!("allow ( {m} )")),

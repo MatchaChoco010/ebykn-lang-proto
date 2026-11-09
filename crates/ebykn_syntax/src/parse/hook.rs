@@ -676,7 +676,17 @@ pub(super) fn parse_pat_struct_body(input: ParseStream) -> syn::Result<RawPatStr
     let mut rest = false;
     while !content.is_empty() {
         let attrs = content.call(syn::Attribute::parse_outer)?;
+        // `..` / `@..` の前の属性は rustc が拒否する。書き下しは `..` に属性を付けられないので、
+        // 落とさずに拒否する（#95）。
+        let rest_attr = |rest| match attrs.first() {
+            Some(a) => Err(err(
+                syn::spanned::Spanned::span(a),
+                Message::AttrOnRest { rest },
+            )),
+            None => Ok(()),
+        };
         if content.peek(Token![..]) {
+            rest_attr("..")?;
             content.parse::<Token![..]>()?;
             rest = true;
             break;
@@ -685,6 +695,7 @@ pub(super) fn parse_pat_struct_body(input: ParseStream) -> syn::Result<RawPatStr
         if content.peek(Token![@]) {
             content.parse::<Token![@]>()?;
             if content.peek(Token![..]) {
+                rest_attr("@..")?;
                 content.parse::<Token![..]>()?;
                 fields.push(RawFieldPat::ErasedRest { attrs, span: start });
             } else {
