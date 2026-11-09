@@ -201,7 +201,7 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 | --- | --- | --- |
 | `vendor/verus_syn/` | [verus-lang/verus](https://github.com/verus-lang/verus) の `dependencies/syn` | `8bf68ee741df833ea5d0fe6a2255126fdea87e47`（`release/0.2026.11.02.8bf68ee`） |
 
-- `vendor/` は Cargo のワークスペースのメンバーにしない（`exclude`）。path 依存で使う。`cargo fmt` と `clippy --workspace` は `vendor/` を整形・検査しない。
+- `vendor/` は Cargo のワークスペースのメンバーにしない（`exclude`）。path 依存で使う。`cargo fmt --check`（`--all` を付けない。`--all` は path 依存も整形する）と `clippy --workspace` は `vendor/` を整形・検査しない。
 - `vendor/` は行数のゲートの対象外。ディレクトリ単位で `EXEMPT_DIRS` に明示する。
 - 取り込みのコミットを含む PR は squash せず、マージコミットでマージする（取り込みだけのコミットを main に残すため）。
 - フォークとして手を入れる場合は、取り込みとは別のコミットで、必要な箇所だけにする。変更した箇所には `EBYKN:` で始まるコメントを付ける。上流を取り込み直すときは、取り込みのコミットとの差分を当て直す。

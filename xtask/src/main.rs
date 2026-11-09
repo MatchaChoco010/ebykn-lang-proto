@@ -27,6 +27,10 @@ const USAGE: &str = "\
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
 ";
 
+/// 整形の検査。`--all` は path 依存（取り込んだ `vendor/`）まで含めるので付けない。
+/// 仮想ワークスペースでは、`--all` なしでもワークスペースの全メンバーを検査する。
+const FMT_CHECK: &[&str] = &["fmt", "--check"];
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [cmd] = args.as_slice() else {
@@ -34,9 +38,9 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let ok = match cmd.as_str() {
-        "precommit" => cargo(&["fmt", "--all", "--check"]) && run_gates(gates::ALL),
+        "precommit" => cargo(FMT_CHECK) && run_gates(gates::ALL),
         "ci" => {
-            cargo(&["fmt", "--all", "--check"])
+            cargo(FMT_CHECK)
                 && cargo(&[
                     "clippy",
                     "--workspace",

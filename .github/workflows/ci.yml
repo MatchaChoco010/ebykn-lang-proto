@@ -19,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
-      - run: cargo fmt --all --check
+      # --all は path 依存（vendor/）まで整形の検査に含めるので付けない。
+      - run: cargo fmt --check
 
   clippy:
     runs-on: ubuntu-latest
