@@ -3,7 +3,7 @@
 // borrow_mut が実行時に panic するところを、ここでは `from != to` の静的な義務にする。
 //
 // 初めは Rc<Cell<Account>> と Region<Cell<Account>> で書いたが、`&Cell` の引数で領域を添字にすると
-// 生成コードがコンパイルできなかった（eval/2026-11-09-1/repro/rc_cell_ref_index.eyk）。
+// 生成コードがコンパイルできなかった（eval/2026-11-09-1/repro/ref_index/src/lib.eyk、#83）。
 
 pub struct Account { pub balance: u64 }
 

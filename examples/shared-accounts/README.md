@@ -47,7 +47,7 @@ $ echo $?
 
 ## 試してみること
 
-- `transfer` の `requires` から `from != to,` を消して `ebykn verify` を実行する。内側の `borrow mut` で同じ口座の権限を二度取り出せることを示せず、`transfer` が `failed` になる。
+- `transfer` の `requires` から `from != to,` を消して `ebykn verify` を実行する。内側の `borrow mut` で同じ口座の権限を二度取り出せることを示せず、`transfer` が `failed` になる（ほかの項目が `unknown` になるのは #79）。
 - `open` の `put self@accts[a];` を消して `ebykn check` を実行する。作った権限が残ったまま関数を抜けるので、`E0505` で止まる。
 - `demo` の `ensures r.0 == 70` を `r.0 == 71` に変えて `ebykn verify` を実行し、`demo` がどうなるかを見る。
 - 口座を `Rc<Cell<Account>>` と `Region<Cell<Account>>` で書くと、今は `&Cell<Account>` で領域を添字にできない（#83）。

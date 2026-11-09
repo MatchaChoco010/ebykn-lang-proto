@@ -54,6 +54,8 @@ empty None
 
 ### tree
 
+抜粋（実際には、ほかに `unknown` の行が 9 つと `unchecked tree::main` があります）：
+
 ```text
 error: loop must have a `decreases` clause
 failed tree::Tree::depth
@@ -145,6 +147,7 @@ results 5 verified, 0 errors
 ## Issue にしなかったこと
 
 - `pub` の関数の契約から非公開の消去フィールドを読めず、`closed spec fn`（rccell の `has` / `bal`）を通す必要がある。Verus と同じ制約で、付録 A.1 の注記と #25 で決まった書き方です。
+- `put t@nodes[r]`（ローカル変数の構造体の領域）を書けないこと。#14 で消去フィールドの `@` はどの式の後にも書けるようにしたが、それは論理文脈で読む場合で、`take` / `put` / `borrow` の領域は現行仕様でも `self@f` か領域変数だけです。領域変数を先に作って構造体のリテラルで渡す形（tree の `new`）は、`put t@nodes[r]` と行数が変わらず、`owns` のフィールドを持つ構造体のリテラルは全部の消去フィールドを与える規則（E0402）とも合います。冗長さがなく、書き方が分かれば困らないので、使い勝手の Issue にはせず、診断の不足だけを #84 にしました。
 - `build/verus/` を Verus なしの `cargo build` でビルドすると、消去したフィールドの `dead_code` と、生成コードの `unnecessary braces around block return value` の警告が出る。前者は `OPEN.md` の「M0 の実測」に記録済みで、どちらも動作は変わりません。
 - 自分の書き誤り：補助の `spec fn` に `pub` を付け忘れた（`pub` の関数の `ensures` から非公開の関数は呼べない）。中置の `and` を書いた（`and { .. }` はブロックの形だけで、中置は `&&`）。どちらも診断から直せました。
 
