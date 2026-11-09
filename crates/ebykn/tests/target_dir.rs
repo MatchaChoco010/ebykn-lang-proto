@@ -44,9 +44,9 @@ impl Drop for Scratch {
     }
 }
 
-#[test]
-#[ignore = "固定した Verus が要る。cargo xtask golden-verify が --ignored で走らせる"]
-fn verify_ignores_the_parent_target_dir() {
+/// 親の `.cargo/config.toml` の `[build]` に `extra` を書いたプロジェクトで、`verify` を 2 回と `build` を
+/// 走らせる。`elsewhere` は、親の設定の `target-dir` に書く置き場。
+fn run_under_parent_config(label: &str, extra: impl Fn(&Path) -> String) {
     // リポジトリの外に置く（中に置くと、リポジトリのワークスペースの下になる）。ビルドを置くので `/tmp` は使わない。
     let cache = match std::env::var_os("XDG_CACHE_HOME") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
@@ -54,7 +54,7 @@ fn verify_ignores_the_parent_target_dir() {
     };
     let base = cache
         .join("ebykn/scratch")
-        .join(format!("target-dir-137-{}", std::process::id()));
+        .join(format!("target-dir-137-{label}-{}", std::process::id()));
     if base.exists() {
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -65,8 +65,9 @@ fn verify_ignores_the_parent_target_dir() {
     std::fs::write(
         &config,
         format!(
-            "[build]\ntarget-dir = {:?}\n",
-            elsewhere.display().to_string()
+            "[build]\ntarget-dir = {:?}\n{}",
+            elsewhere.display().to_string(),
+            extra(&base)
         ),
     )
     .unwrap();
@@ -88,20 +89,56 @@ fn verify_ignores_the_parent_target_dir() {
         assert_eq!(
             stdout,
             expected,
-            "{round} 回目\n{}",
+            "{label}：{round} 回目\n{}",
             String::from_utf8_lossy(&out.stderr)
         );
         // stack は失敗する項目を持つので、終了コードは 1。
-        assert_eq!(out.status.code(), Some(1), "{round} 回目");
+        assert_eq!(out.status.code(), Some(1), "{label}：{round} 回目");
         assert!(
             !elsewhere.exists(),
-            "{round} 回目：成果物が親の設定の target-dir（{}）に置かれた",
+            "{label}：{round} 回目：成果物が親の設定の target-dir（{}）に置かれた",
             elsewhere.display()
         );
         // `cargo verus focus` の成果物も、消す側（`cargo clean -p`）と同じ target-dir の下にある。
         assert!(
             dir.join("build/verus/target/verus-partial").is_dir(),
-            "{round} 回目：build/verus/target/verus-partial がない"
+            "{label}：{round} 回目：build/verus/target/verus-partial がない"
         );
     }
+
+    // `build` が示す置き場は、実際に成果物のある場所（`build/verus/target/debug`）。
+    let out = ebykn(&dir, "build");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{label}：build\n{stderr}");
+    let shown = stderr
+        .split_once("built `")
+        .and_then(|(_, r)| r.split_once('`'))
+        .map(|(p, _)| p)
+        .unwrap_or_else(|| panic!("{label}：build の置き場の表示がない\n{stderr}"));
+    assert_eq!(
+        dir.join(shown).canonicalize().unwrap(),
+        dir.join("build/verus/target/debug").canonicalize().unwrap(),
+        "{label}"
+    );
+    assert!(
+        dir.join(shown).join("libstack.rlib").is_file(),
+        "{label}：{shown}"
+    );
+    assert!(
+        !elsewhere.exists(),
+        "{label}：build の成果物が親の設定の target-dir に置かれた"
+    );
+}
+
+#[test]
+#[ignore = "固定した Verus が要る。cargo xtask golden-verify が --ignored で走らせる"]
+fn verify_ignores_the_parent_target_dir() {
+    run_under_parent_config("target-dir", |_| String::new());
+    // 中間の成果物の置き場（build-dir）も移した親の下でも、verify と build の結果は同じ。
+    run_under_parent_config("build-dir", |base| {
+        format!(
+            "build-dir = {:?}\n",
+            base.join("elsewhere-build").display().to_string()
+        )
+    });
 }

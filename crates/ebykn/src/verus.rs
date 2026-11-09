@@ -914,8 +914,8 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(build));
     }
 
-    /// `src/` の下の `.rs`（サブディレクトリも）を、`src/` からのパスと中身の組で読む。
-    fn crate_sources() -> Vec<(String, String)> {
+    /// `root` の下の `.rs`（サブディレクトリも）を、`root` からのパスと中身の組で読む。
+    fn sources_under(root: &Path) -> Vec<(String, String)> {
         fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -931,11 +931,14 @@ mod tests {
                 }
             }
         }
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut out = Vec::new();
-        walk(&src, &src, &mut out);
+        walk(root, root, &mut out);
         out.sort();
         out
+    }
+
+    fn crate_sources() -> Vec<(String, String)> {
+        sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
     }
 
     /// cargo の呼び出し（`Command::new("cargo")`）が、テストの外では `verus.rs` の `fn cargo(` の中の
@@ -994,12 +997,24 @@ mod tests {
             mutate(t, "\nuse ", &format!("{stray}\nuse "))
         });
         assert!(cargo_only_in_helper(&other).is_err());
-        // サブディレクトリのファイルの呼び出し（読む範囲から漏れない）。
-        let mut sub = files.clone();
-        sub.push((
-            "sub/mod.rs".into(),
+        // サブディレクトリのファイルの呼び出し：実際のディレクトリを読み、sources_under が拾うこと。
+        let dir = std::env::temp_dir().join(format!("ebykn-cargo-calls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in &files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        assert_eq!(cargo_only_in_helper(&sources_under(&dir)), Ok(()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(
+            dir.join("sub/mod.rs"),
             format!("use std::process::Command;{stray}"),
-        ));
+        )
+        .unwrap();
+        let sub = sources_under(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(sub.iter().any(|(r, _)| r == "sub/mod.rs"), "{sub:?}");
         assert!(cargo_only_in_helper(&sub).is_err());
         // verus.rs の中でも、fn cargo の外の呼び出し。
         let outside = with("verus.rs", &|t| {

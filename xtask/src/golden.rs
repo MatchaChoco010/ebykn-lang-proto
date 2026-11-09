@@ -519,7 +519,8 @@ mod tests {
     ///
     /// `IGNORED` は `cargo test -p <パッケージ> --test <ターゲット>` で走らせるので、走らせられるのは
     /// `crates/<パッケージ>/tests/<ターゲット>.rs` の中のものだけ。ほかの場所（`src/` の単体テスト、xtask、
-    /// `tests/` の下のディレクトリ）の `#[ignore]` と、後に `fn` を読めない `#[ignore]` は誤りにする。
+    /// `tests/` の下のディレクトリ）の `#[ignore]`、後に `fn` を読めない `#[ignore]`、条件つきの
+    /// `#[cfg_attr(.., ignore)]` は誤りにする。
     fn ignored_tests(files: &[(String, String)]) -> Result<Vec<(String, String, String)>, String> {
         let mut found = Vec::new();
         let mut errors = Vec::new();
@@ -531,10 +532,18 @@ mod tests {
                 .filter(|(pkg, t)| !pkg.contains('/') && !t.contains('/'));
             let lines: Vec<&str> = text.lines().collect();
             for (i, l) in lines.iter().enumerate() {
-                if !l.trim_start().starts_with("#[ignore") {
+                let t = l.trim_start();
+                let at = format!("{path}:{}", i + 1);
+                // 条件つきの ignore は、どの条件で走らないかを IGNORED から決められない。
+                if t.starts_with("#[cfg_attr(") && t.contains("ignore") {
+                    errors.push(format!(
+                        "{at}: #[cfg_attr(..)] の ignore は IGNORED で扱えない"
+                    ));
                     continue;
                 }
-                let at = format!("{path}:{}", i + 1);
+                if !t.starts_with("#[ignore") {
+                    continue;
+                }
                 let Some((pkg, target)) = place else {
                     errors.push(format!("{at}: IGNORED から走らせられない場所の #[ignore]"));
                     continue;
@@ -631,6 +640,12 @@ mod tests {
             format!("{t}\n#[test]\n#[ignore]\nfn hidden() {{}}\n")
         });
         assert!(ignored_tests(&xtask).is_err());
+        // 条件つきの ignore。
+        let cfg = with("crates/ebykn_check/tests/zst.rs", &|t| {
+            mutate(t, "#[test]", "#[test]\n#[cfg_attr(unix, ignore)]")
+        });
+        let e = ignored_tests(&cfg).unwrap_err();
+        assert!(e.contains("zst.rs:") && e.contains("cfg_attr"), "{e}");
         // 後に fn を読めない #[ignore]。
         let unreadable = with("crates/ebykn/tests/no_cheating.rs", &|t| {
             mutate(
