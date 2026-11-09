@@ -210,7 +210,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | `cargo test --workspace` | テスト |
 | `mdbook build book` | Ebykn Book を `book/book/` に作る（mdBook 0.5.4） |
 
-- pre-commit フックは `git config core.hooksPath .githooks` で有効にする。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
+- pre-commit フックは `git config core.hooksPath .githooks` で有効にする。フックは、`ebykn-limited` があればその下で `cargo xtask precommit` を走らせる（「マシンの資源」）。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
 - toolchain は `rust-toolchain.toml`（1.96.0）。Verus は自分の toolchain（固定値の `toolchain`）で動き、`verus-*` のコマンドがそれを指定する。Verus のクレートはルートの Cargo ワークスペースから `exclude` してある。
 - Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes`・`formal-oracle` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` の「M0 の実測」と `docs/current-spec.md` を見直す。
 - CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と、`main`・`develop` への `push` だけにする。`develop` への `push` は、リリースを切る前に `develop` の先頭が緑であることを確かめるため（PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない）。
