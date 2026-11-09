@@ -53,10 +53,19 @@ pub fn ret(x: &mut u64) -> u64
     returns get(x)
 { 3 }
 
-// 中を読まないマクロの引数に参照を丸ごと渡す形。
+// 中を読まないマクロの引数に参照を丸ごと渡す形。マクロの引数の中では `old(..)` は書けるが、
+// `final(..)` は Verus が受け付けないので、事後の値は条件をマクロの外で書く。
 pub fn in_macro(x: &mut u64)
     ensures matches!(get(x), 3), matches!(get(final(x)), 3),
+        matches!(get(old(x)), 3), get(final(x)) == 3,
 { }
+
+// `old(..)` / `final(..)` は `&mut` の引数そのものに付ける（`old(self).len` と書く）。
+impl Log {
+    fn field(&mut self)
+        ensures final(self.len) == old(self).len,
+    { }
+}
 
 pub fn region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
     requires r.contains(p),

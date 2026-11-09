@@ -358,31 +358,92 @@ fn e0004_returns_and_macro_tokens() {
     accepts(&format!(
         "{PRELUDE}fn ret4(x: &mut u64) -> u64 requires *x == 3, returns *old(x) {{ *x = 7; 3 }}"
     ));
-    // 中を読まないマクロの引数に参照を丸ごと渡す形。`old(..)` / `final(..)` の括弧の中と、
-    // フィールドの名前は通す。
+    // 中を読まないマクロの引数に参照を丸ごと渡す形。`old(..)` の括弧の中と、フィールドの名前、
+    // パスの途中は通す。Verus はマクロの引数の中の `final` を受け付けないので、事後の値は条件を
+    // マクロの外で書くよう案内する。
     let g = "spec fn g(y: &mut u64) -> u64 = *y;\n";
+    let in_macro = "inside the arguments of this macro write `old(x)` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final(x)` (for example `g(final(x)) == 3` instead of `matches!(g(x), 3)`)";
     rejects(
         &format!("{PRELUDE}{g}fn f(x: &mut u64) ensures matches!(g(x), 3), {{ *x = 7; }}"),
         "E0004",
-        "write `final(x)`",
+        in_macro,
     );
     accepts(&format!(
-        "{PRELUDE}{g}fn f(x: &mut u64) ensures matches!(g(final(x)), 3), matches!(g(old(x)), 3), {{ }}"
+        "{PRELUDE}{g}fn f(x: &mut u64) ensures g(final(x)) == 3, matches!(g(old(x)), 3), {{ }}"
     ));
+    rejects(
+        &format!("{PRELUDE}{g}fn f(x: &mut u64) ensures matches!(g(final(x)), 3), {{ }}"),
+        "E0004",
+        "`final(..)` cannot be written inside the arguments of this macro",
+    );
     rejects(
         &in_pool("fn f(&mut self) ensures matches!(self.len, 0), { }"),
         "E0004",
-        "write `final(self)`",
+        "write `old(self)` for the value at entry",
     );
     accepts(&in_pool(
-        "fn f(&mut self, o: Option<u64>) ensures matches!(final(self).len, 0), matches!(o, Some(len)), { }",
+        "fn f(&mut self, o: Option<u64>) ensures matches!(old(self).len, 0), matches!(o, Some(len)), { }",
     ));
+    // `.` / `::` の直後の名前（フィールドとパスの途中）は引数ではない。
+    let t = "pub struct T { x: u64 }\nmod m { pub spec fn x() -> u64 = 0; }\n";
+    accepts(&format!(
+        "{PRELUDE}{t}fn f(x: &mut u64, t: T) ensures matches!(t.x, 0), matches!(m::x(), 0), {{ }}"
+    ));
+    // 構造体リテラルのフィールドの値（`S {{ f: x }}`）は引数。フィールドの名前（`x: ..`）は見ない。
+    let r = "pub struct R<'a> { f: &'a mut u64, x: u64 }\n";
+    rejects(
+        &format!(
+            "{PRELUDE}{r}fn f(x: &mut u64) ensures matches!(R {{ f: x, x: 0 }}, R {{ .. }}), {{ }}"
+        ),
+        "E0004",
+        in_macro,
+    );
     // 権限の `p@` は、トークン列の中にあれば本体の検査が E0003 にする（ここでは足さない）。
     rejects(
         &format!("{PRELUDE}fn f(p: Ptr<Node>) uses &mut p@ ensures matches!(p@.value(), _), {{ }}"),
         "E0003",
         "permissions cannot be used in the arguments of this macro",
     );
+}
+
+#[test]
+fn e0004_old_and_final_take_mut_arguments() {
+    // `old(e)` / `final(e)` の `e` は `&mut` の引数、`uses &mut p@` の `p@` / `*p`、それらの消去
+    // フィールドだけ（`old(self.len)` は生成コードの Verus の型エラーになるので、Ebykn が拒む）。
+    let msg = "`old(..)` / `final(..)` can only be applied to a `&mut` argument";
+    rejects(
+        &in_pool("fn f(&mut self) ensures final(self.len) == 0, { }"),
+        "E0004",
+        msg,
+    );
+    rejects(
+        &in_pool("fn f(&mut self) requires old(self.len) == 0, { }"),
+        "E0004",
+        msg,
+    );
+    rejects(
+        &in_pool("fn f(&self) ensures old(self).len == 0, { }"),
+        "E0004",
+        msg,
+    );
+    rejects(
+        &format!("{PRELUDE}fn f(p: Ptr<Node>) uses &p@ ensures old(p@).is_init(), {{ }}"),
+        "E0004",
+        msg,
+    );
+    rejects(
+        &format!(
+            "{PRELUDE}fn f(x: &mut u64, s: Seq<u64>) ensures forall x in s, old(x) == 0, {{ }}"
+        ),
+        "E0004",
+        msg,
+    );
+    accepts(&in_pool(
+        "fn f(&mut self, p: Ptr<Node>) requires old(self).len == 0, ensures final(self).len == old(self).len, old(self@order).len() == final((self@order)).len(), { }",
+    ));
+    accepts(&format!(
+        "{PRELUDE}fn f(p: Ptr<Node>, x: &mut u64) uses &mut p@ ensures final(p@).is_init(), final(*p).val == old(*p).val, *final(x) == *old(x), {{ }}"
+    ));
 }
 
 #[test]

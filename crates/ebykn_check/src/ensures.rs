@@ -11,13 +11,18 @@
 //!    中の `p@` / `*p` は、どの句でも `E0507` にする。書き下しは束縛に従わず、`p@` / `*p` をいつも
 //!    外側の引数の権限にするので、束縛した `p` の権限とは読めない（`old` / `final` の下でも同じ）。
 //!
+//! `old(e)` / `final(e)` の `e` は、`&mut` の引数、`uses &mut p@` の `p@` / `*p`、それらの消去
+//! フィールド（`x@f`）のどれかでなければ `E0004` にする（Verus の `old` / `final` は `&mut` の引数
+//! そのものにしか付けられず、`old(self.len)` は生成コードの型エラーになる。`old(self).len` と書く）。
+//!
 //! 中を読まないマクロの引数（トークン列）も、`&mut` 引数の名前を探して `E0004` にする（権限の
 //! `p@` / `*p` は、トークン列の中にあれば本体の検査（[`crate::body`]）が `E0003` にする）。引数として
 //! 参照を丸ごと渡す形（`matches!(g(x), 3)`）は、裸のまま Verus に渡ると入口の値と読まれ、黙って
 //! 誤るため。トークン列の中の束縛（クロージャの引数など）は読まないので、そこで束縛し直した名前も
-//! 引数として報告する（その形はマクロの外で書く）。`old(..)` / `final(..)` の括弧の中では
-//! `&mut` 引数を報告しない。`.` / `::` の直後の名前（フィールドやパスの途中）と、直後に `:` が
-//! 続く名前は見ない。位置はマクロ全体にする。
+//! 引数として報告する（その形はマクロの外で書く）。`old(..)` の括弧の中では `&mut` 引数を
+//! 報告しない。Verus はマクロの引数の中の `final` を受け付けないので、`final(..)` は `E0004` に
+//! し、条件をマクロの外で書くよう案内する。`.` / `::` の直後の名前（フィールドやパスの途中）と、
+//! 直後に `:` が続く名前（パスの先頭とフィールドの名前）は見ない。位置はマクロ全体にする。
 
 use std::collections::BTreeSet;
 
@@ -79,12 +84,8 @@ pub fn check(sig: &ast::Signature, contract: &ast::Contract, out: &mut Vec<Diagn
         };
         let mut v = Visitor {
             post,
-            muts: if post { muts.clone() } else { BTreeSet::new() },
-            mut_perms: if post {
-                mut_perms.clone()
-            } else {
-                BTreeSet::new()
-            },
+            muts: muts.clone(),
+            mut_perms: mut_perms.clone(),
             perms: if post {
                 perms.union(&gives).cloned().collect()
             } else {
@@ -94,9 +95,6 @@ pub fn check(sig: &ast::Signature, contract: &ast::Contract, out: &mut Vec<Diagn
             at: false,
             out,
         };
-        if v.muts.is_empty() && v.perms.is_empty() {
-            continue;
-        }
         v.exprs(es);
     }
 }
@@ -180,6 +178,24 @@ impl Visitor<'_> {
         }
     }
 
+    /// `old(e)` / `final(e)` の `e` として Verus に渡せる形か（`old` / `final` は `&mut` の引数
+    /// そのものにしか付けられない。`*p`・`p@` は権限の引数、`x@f` は `old(x).f@` に書き下す）。
+    fn at_arg_ok(&self, e: &ast::Expr) -> bool {
+        match &e.kind {
+            ExprKind::Paren(x) | ExprKind::Erased { base: x, .. } => self.at_arg_ok(x),
+            ExprKind::Path { qself: None, path } => {
+                path.as_ident().is_some_and(|i| self.muts.contains(&i.name))
+            }
+            // 束縛し直した `p` の `p@` / `*p` は、中をたどって E0507 にする。
+            ExprKind::Perm(p) => self.mut_perms.contains(&p.name),
+            ExprKind::Unary {
+                op: UnOp::Deref,
+                expr,
+            } => ident_of(expr).is_some_and(|p| self.mut_perms.contains(&p.name)),
+            _ => false,
+        }
+    }
+
     fn exprs(&mut self, es: &[ast::Expr]) {
         for e in es {
             self.expr(e);
@@ -188,7 +204,12 @@ impl Visitor<'_> {
 
     fn expr(&mut self, e: &ast::Expr) {
         if let Some(arg) = old_or_final(e) {
-            // `old(e)` / `final(e)` の下は、どちらの値かが書いてある。
+            // `old(e)` / `final(e)` の下は、どちらの値かが書いてある。`e` は `&mut` の引数、
+            // `uses &mut p@` の `p@` / `*p`、それらの消去フィールド（`self@f`）のどれか。
+            if !self.at_arg_ok(arg) {
+                self.push(e.span, CheckMsg::OldFinalArg);
+                return;
+            }
             let prev = std::mem::replace(&mut self.at, true);
             self.expr(arg);
             self.at = prev;
@@ -393,13 +414,21 @@ impl Visitor<'_> {
                 TokenTree::Group(g) => self.tokens(g.stream(), span),
                 TokenTree::Ident(id) => {
                     let name = id.to_string();
-                    let after_dot =
-                        i > 0 && (punct(tts.get(i - 1), '.') || punct(tts.get(i - 1), ':'));
+                    // `.` / `::` の直後はフィールドやパスの途中。`S { f: x }` の `x` は見る。
+                    let after_dot = i > 0
+                        && (punct(tts.get(i - 1), '.')
+                            || (i > 1 && punct(tts.get(i - 1), ':') && punct(tts.get(i - 2), ':')));
+                    // 直後に `:` が続く名前は、パスの先頭（`x::y`）かフィールドの名前（`S { x: .. }`）。
                     let path_head = punct(tts.get(i + 1), ':');
-                    let is_at = (name == "old" || name == "final")
-                        && matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis);
-                    if is_at {
-                        // `old(..)` / `final(..)` の中：`&mut` 引数は書いてよい。
+                    let call = matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis);
+                    if name == "final" && call {
+                        // Verus はマクロの引数の中の `final` を受け付けない。
+                        self.push(span, CheckMsg::FinalInMacro);
+                        i += 2;
+                        continue;
+                    }
+                    if name == "old" && call {
+                        // `old(..)` の中：`&mut` 引数は書いてよい。
                         let prev = std::mem::replace(&mut self.at, true);
                         if let Some(TokenTree::Group(g)) = tts.get(i + 1) {
                             self.tokens(g.stream(), span);
@@ -414,7 +443,7 @@ impl Visitor<'_> {
                         && !self.at
                         && self.muts.contains(&name)
                     {
-                        self.bare(span, name.clone(), None);
+                        self.push(span, CheckMsg::BareMutInMacro { written: name });
                     }
                 }
                 _ => {}
