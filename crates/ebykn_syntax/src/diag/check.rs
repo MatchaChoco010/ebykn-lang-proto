@@ -902,16 +902,16 @@ impl CheckMsg {
             }
 
             (BareMutInMacro { written }, En) => format!(
-                "`{written}` is a `&mut` argument, so a postcondition (`ensures` / `returns`) must say which value it means; inside the arguments of this macro write `old({written})` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final({written})` (for example `g(final({written})) == 3` instead of `matches!(g({written}), 3)`)"
+                "`{written}` is a `&mut` argument, so a postcondition (`ensures` / `returns`) must say which value it means; inside the arguments of this macro write `old({written})` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final({written})` (for example `*final({written}) == 3` instead of `matches!(*{written}, 3)`)"
             ),
             (BareMutInMacro { written }, Ja) => format!(
-                "`{written}` は `&mut` の引数なので、事後条件（`ensures` / `returns`）ではどちらの値かを書きます。このマクロの引数の中では、入口の値なら `old({written})` と書けますが、`final(..)` は書けません。呼び出しの後の値なら、条件をマクロの外で `final({written})` を使って書きます（例：`matches!(g({written}), 3)` ではなく `g(final({written})) == 3`）"
+                "`{written}` は `&mut` の引数なので、事後条件（`ensures` / `returns`）ではどちらの値かを書きます。このマクロの引数の中では、入口の値なら `old({written})` と書けますが、`final(..)` は書けません。呼び出しの後の値なら、条件をマクロの外で `final({written})` を使って書きます（例：`matches!(*{written}, 3)` ではなく `*final({written}) == 3`）"
             ),
             (FinalInMacro, En) => {
-                "`final(..)` cannot be written inside the arguments of this macro (Verus does not accept it there); write the condition outside the macro (for example `g(final(x)) == 3` instead of `matches!(g(final(x)), 3)`)".into()
+                "`final(..)` cannot be written inside the arguments of this macro (Verus does not accept it there); write the condition outside the macro (for example `*final(x) == 3` instead of `matches!(*final(x), 3)`)".into()
             }
             (FinalInMacro, Ja) => {
-                "このマクロの引数の中には `final(..)` を書けません（Verus が受け付けません）。条件はマクロの外で書きます（例：`matches!(g(final(x)), 3)` ではなく `g(final(x)) == 3`）".into()
+                "このマクロの引数の中には `final(..)` を書けません（Verus が受け付けません）。条件はマクロの外で書きます（例：`matches!(*final(x), 3)` ではなく `*final(x) == 3`）".into()
             }
             (OldFinalArg, En) => {
                 "`old(..)` / `final(..)` can only be applied to a `&mut` argument (`self`, `x`), the permission of `uses &mut p@` (`p@`, `*p`), or an erased field of these (`self@f`); apply it to the argument and access the field outside (for example `old(self).len` instead of `old(self.len)`)".into()

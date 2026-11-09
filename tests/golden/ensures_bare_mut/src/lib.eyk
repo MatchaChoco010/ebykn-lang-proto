@@ -57,7 +57,7 @@ pub fn ret(x: &mut u64) -> u64
 // `final(..)` は Verus が受け付けないので、事後の値は条件をマクロの外で書く。
 pub fn in_macro(x: &mut u64)
     ensures matches!(get(x), 3), matches!(get(final(x)), 3),
-        matches!(get(old(x)), 3), get(final(x)) == 3,
+        matches!(get(old(x)), 3), *final(x) == 3,
 { }
 
 // `old(..)` / `final(..)` は `&mut` の引数そのものに付ける（`old(self).len` と書く）。

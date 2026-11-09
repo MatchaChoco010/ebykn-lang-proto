@@ -362,14 +362,14 @@ fn e0004_returns_and_macro_tokens() {
     // パスの途中は通す。Verus はマクロの引数の中の `final` を受け付けないので、事後の値は条件を
     // マクロの外で書くよう案内する。
     let g = "spec fn g(y: &mut u64) -> u64 = *y;\n";
-    let in_macro = "inside the arguments of this macro write `old(x)` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final(x)` (for example `g(final(x)) == 3` instead of `matches!(g(x), 3)`)";
+    let in_macro = "inside the arguments of this macro write `old(x)` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final(x)` (for example `*final(x) == 3` instead of `matches!(*x, 3)`)";
     rejects(
         &format!("{PRELUDE}{g}fn f(x: &mut u64) ensures matches!(g(x), 3), {{ *x = 7; }}"),
         "E0004",
         in_macro,
     );
     accepts(&format!(
-        "{PRELUDE}{g}fn f(x: &mut u64) ensures g(final(x)) == 3, matches!(g(old(x)), 3), {{ }}"
+        "{PRELUDE}{g}fn f(x: &mut u64) ensures *final(x) == 3, matches!(g(old(x)), 3), matches!(*old(x), 3), {{ }}"
     ));
     rejects(
         &format!("{PRELUDE}{g}fn f(x: &mut u64) ensures matches!(g(final(x)), 3), {{ }}"),

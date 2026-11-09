@@ -91,6 +91,17 @@ pub fn bump(x: &mut u64) -> u64
     y
 }
 
+pub spec fn same(y: u64) -> u64 = y;
+
+// 事後の値は参照を外して `*final(x)` と書く（`final(x)` のままでは Verus が拒む）。中を読まない
+// マクロの引数の中では `final(..)` を書けないので、入口の値は `old(..)`、事後の値はマクロの外で書く。
+pub fn set3(x: &mut u64)
+    requires *x <= 9,
+    ensures *final(x) == 3, same(*final(x)) == 3, matches!(*old(x), 0..=9),
+{
+    *x = 3;
+}
+
 pub fn total(v: Vec<u64>) -> u64 {
     let mut s: u64 = 0;
     let mut i = 0;

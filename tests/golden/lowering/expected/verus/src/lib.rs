@@ -112,6 +112,14 @@ returns *old(x), {
     y
 }
 
+pub open spec fn same(y: u64) -> u64 { y }
+
+pub fn set3(x: &mut u64)
+requires *x <= 9,
+ensures *final(x) == 3, same(*final(x)) == 3, matches!(*old(x), 0..= 9), {
+    *x = 3;
+}
+
 pub fn total(v: Vec < u64 >) -> u64 {
     let mut s: u64 = 0;
     let mut i = 0;
