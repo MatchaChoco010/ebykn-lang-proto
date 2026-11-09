@@ -430,6 +430,21 @@ pub(crate) mod parsing {
                 | Expr::Final(_) => break,
             };
         }
+        // EBYKN: Ebykn の式（`Verbatim`。`x@f` など）は属性の欄を持たず、`replace_attrs` が文の属性を
+        // 捨てる。属性をトークンの前に戻して、Ebykn の構文解析器に読ませる（`#[cfg] x@f = e;` の属性を黙って
+        // 捨てない）。
+        #[cfg(feature = "printing")]
+        if let Expr::Verbatim(tokens) = attr_target {
+            if !attrs.is_empty() {
+                let mut ts = TokenStream::new();
+                for a in &attrs {
+                    quote::ToTokens::to_tokens(a, &mut ts);
+                }
+                ts.extend(core::mem::take(tokens));
+                *tokens = ts;
+                attrs = Vec::new();
+            }
+        }
         attrs.extend(attr_target.replace_attrs(Vec::new()));
         attr_target.replace_attrs(attrs);
 
