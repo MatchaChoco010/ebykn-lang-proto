@@ -625,19 +625,17 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
         .cloned()
         .unwrap_or_default();
     let mut a = attrs(&item.attrs);
+    // `item_path` は外の型への impl で `report` を借りるので、借りる前にパスを求める（PR #26 の
+    // 5 回目の確認。`borrow_mut()` を持ったまま引数で `cx` のメソッドを呼ぶと panic する）。
     if is_test(&item.attrs) {
         a = format!("#[verifier::external] {a}");
-        cx.report
-            .borrow_mut()
-            .external
-            .push(cx.item_path(&f.sig.ident.name));
+        let path = cx.item_path(&f.sig.ident.name);
+        cx.report.borrow_mut().external.push(path);
     }
     if f.unchecked.is_some() {
         a = format!("#[verifier::external_body] {a}");
-        cx.report
-            .borrow_mut()
-            .unchecked
-            .push(cx.item_path(&f.sig.ident.name));
+        let path = cx.item_path(&f.sig.ident.name);
+        cx.report.borrow_mut().unchecked.push(path);
     }
     let v = vis(&item.vis);
     match &f.body {

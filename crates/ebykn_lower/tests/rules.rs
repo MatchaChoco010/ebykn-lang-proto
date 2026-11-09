@@ -402,3 +402,23 @@ fn trait_default_methods_are_items() {
         .collect();
     assert_eq!(names, ["single::Tr::f"]);
 }
+
+/// 外の型への impl の `unchecked fn` と `#[test]` を書き下しても panic しない（`report` の二重の借用。
+/// PR #26 の 5 回目の確認）。一覧には `<u32 as Tr>::e` の形で出る。
+#[test]
+fn foreign_impl_unchecked_methods_are_listed() {
+    let src = "pub trait Tr { fn e(&self) -> u32; }\nimpl Tr for u32 { unchecked fn e(&self) -> u32 { 1 } }";
+    let (p, _) = project::single(src);
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    assert_eq!(out.unchecked, ["single::<u32 as Tr>::e"]);
+}
+
+#[test]
+fn foreign_impl_test_methods_are_listed() {
+    let src = "pub trait Tr { fn e(&self) -> u32; }\nimpl Tr for u64 { #[test] fn e(&self) -> u32 { 1 } }";
+    let (p, _) = project::single(src);
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    assert_eq!(out.external, ["single::<u64 as Tr>::e"]);
+}
