@@ -689,3 +689,35 @@ fn env_and_file_macros_outside_unchecked_fn_are_e0003() {
     accepts("pub fn l() -> u32 { line!() + column!() }");
     accepts("pub fn p() -> usize { module_path!().len() }");
 }
+
+/// `put t@nodes[..]` の診断（#84、`Message::ErasedRegion`）が勧める 3 つの書き方は、どれも検査を通る
+/// （PR #113 のレビュー）。新しい値は空の領域から作り、所有する値はすべてのフィールドを束縛して分解して
+/// 作り直し、参照は型のメソッドで `self@nodes` を使う。既にある値に `Region::empty()` を当てると前の
+/// 領域を捨てる（#108）ので、新しい値のときだけ勧める。
+#[test]
+fn erased_region_guidance_forms_pass_check() {
+    let src = format!(
+        "{PRELUDE}
+impl Pool {{
+    pub fn make(v: u64) -> Self {{
+        let p = Ptr::new(Node {{ val: v }});
+        let mut nodes: Region<Ptr<Node>> = Region::empty();
+        put nodes[p];
+        Pool {{ len: 1, @nodes: nodes, @order: Seq::empty() }}
+    }}
+    pub fn add(&mut self, v: u64) {{
+        let p = Ptr::new(Node {{ val: v }});
+        put self@nodes[p];
+    }}
+}}
+pub fn grow(t: Pool, v: u64) -> Pool {{
+    let Pool {{ len, @nodes, @order }} = t;
+    let p = Ptr::new(Node {{ val: v }});
+    put nodes[p];
+    Pool {{ len: len, @nodes: nodes, @order: order }}
+}}
+"
+    );
+    let (_, lines) = run(&src);
+    assert!(lines.is_empty(), "{lines:?}");
+}

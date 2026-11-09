@@ -790,9 +790,6 @@ pub(super) enum StmtKind {
 
 /// 文の先頭を見る。証明構文と Verus の文はここでエラーにする。
 pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
-    if let Some(e) = erased_region(input) {
-        return Err(e);
-    }
     let t = peek_tts(input, 4);
     for (kw, kind) in [("take", StmtKind::Take), ("put", StmtKind::Put)] {
         if is_ident(t.first(), kw)

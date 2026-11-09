@@ -41,7 +41,7 @@ fn borrow_blocks() {
 /// 領域変数だけと案内する（#84。「`;` が必要」では書き方が分からない）。
 #[test]
 fn region_statements_reject_erased_fields_of_other_values() {
-    let want = "1:14: E0001: syntax error: the region of `put` cannot be `t@nodes`; a region in `take` / `put` / `borrow` is `self@field` or a region variable. Bind the region to a variable first (`let mut nodes: Region<..> = Region::empty();`, or `let S { @nodes, .. } = t;`), write `put nodes[..]`, and pass it back in the struct literal `S { .., @nodes: nodes }`";
+    let want = "1:14: E0001: syntax error: the region of `put` cannot be `t@nodes`; a region in `take` / `put` / `borrow` is `self@field` or a region variable. If `t` is a reference (`&mut` / `&`), write this in a method of its type and use `self@nodes`. If you own `t`, take it apart with a pattern that binds every field (`let S { @nodes, a, b } = t;`), write `put nodes[..]`, and build the value again with `@nodes: nodes` in the struct literal. Only when you make a new value, start from an empty region (`let mut nodes: Region<..> = Region::empty();`) and pass `@nodes: nodes` in its struct literal";
     assert_eq!(
         diags("fn f() { put t@nodes[r]; }"),
         [format!("src/lib.eyk:{want}")]
