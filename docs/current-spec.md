@@ -568,7 +568,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
 | `macro` | 依存クレートの derive・属性マクロが付いた項目（§5 の「依存クレートの derive と属性マクロ」）。マクロが作る項目は Verus が検証しない |
-| `failed` | Verus が失敗とした関数（§9.1 の関数ごとの成否で `success` が `false`）。成否が読めないか、Verus の名前が決まらない項目では、Verus のエラーの失敗の場所が項目の行の範囲にあること。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`）。Verus が通したとする関数の行に失敗の場所があれば、`failed` ではなく `unknown` |
+| `failed` | Verus が失敗とした関数（§9.1 の関数ごとの成否で `success` が `false`）。成否が読めない、Verus が検証の前に止まった、項目の Verus の名前が決まらないかほかの項目と重なる、`func-details` に項目の関数がない、のどれかのときは、Verus のエラーの失敗の場所が項目の行の範囲にあること。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`）。Verus が通したとする関数の行に失敗の場所があれば、`failed` ではなく `unknown` |
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 

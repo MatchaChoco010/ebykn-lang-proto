@@ -659,7 +659,8 @@ pub struct ItemFacts {
     pub related: bool,
     /// Verus の `func-details` にこの項目の関数がある（Verus が見た）。
     pub checked: bool,
-    /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）。
+    /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）か、Verus の関数ごと
+    /// の成否とエラーの失敗の場所が合わない（[`statuses`] の 3 つの条件。#79）。
     pub stray_errors: bool,
     /// Verus が検証の前に止まった（[`Summary::Stopped`]）。`func-details` に関数があっても、検証はしていない。
     pub stopped: bool,
@@ -1879,6 +1880,73 @@ error: could not compile `two_errors` (lib) due to 2 previous errors
             false,
         );
         assert_eq!(got(&st), ["unknown", "unknown"]);
+    }
+
+    /// 条件 2：数が合い、Verus が失敗とした関数を指すエラーもあるが、別のエラーが Verus の通した関数を
+    /// 指す。そのエラーの持ち主が分からないので、ほかの項目も verified にしない（PR #142 のレビュー）。
+    #[test]
+    fn an_error_blaming_a_passed_function_makes_the_rest_unknown() {
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![
+                (10, 12, "k::ok".into()),
+                (14, 16, "k::bad".into()),
+                (18, 20, "k::other".into()),
+            ],
+        }];
+        let output = Output {
+            files: files.clone(),
+            ..Default::default()
+        };
+        let checked = names(&["k::ok", "k::bad", "k::other"]);
+        let bad = names(&["k::bad"]);
+        let sites = [
+            ErrorSites::at("src/lib.rs", 15),
+            ErrorSites::at("src/lib.rs", 11),
+        ];
+        let st = statuses(
+            &files,
+            &output,
+            &sites,
+            Some(&checked),
+            Some(&bad),
+            ran(1),
+            false,
+        );
+        assert_eq!(got(&st), ["unknown", "failed", "unknown"]);
+        // 余分なエラーがなければ、other は verified（壊す操作が当たったことを確かめる）。
+        let st = statuses(
+            &files,
+            &output,
+            &sites[..1],
+            Some(&checked),
+            Some(&bad),
+            ran(1),
+            false,
+        );
+        assert_eq!(got(&st), ["verified", "failed", "verified"]);
+    }
+
+    /// 数と名前がほかで合っていても、位置のないエラーや項目の外のエラーが余分にあれば、割り当てられない
+    /// とみなす（`outside`。PR #142 のレビュー）。
+    #[test]
+    fn extra_errors_without_an_item_make_the_rest_unknown() {
+        let (files, output, checked) = two_errors();
+        let bad = names(&["two_errors::bad"]);
+        for extra in [ErrorSites::default(), ErrorSites::at("src/lib.rs", 100)] {
+            let sites = [ErrorSites::at("src/lib.rs", 15), extra.clone()];
+            let st = statuses(
+                &files,
+                &output,
+                &sites,
+                Some(&checked),
+                Some(&bad),
+                ran(1),
+                false,
+            );
+            assert_eq!(got(&st), ["unknown", "failed"], "{extra:?}");
+        }
     }
 
     /// 割り当てを決められないときは、失敗していない項目を unknown にする（#79 のコメントの条件）。
