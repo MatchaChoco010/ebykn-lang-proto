@@ -58,9 +58,38 @@ jobs:
       - run: mdbook --version
       - run: mdbook build book
 
+  # 固定した Verus（ルートの Cargo.toml の [workspace.metadata.verus]）で prelude・手書きの stack・プローブを検証する。
+  verus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - name: 固定値を読む
+        id: pin
+        run: |
+          meta=$(cargo metadata --format-version 1 --no-deps)
+          echo "version=$(echo "$meta" | jq -r .metadata.verus.version)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(echo "$meta" | jq -r .metadata.verus.sha256)" >> "$GITHUB_OUTPUT"
+      - name: Verus のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ebykn/verus/${{ steps.pin.outputs.version }}
+          key: verus-${{ steps.pin.outputs.sha256 }}
+      # vstd などの crates.io の依存。ビルド成果物（数百 MB）は復元と再ビルドの時間が変わらないので入れない。
+      - name: crates.io の依存のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: verus-registry-${{ steps.pin.outputs.sha256 }}
+      - run: cargo xtask verus-install
+      - run: cargo xtask verus-verify
+      - run: cargo xtask verus-probes
+
   # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
   ci-required:
-    needs: [fmt, clippy, test, gates, book]
+    needs: [fmt, clippy, test, gates, book, verus]
     if: always()
     runs-on: ubuntu-latest
     steps:

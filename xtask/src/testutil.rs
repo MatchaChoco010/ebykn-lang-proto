@@ -35,6 +35,11 @@ impl TempRepo {
     }
 
     pub fn run(&self, gate: fn(&Repo) -> Report) -> Report {
+        self.run_ref(gate)
+    }
+
+    /// 閉包でゲートを走らせる（偽の外部コマンドを渡すときなど）。
+    pub fn run_ref(&self, gate: impl FnOnce(&Repo) -> Report) -> Report {
         gate(&Repo {
             root: self.root.clone(),
             files: self.files.clone(),

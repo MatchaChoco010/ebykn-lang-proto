@@ -3,6 +3,7 @@
 mod gates;
 #[cfg(test)]
 mod testutil;
+mod verus;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -19,6 +20,11 @@ const USAGE: &str = "\
   check-md-links    Markdown の相対リンク先が存在する
   check-book        Ebykn Book の SUMMARY と ```eyk フェンスの形
   check-gate-tests  各ゲートに失敗を主張するテスト（fails_*）がある
+  check-verus-pin   固定した Verus の値が読め、Verus のクレートが固定した vstd を使う
+
+  verus-install     固定した Verus をキャッシュに入れ、要求される toolchain を入れる
+  verus-verify      ebykn_prelude と手書きの stack を Verus で検証し、Verus なしでもビルドする
+  verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
 ";
 
 fn main() -> ExitCode {
@@ -43,7 +49,13 @@ fn main() -> ExitCode {
                 && run_gates(gates::ALL)
         }
         "gates" => run_gates(gates::ALL),
-        name => match gates::ALL.iter().find(|g| g.name == name) {
+        "verus-install" => verus::install(&root()),
+        "verus-verify" => verus::verify(&root()),
+        name => match gates::ALL
+            .iter()
+            .chain(gates::VERUS)
+            .find(|g| g.name == name)
+        {
             Some(gate) => run_gates(std::slice::from_ref(gate)),
             None => {
                 eprint!("不明なサブコマンド: {name}\n\n{USAGE}");

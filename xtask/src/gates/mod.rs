@@ -5,6 +5,8 @@ pub mod book;
 pub mod file_size;
 pub mod gate_tests;
 pub mod md_links;
+pub mod verus_pin;
+pub mod verus_probes;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -31,7 +33,17 @@ pub const ALL: &[Gate] = &[
         name: "check-gate-tests",
         run: gate_tests::run,
     },
+    Gate {
+        name: "check-verus-pin",
+        run: verus_pin::run,
+    },
 ];
+
+/// 固定した Verus が要るゲート。`gates` には入れず、CI の Verus のジョブで走らせる。
+pub const VERUS: &[Gate] = &[Gate {
+    name: "verus-probes",
+    run: verus_probes::run,
+}];
 
 /// 検査の対象。`files` はリポジトリ直下からの相対パス（区切りは `/`）。
 pub struct Repo {
