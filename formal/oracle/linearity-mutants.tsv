@@ -1,0 +1,9 @@
+mutant	rule	differing	first_case	expected	got
+no-join	分岐の終端の Γ を比べない（E0510）	202	c00313	E0510 end 1	ok
+no-borrow-consume	borrow ブロックの p を Owned と同じに消費できる（E0509）	48	c00238	E0509 at 2	ok
+no-continue	continue の点の Γ を本体の入口と比べない	4	c03154	E0511 at 3	ok
+no-break	break の点の Γ をループの直後の Γ と比べない	2	c03152	E0511 at 3	ok
+no-loop-end	本体の終端の Γ を本体の入口と比べない	132	c00226	E0511 end 1	ok
+no-closure-reset	クロージャの本体で Γ を空にしない（E0512）	743	c00032	E0505 end 0	E0505 end 2
+no-try-return	? を return として扱わない（E0505）	47	c00026	E0505 at 2	E0505 end 0
+no-cross	borrow ブロックを break / continue で抜けることを拒まない（§6.2 の文言どおり）	1	c03563	E0511 at 3	ok

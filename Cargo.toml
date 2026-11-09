@@ -4,7 +4,7 @@ members = ["crates/*", "xtask"]
 # Verus のクレートは Verus の toolchain で検証する（`cargo xtask verus-verify`）。
 # 外部から取り込んだコード（AGENTS.md「外部から取り込むコード」）は path 依存で使い、
 # メンバーにしない（cargo fmt と clippy --workspace の対象から外す）。
-exclude = ["crates/ebykn_prelude", "tests/golden", "vendor/verus_syn"]
+exclude = ["crates/ebykn_prelude", "tests/golden", "vendor/verus_syn", "formal/linearity"]
 
 [workspace.package]
 version = "0.1.0"

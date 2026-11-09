@@ -101,7 +101,7 @@ jobs:
       - run: mdbook --version
       - run: mdbook build book
 
-  # 固定した Verus（ルートの Cargo.toml の [workspace.metadata.verus]）で prelude・手書きの stack・プローブを検証する。
+  # 固定した Verus（ルートの Cargo.toml の [workspace.metadata.verus]）で prelude・手書きの stack・§6.2 の参照モデル・プローブを検証する。
   verus:
     runs-on: ubuntu-latest
     env:
@@ -132,6 +132,8 @@ jobs:
       - run: cargo xtask verus-install
       - run: cargo xtask verus-verify
       - run: cargo xtask verus-probes
+      # §6.2 の参照モデル（formal/linearity）から判定の表を作り直し、formal/oracle/ と比べる。
+      - run: cargo xtask formal-oracle
 
   # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
   ci-required:

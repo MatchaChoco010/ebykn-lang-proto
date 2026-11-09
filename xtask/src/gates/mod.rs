@@ -3,6 +3,7 @@
 
 pub mod book;
 pub mod file_size;
+pub mod formal_oracle;
 pub mod gate_tests;
 pub mod md_links;
 pub mod verus_pin;
@@ -39,11 +40,17 @@ pub const ALL: &[Gate] = &[
     },
 ];
 
-/// 固定した Verus が要るゲート。`gates` には入れず、CI の Verus のジョブで走らせる。
-pub const VERUS: &[Gate] = &[Gate {
-    name: "verus-probes",
-    run: verus_probes::run,
-}];
+/// 固定した Verus か、vstd のビルドが要るゲート。`gates` には入れず、CI の Verus のジョブで走らせる。
+pub const VERUS: &[Gate] = &[
+    Gate {
+        name: "verus-probes",
+        run: verus_probes::run,
+    },
+    Gate {
+        name: "formal-oracle",
+        run: formal_oracle::run,
+    },
+];
 
 /// 検査の対象。`files` はリポジトリ直下からの相対パス（区切りは `/`）。
 pub struct Repo {
