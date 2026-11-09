@@ -47,7 +47,7 @@ pub struct Mismatch {
 }
 
 /// 食い違いの一覧を、どちらの側がどの状態かが分かる文にする。`side_a` / `side_b` は基準の側と
-/// 食い違った側の呼び名（英語は `in the first branch` のような句、日本語は「最初の分岐」のような名詞句）。
+/// 食い違った側の呼び名（英語は `in another branch` のような句、日本語は「ほかの分岐」のような名詞句）。
 fn mismatches(diffs: &[Mismatch], lang: Lang, side_a: &str, side_b: &str) -> String {
     let parts = diffs.iter().map(|m| match lang {
         Lang::En => format!(
@@ -769,27 +769,32 @@ impl CheckMsg {
 
             (BranchMismatch { diffs }, En) => format!(
                 "the branches end holding different permissions: {}",
-                mismatches(diffs, En, "in the first branch", "in another branch")
+                mismatches(
+                    diffs,
+                    En,
+                    "in the first branch that does not diverge",
+                    "in another branch"
+                )
             ),
             (BranchMismatch { diffs }, Ja) => format!(
                 "分岐の終わりで持っている権限が違います。{}",
-                mismatches(diffs, Ja, "最初の分岐", "ほかの分岐")
+                mismatches(diffs, Ja, "途中で抜けない最初の分岐", "ほかの分岐")
             ),
 
             (LoopMismatch { diffs, at }, En) => {
                 let (head, a, b) = match at {
                     LoopPoint::End => (
-                        "at the end of the loop body than at its start",
+                        "at the start of the loop body than at its end",
                         "at the start of the body",
                         "at its end",
                     ),
                     LoopPoint::Continue => (
-                        "at this `continue` than at the start of the loop body",
+                        "at the start of the loop body than at this `continue`",
                         "at the start of the body",
                         "at this `continue`",
                     ),
                     LoopPoint::Break => (
-                        "at this `break` than after the loop",
+                        "after the loop than at this `break`",
                         "after the loop",
                         "at this `break`",
                     ),

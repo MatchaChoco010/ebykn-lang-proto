@@ -5,6 +5,6 @@ src/lib.eyk:31:9: E0506: cannot assign to `p` while its permission `p@` is held
 src/lib.eyk:38:13: E0507: cannot bind `p` again while its permission `p@` is held
 src/lib.eyk:44:9: E0508: cannot write through `p` because the permission `p@` is only borrowed (shared)
 src/lib.eyk:50:21: E0509: cannot free it with `.free()` inside `borrow` of `p`; the permission `p@` is only borrowed in the block
-src/lib.eyk:57:9: E0510: the branches end holding different permissions: `p@` is not held in the first branch but owned in another branch
-src/lib.eyk:65:21: E0511: the loop holds different permissions at the end of the loop body than at its start: `p@` is not held at the start of the body but owned at its end
+src/lib.eyk:57:9: E0510: the branches end holding different permissions: `p@` is not held in the first branch that does not diverge but owned in another branch
+src/lib.eyk:65:21: E0511: the loop holds different permissions at the start of the loop body than at its end: `p@` is not held at the start of the body but owned at its end
 src/lib.eyk:73:21: E0512: permissions cannot be used inside a closure, but this uses `p`

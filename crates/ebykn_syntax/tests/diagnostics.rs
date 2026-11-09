@@ -206,11 +206,11 @@ fn japanese_permission_messages_read_as_sentences() {
     ];
     assert_eq!(
         CheckMsg::BranchMismatch { diffs: two.clone() }.text(Lang::Ja),
-        "分岐の終わりで持っている権限が違います。`p@` を最初の分岐では持っておらず、ほかの分岐では所有しています。`q@` を最初の分岐では共有で借り、ほかの分岐では可変で借りています"
+        "分岐の終わりで持っている権限が違います。`p@` を途中で抜けない最初の分岐では持っておらず、ほかの分岐では所有しています。`q@` を途中で抜けない最初の分岐では共有で借り、ほかの分岐では可変で借りています"
     );
     assert_eq!(
         CheckMsg::BranchMismatch { diffs: two }.text(Lang::En),
-        "the branches end holding different permissions: `p@` is not held in the first branch but owned in another branch; `q@` is borrowed (shared) in the first branch but borrowed (mut) in another branch"
+        "the branches end holding different permissions: `p@` is not held in the first branch that does not diverge but owned in another branch; `q@` is borrowed (shared) in the first branch that does not diverge but borrowed (mut) in another branch"
     );
     let one = vec![m("p", PermState::Owned, PermState::Absent)];
     let at = |at| CheckMsg::LoopMismatch {
@@ -231,7 +231,7 @@ fn japanese_permission_messages_read_as_sentences() {
     );
     assert_eq!(
         at(LoopPoint::Break).text(Lang::En),
-        "the loop holds different permissions at this `break` than after the loop: `p@` is owned after the loop but not held at this `break`"
+        "the loop holds different permissions after the loop than at this `break`: `p@` is owned after the loop but not held at this `break`"
     );
 }
 
