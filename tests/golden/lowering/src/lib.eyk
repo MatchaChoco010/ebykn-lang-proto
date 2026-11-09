@@ -123,6 +123,14 @@ pub spec fn some_pos(s: Seq<int>) -> bool = exists x in s, or { x == 1, x == 2 }
 pub struct Bag { } owns { items: Region<Ptr<Node>> }
 
 impl Bag {
+    // `self` 以外の値の領域も契約の中で添字にできる（#103。`b.items@[p]` は prelude の `spec_index`）。
+    fn adopt(p: Ptr<Node>) -> (b: Bag) uses r: Region<Ptr<Node>>
+        requires r.contains(p),
+        ensures b@items.contains(p), b@items[p] == r[p],
+    {
+        Bag { @items: r }
+    }
+
     fn with_node(v: u64) -> (b: Bag) uses r: Region<Ptr<Node>>
         ensures forall q in r, b@items.contains(q),
     {

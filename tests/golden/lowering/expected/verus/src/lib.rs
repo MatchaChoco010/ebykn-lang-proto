@@ -145,6 +145,13 @@ pub open spec fn some_pos(s: Seq < int >) -> bool { (exists | x | s.contains(x) 
 pub struct Bag { items: Tracked < Region < Ptr < Node >>>, }
 
 impl Bag {
+    fn adopt(p: Ptr < Node >, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
+    requires r.contains(p),
+    ensures b.items@.contains(p), b.items@[p] == r.index(p), {
+        #[allow(unused_mut)] let tracked mut r = r;
+        Bag { items: Tracked(r) }
+    }
+
     fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
     ensures (forall | q | r.contains(q) ==> b.items@.contains(q)), {
         let tracked mut r = r;

@@ -71,6 +71,19 @@ fn header_imports_names_explicitly() {
     has("pub fn f() {}", "use ebykn_prelude::*; verus!");
 }
 
+/// `self` 以外の値の消去フィールドの領域の添字（#103）：`b.items@[p]`。Verus は spec の `[]` を
+/// prelude の `Region::spec_index` に読む。`self@x[p]` と領域変数は `.index(p)` のまま。
+#[test]
+fn erased_regions_of_other_values_are_indexed_in_logic() {
+    let src = format!(
+        "{PRE}impl P {{ fn f(&self, o: &P, p: Ptr<Node>) requires o@r.contains(p), self@r.contains(p), o@r[p] == self@r[p], o@q[0] == 1, {{ }} }}"
+    );
+    has(
+        &src,
+        "requires o.r@.contains(p), self.r@.contains(p), o.r@[p] == self.r@.index(p), o.q@[0] == 1,",
+    );
+}
+
 /// 検査の誤りを見ずに書き下す（検査が拒む入力で、書き下しが何をするかを確かめる）。
 fn lowered_ignoring_errors(src: &str) -> String {
     let (p, d) = project::single(src);
