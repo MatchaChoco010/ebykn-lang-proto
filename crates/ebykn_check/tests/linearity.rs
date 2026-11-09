@@ -211,7 +211,7 @@ fn e0510_branches_must_agree() {
             "pub fn f(&mut self, p: Ptr<Node>, c: bool) { take self@nodes[p]; if c { put self@nodes[p]; } }",
         ),
         "E0510",
-        "`p@` (not held / owned)",
+        "`p@` is not held in the first branch but owned in another branch",
     );
     rejects(
         &in_pool(

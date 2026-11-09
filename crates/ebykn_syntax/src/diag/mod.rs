@@ -277,7 +277,8 @@ impl Message {
                 format!("syntax error: expected {}", what.text(En))
             }
             (Message::Expected { what }, Ja) => {
-                format!("構文エラー: {}が必要です", what.text(Ja))
+                let what = what.text(Ja);
+                format!("構文エラー: {what}{}が必要です", check::ja_gap(what))
             }
             (Message::VerusSyntax { written, ebykn }, En) => format!(
                 "syntax error: `{written}` is Verus syntax; in Ebykn write `{ebykn}`"
@@ -364,12 +365,12 @@ impl Message {
             }
             (Message::ErasedOnNonNamed { section, name, kind }, Ja) => {
                 let kind = match kind {
-                    TypeKind::TupleStruct => "tuple struct",
-                    TypeKind::UnitStruct => "unit struct",
-                    TypeKind::Enum => "enum",
+                    TypeKind::TupleStruct => "タプル構造体",
+                    TypeKind::UnitStruct => "ユニット構造体",
+                    TypeKind::Enum => "列挙型",
                 };
                 format!(
-                    "`{section} {{ .. }}` は名前付きフィールドの struct にだけ付けられますが、`{name}` は {kind} です"
+                    "`{section} {{ .. }}` は名前付きフィールドを持つ構造体にだけ付けられますが、`{name}` は{kind}です"
                 )
             }
             (Message::DirectInvariantOrView { name }, En) => {

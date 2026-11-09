@@ -144,3 +144,108 @@ fn recovery_resumes_at_the_next_item() {
         ]
     );
 }
+
+/// 権限の状態と操作を日本語の文に埋め込むと、「ここではなしなので」「戻すできません」のように読めない文に
+/// なっていた（#34）。状態ごと・操作ごとの文言を全部固定する。
+#[test]
+fn japanese_permission_messages_read_as_sentences() {
+    use ebykn_syntax::diag::{CheckMsg, LoopPoint, Mismatch, Op, PermState};
+    let not_owned = |op, state| {
+        CheckMsg::PermNotOwned {
+            name: "p".into(),
+            op,
+            state,
+        }
+        .text(Lang::Ja)
+    };
+    assert_eq!(
+        not_owned(Op::Free, PermState::Absent),
+        "権限 `p@` をここでは持っていないので、`.free()` で解放できません"
+    );
+    assert_eq!(
+        not_owned(Op::Put, PermState::Shared),
+        "権限 `p@` をここでは共有で借りているので、`put` で戻せません"
+    );
+    assert_eq!(
+        not_owned(Op::Move, PermState::Mut),
+        "権限 `p@` をここでは可変で借りているので、`uses p@` の引数に移動できません"
+    );
+    assert_eq!(
+        not_owned(Op::Leak, PermState::Absent),
+        "権限 `p@` をここでは持っていないので、`leak` で捨てられません"
+    );
+    assert_eq!(
+        not_owned(Op::MutBorrow, PermState::Absent),
+        "権限 `p@` をここでは持っていないので、`uses &mut p@` の引数に貸せません"
+    );
+    assert_eq!(
+        not_owned(Op::SharedBorrow, PermState::Absent),
+        "権限 `p@` をここでは持っていないので、`uses &p@` の引数に貸せません"
+    );
+    assert_eq!(
+        not_owned(Op::Give, PermState::Absent),
+        "権限 `p@` をここでは持っていないので、`gives` で返せません"
+    );
+    assert_eq!(
+        CheckMsg::ConsumeBorrowed {
+            name: "p".into(),
+            op: Op::Put,
+        }
+        .text(Lang::Ja),
+        "`p` の `borrow` の中では `put` で戻せません。権限 `p@` はブロックの中で借りているだけです"
+    );
+
+    let m = |name: &str, a, b| Mismatch {
+        name: name.into(),
+        a,
+        b,
+    };
+    let two = vec![
+        m("p", PermState::Absent, PermState::Owned),
+        m("q", PermState::Shared, PermState::Mut),
+    ];
+    assert_eq!(
+        CheckMsg::BranchMismatch { diffs: two.clone() }.text(Lang::Ja),
+        "分岐の終わりで持っている権限が違います。`p@` を最初の分岐では持っておらず、ほかの分岐では所有しています。`q@` を最初の分岐では共有で借り、ほかの分岐では可変で借りています"
+    );
+    assert_eq!(
+        CheckMsg::BranchMismatch { diffs: two }.text(Lang::En),
+        "the branches end holding different permissions: `p@` is not held in the first branch but owned in another branch; `q@` is borrowed (shared) in the first branch but borrowed (mut) in another branch"
+    );
+    let one = vec![m("p", PermState::Owned, PermState::Absent)];
+    let at = |at| CheckMsg::LoopMismatch {
+        diffs: one.clone(),
+        at,
+    };
+    assert_eq!(
+        at(LoopPoint::End).text(Lang::Ja),
+        "ループの本体の始めと終わりで持っている権限が違います。`p@` を本体の始めでは所有し、本体の終わりでは持っていません"
+    );
+    assert_eq!(
+        at(LoopPoint::Continue).text(Lang::Ja),
+        "ループの本体の始めとこの `continue` で持っている権限が違います。`p@` を本体の始めでは所有し、この `continue` では持っていません"
+    );
+    assert_eq!(
+        at(LoopPoint::Break).text(Lang::Ja),
+        "ループの後とこの `break` で持っている権限が違います。`p@` をループの後では所有し、この `break` では持っていません"
+    );
+    assert_eq!(
+        at(LoopPoint::Break).text(Lang::En),
+        "the loop holds different permissions at this `break` than after the loop: `p@` is owned after the loop but not held at this `break`"
+    );
+}
+
+/// 「〜が必要です」の前の語句がコードで終わるときは、ほかの文言と同じく `x` と助詞の間を空ける。
+#[test]
+fn japanese_expected_keeps_a_space_after_code() {
+    use ebykn_syntax::diag::{Expected, Message};
+    let ja = |what| Message::Expected { what }.text(Lang::Ja);
+    assert_eq!(
+        ja(Expected::LemmaFnEnd),
+        "構文エラー: `lemma fn` の終わりの `;` が必要です"
+    );
+    assert_eq!(
+        ja(Expected::FnBody),
+        "構文エラー: 関数の本体（`{ .. }` か `= 式;`）が必要です"
+    );
+}

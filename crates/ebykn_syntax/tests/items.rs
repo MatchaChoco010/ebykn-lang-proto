@@ -158,7 +158,7 @@ fn owns_and_spec_on_non_named_types_are_e0401() {
     assert_eq!(
         diags_in("enum E { A } owns { r: Region<Ptr<u64>> }", Lang::Ja),
         [
-            "src/lib.eyk:1:14: E0401: `owns { .. }` は名前付きフィールドの struct にだけ付けられますが、`E` は enum です"
+            "src/lib.eyk:1:14: E0401: `owns { .. }` は名前付きフィールドを持つ構造体にだけ付けられますが、`E` は列挙型です"
         ]
     );
     // enum にも impl Invariant は付けられる（構文上の制限はない）。

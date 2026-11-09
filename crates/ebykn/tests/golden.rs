@@ -1,5 +1,6 @@
 //! golden テストのランナー（仕様 §11）。`tests/golden/<name>/` ごとに `ebykn check` をかけ、
 //! 診断が `expected/diag.txt`（英語の文言、1 行に一つ、位置の順）と一致することを確かめる。
+//! `expected/diag.ja.txt` があるケースは、日本語の文言（`--lang ja`）もその中身と比べる。
 //!
 //! `expected/verus/` があるケースは、書き下した Verus（`build/verus/` に書くもの）を
 //! `expected/verus/` とトークン列で比べる（空白・コメント・記号の結合の仕方は見ない）。`Cargo.toml` は
@@ -29,6 +30,10 @@ fn cases() -> Vec<PathBuf> {
 
 /// 実際の診断と期待（ファイルの中身）を比べる。違えば説明を返す。
 fn compare(name: &str, actual: &[String], expected: &str) -> Result<(), String> {
+    compare_file(name, "diag.txt", actual, expected)
+}
+
+fn compare_file(name: &str, file: &str, actual: &[String], expected: &str) -> Result<(), String> {
     let expected: Vec<&str> = expected.lines().collect();
     if actual
         .iter()
@@ -38,7 +43,7 @@ fn compare(name: &str, actual: &[String], expected: &str) -> Result<(), String> 
         return Ok(());
     }
     Err(format!(
-        "{name}: 診断が expected/diag.txt と違います\n--- 期待\n{}\n--- 実際\n{}\n",
+        "{name}: 診断が expected/{file} と違います\n--- 期待\n{}\n--- 実際\n{}\n",
         expected.join("\n"),
         actual.join("\n")
     ))
@@ -50,7 +55,14 @@ fn run_case(dir: &Path) -> Result<(), String> {
     let expected = std::fs::read_to_string(&expected)
         .map_err(|e| format!("{name}: {} を読めません: {e}", expected.display()))?;
     let report = check_project(dir);
-    compare(&name, &report.render(Lang::En), &expected)
+    compare(&name, &report.render(Lang::En), &expected)?;
+    let ja = dir.join("expected/diag.ja.txt");
+    if ja.exists() {
+        let expected = std::fs::read_to_string(&ja)
+            .map_err(|e| format!("{name}: {} を読めません: {e}", ja.display()))?;
+        compare_file(&name, "diag.ja.txt", &report.render(Lang::Ja), &expected)?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -76,6 +88,22 @@ fn linearity_reports_e0503_to_e0512_once_each() {
     codes.sort();
     let want: Vec<String> = (503..=512).map(|n| format!("E0{n}")).collect();
     assert_eq!(codes, want);
+}
+
+/// 日本語の golden がある `linearity` で、日本語の期待を壊すと失敗する（#34 の文言が戻ると落ちる）。
+#[test]
+fn fails_when_the_expected_japanese_diagnostics_differ() {
+    let dir = golden_root().join("linearity");
+    let expected = std::fs::read_to_string(dir.join("expected/diag.ja.txt")).unwrap();
+    let actual = check_project(&dir).render(Lang::Ja);
+    assert!(compare_file("linearity", "diag.ja.txt", &actual, &expected).is_ok());
+    let broken = expected.replacen("持っていないので", "なしなので", 1);
+    assert_ne!(broken, expected);
+    let err = compare_file("linearity", "diag.ja.txt", &actual, &broken).unwrap_err();
+    assert!(err.contains("expected/diag.ja.txt"), "{err}");
+    // 英語の期待と取り違えても失敗する。
+    let en = std::fs::read_to_string(dir.join("expected/diag.txt")).unwrap();
+    assert!(compare_file("linearity", "diag.ja.txt", &actual, &en).is_err());
 }
 
 #[test]
