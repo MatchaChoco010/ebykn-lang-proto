@@ -380,6 +380,23 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
 * 状態：基準で決めた。
 
+### `ebykn sync` の決めごと
+
+`sync` は `proof/` の下の各 `.eykp` を、仕様 §9 のとおり `git merge-file` で更新します（`proof/<p>.eykp` ↔ `src/<p>.eyk` ↔ 基準 `.ebykn/sync/<p>.eyk`）。仕様が定めていない場合は、次のように扱います。
+
+- 基準がない `.eykp`（初めての `sync`、`.eykp` を作ったばかり）は、今の `src/<p>.eyk` を基準として書くだけで、`.eykp` は変えません（`base`）。`.eykp` が古い `src/` の写しなら、取り込まれなかった差は剥がし一致検査（#65）が `E0304` で見つけます。
+- 衝突したときも、基準を今の `src/<p>.eyk` に進めます。衝突の印に `src/` の変更が入っているので、基準を進めないと、次の `sync` で同じ変更を二度当てます。印の行の名前は `proof/<p>.eykp`・`.ebykn/sync/<p>.eyk`・`src/<p>.eyk` です。
+- 対応する `src/<p>.eyk` がない `.eykp` は変えず、失敗として数えます（`E0301` に当たる）。
+- `git` が動かない、読み書きに失敗した、`git merge-file` が衝突の数でない終了コードを返した、のどれかのときは、そのファイルを変えずに失敗として数えます。`.eykp` には取り込んだのに基準を書けなかったときも失敗にし、基準を直してから `sync` を実行し直すよう案内します。
+- `src/` にあって `proof/` にないモジュールには基準を作りません（`.eykp` は無くてよい。§3.1）。
+- 終了コードは、すべての `.eykp` を衝突も失敗もなく扱えたら 0、そうでなければ 1 です。引数を付けると使い方の誤りで 2 です。
+- 出力は、`.eykp` ごとに状態（`unchanged` / `merged` / `conflict` / `base` / `error`）の 1 行を標準エラーに出します。`--json` では `{"$message_type":"ebykn-sync","success":..,"files":[..],"errors":[..]}` の 1 行を標準出力に出します（`state` は `unchanged` / `merged` / `conflict` / `base-created` / `missing-source` / `failed` / `base-not-updated`）。
+- `.ebykn/sync/` はリポジトリに入れます（`ebykn init` の `.gitignore` は `/build/` だけを除く）。基準を共有しないと、ほかの人や証明を担当するエージェントの `sync` が別の基準から変更を当てます。
+
+* 元の仕様：§9 の表の 1 行（`git merge-file proof/p.eykp .ebykn/sync/p.eyk src/p.eyk` で更新し、基準を新しい `src` で置き換え、衝突はファイルに残して 1）だけで、基準がないとき、`src` がないとき、失敗したときを定めていない。
+* 根拠：#69。
+* 状態：基準で決めた。
+
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
 Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。どの関数が失敗したかは JSON になく、標準エラーの診断（位置つき）にだけ出ます。そのため、失敗した関数は診断の位置から決めます（上の `failed`）。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。
