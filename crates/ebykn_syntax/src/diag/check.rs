@@ -15,16 +15,25 @@ pub enum PermState {
 }
 
 impl PermState {
-    fn text(self, lang: Lang) -> &'static str {
-        match (self, lang) {
-            (PermState::Owned, Lang::En) => "owned",
-            (PermState::Owned, Lang::Ja) => "所有",
-            (PermState::Shared, Lang::En) => "borrowed (shared)",
-            (PermState::Shared, Lang::Ja) => "共有の借用",
-            (PermState::Mut, Lang::En) => "borrowed (mut)",
-            (PermState::Mut, Lang::Ja) => "可変の借用",
-            (PermState::Absent, Lang::En) => "not held",
-            (PermState::Absent, Lang::Ja) => "なし",
+    /// 英語の状態の語（`is ..` の補語）。
+    fn en(self) -> &'static str {
+        match self {
+            PermState::Owned => "owned",
+            PermState::Shared => "borrowed (shared)",
+            PermState::Mut => "borrowed (mut)",
+            PermState::Absent => "not held",
+        }
+    }
+
+    /// 日本語で、状態を述語にした形（「権限 `p@` を」に続く）。状態の語を名詞のまま文に埋め込むと
+    /// 「ここではなしなので」のように読めなくなるので（#34）、活用の形ごとに持つ。
+    /// 返すのは（連体形「〜ている」、連用形「〜し」、文末「〜ています」）。
+    fn ja(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            PermState::Owned => ("所有している", "所有し", "所有しています"),
+            PermState::Shared => ("共有で借りている", "共有で借り", "共有で借りています"),
+            PermState::Mut => ("可変で借りている", "可変で借り", "可変で借りています"),
+            PermState::Absent => ("持っていない", "持っておらず", "持っていません"),
         }
     }
 }
@@ -37,13 +46,32 @@ pub struct Mismatch {
     pub b: PermState,
 }
 
-fn mismatches(diffs: &[Mismatch], lang: Lang) -> String {
-    let sep = if lang == Lang::En { ", " } else { "、" };
-    diffs
-        .iter()
-        .map(|m| format!("`{}@` ({} / {})", m.name, m.a.text(lang), m.b.text(lang)))
-        .collect::<Vec<_>>()
-        .join(sep)
+/// 食い違いの一覧を、どちらの側がどの状態かが分かる文にする。`side_a` / `side_b` は基準の側と
+/// 食い違った側の呼び名（英語は `in another branch` のような句、日本語は「ほかの分岐」のような名詞句）。
+fn mismatches(diffs: &[Mismatch], lang: Lang, side_a: &str, side_b: &str) -> String {
+    let parts = diffs.iter().map(|m| match lang {
+        Lang::En => format!(
+            "`{}@` is {} {side_a} but {} {side_b}",
+            m.name,
+            m.a.en(),
+            m.b.en()
+        ),
+        Lang::Ja => format!(
+            "`{}@` を{side_a}{}では{}、{side_b}{}では{}",
+            m.name,
+            ja_gap(side_a),
+            m.a.ja().1,
+            ja_gap(side_b),
+            m.b.ja().2
+        ),
+    });
+    let sep = if lang == Lang::En { "; " } else { "。" };
+    parts.collect::<Vec<_>>().join(sep)
+}
+
+/// コードで終わる語句と、続く助詞の間に置く空白（ほかの文言と同じく `x` と助詞の間は空ける）。
+pub(super) fn ja_gap(s: &str) -> &'static str {
+    if s.ends_with('`') { " " } else { "" }
 }
 
 /// 権限を消費・借用する操作。
@@ -66,22 +94,24 @@ pub enum Op {
 }
 
 impl Op {
+    /// 英語は `cannot ..` に続く動詞句。日本語は「〜できません」まで含めた述語（動詞ごとに否定の形が違うので、
+    /// 「できません」を後ろに付けると「戻すできません」のようになる。#34）。
     fn text(self, lang: Lang) -> &'static str {
         match (self, lang) {
             (Op::Free, Lang::En) => "free it with `.free()`",
-            (Op::Free, Lang::Ja) => "`.free()` で解放",
+            (Op::Free, Lang::Ja) => "`.free()` で解放できません",
             (Op::Put, Lang::En) => "put it back with `put`",
-            (Op::Put, Lang::Ja) => "`put` で戻す",
+            (Op::Put, Lang::Ja) => "`put` で戻せません",
             (Op::Move, Lang::En) => "move it to a `uses p@` parameter",
-            (Op::Move, Lang::Ja) => "`uses p@` の引数に移動",
+            (Op::Move, Lang::Ja) => "`uses p@` の引数に移動できません",
             (Op::Leak, Lang::En) => "leak it with `leak`",
-            (Op::Leak, Lang::Ja) => "`leak` で捨てる",
+            (Op::Leak, Lang::Ja) => "`leak` で捨てられません",
             (Op::MutBorrow, Lang::En) => "lend it to a `uses &mut p@` parameter",
-            (Op::MutBorrow, Lang::Ja) => "`uses &mut p@` の引数に貸す",
+            (Op::MutBorrow, Lang::Ja) => "`uses &mut p@` の引数に貸せません",
             (Op::SharedBorrow, Lang::En) => "lend it to a `uses &p@` parameter",
-            (Op::SharedBorrow, Lang::Ja) => "`uses &p@` の引数に貸す",
+            (Op::SharedBorrow, Lang::Ja) => "`uses &p@` の引数に貸せません",
             (Op::Give, Lang::En) => "return it with `gives`",
-            (Op::Give, Lang::Ja) => "`gives` で返すことが",
+            (Op::Give, Lang::Ja) => "`gives` で返せません",
         }
     }
 }
@@ -662,11 +692,11 @@ impl CheckMsg {
             (PermNotOwned { name, op, state }, En) => format!(
                 "cannot {} because the permission `{name}@` is {} here",
                 op.text(En),
-                state.text(En)
+                state.en()
             ),
             (PermNotOwned { name, op, state }, Ja) => format!(
-                "権限 `{name}@` がここでは{}なので、{}できません",
-                state.text(Ja),
+                "権限 `{name}@` をここでは{}ので、{}",
+                state.ja().0,
                 op.text(Ja)
             ),
             (UsesArgNotVar { param }, En) => format!(
@@ -733,39 +763,61 @@ impl CheckMsg {
                 op.text(En)
             ),
             (ConsumeBorrowed { name, op }, Ja) => format!(
-                "`{name}` の `borrow` の中では{}できません。権限 `{name}@` はブロックの中で借りているだけです",
+                "`{name}` の `borrow` の中では {}。権限 `{name}@` はブロックの中で借りているだけです",
                 op.text(Ja)
             ),
 
             (BranchMismatch { diffs }, En) => format!(
                 "the branches end holding different permissions: {}",
-                mismatches(diffs, En)
+                mismatches(
+                    diffs,
+                    En,
+                    "in the first branch that does not diverge",
+                    "in another branch"
+                )
             ),
             (BranchMismatch { diffs }, Ja) => format!(
-                "分岐の終わりで持っている権限が違います: {}",
-                mismatches(diffs, Ja)
+                "分岐の終わりで持っている権限が違います。{}",
+                mismatches(diffs, Ja, "途中で抜けない最初の分岐", "ほかの分岐")
             ),
 
             (LoopMismatch { diffs, at }, En) => {
-                let at = match at {
-                    LoopPoint::End => "at the end of the loop body than at its start",
-                    LoopPoint::Continue => "at this `continue` than at the start of the loop body",
-                    LoopPoint::Break => "at this `break` than after the loop",
+                let (head, a, b) = match at {
+                    LoopPoint::End => (
+                        "at the start of the loop body than at its end",
+                        "at the start of the body",
+                        "at its end",
+                    ),
+                    LoopPoint::Continue => (
+                        "at the start of the loop body than at this `continue`",
+                        "at the start of the body",
+                        "at this `continue`",
+                    ),
+                    LoopPoint::Break => (
+                        "after the loop than at this `break`",
+                        "after the loop",
+                        "at this `break`",
+                    ),
                 };
                 format!(
-                    "the loop holds different permissions {at}: {}",
-                    mismatches(diffs, En)
+                    "the loop holds different permissions {head}: {}",
+                    mismatches(diffs, En, a, b)
                 )
             }
             (LoopMismatch { diffs, at }, Ja) => {
-                let at = match at {
-                    LoopPoint::End => "本体の終わりと始め",
-                    LoopPoint::Continue => "この `continue` と本体の始め",
-                    LoopPoint::Break => "この `break` とループの後",
+                let (head, a, b) = match at {
+                    LoopPoint::End => ("ループの本体の始めと終わり", "本体の始め", "本体の終わり"),
+                    LoopPoint::Continue => (
+                        "ループの本体の始めとこの `continue`",
+                        "本体の始め",
+                        "この `continue`",
+                    ),
+                    LoopPoint::Break => ("ループの後とこの `break`", "ループの後", "この `break`"),
                 };
                 format!(
-                    "ループの{at}で持っている権限が違います: {}",
-                    mismatches(diffs, Ja)
+                    "{head}{}で持っている権限が違います。{}",
+                    ja_gap(head),
+                    mismatches(diffs, Ja, a, b)
                 )
             }
 

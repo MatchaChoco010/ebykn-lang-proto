@@ -211,7 +211,7 @@ fn e0510_branches_must_agree() {
             "pub fn f(&mut self, p: Ptr<Node>, c: bool) { take self@nodes[p]; if c { put self@nodes[p]; } }",
         ),
         "E0510",
-        "`p@` (not held / owned)",
+        "`p@` is not held in the first branch that does not diverge but owned in another branch",
     );
     rejects(
         &in_pool(
@@ -219,6 +219,14 @@ fn e0510_branches_must_agree() {
         ),
         "E0510",
         "`p@`",
+    );
+    // 比べる基準は、書いた順で最初の分岐ではなく、途中で抜けない最初の分岐（ここでは `Some(0)` の腕）。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, x: Option<u64>) { take self@nodes[p]; match x { None => { put self@nodes[p]; return; } Some(0) => { } Some(_) => { put self@nodes[p]; } } }",
+        ),
+        "E0510",
+        "`p@` is owned in the first branch that does not diverge but not held in another branch",
     );
 }
 
@@ -235,7 +243,7 @@ fn e0511_loops_must_agree() {
             "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { take self@nodes[p]; i = i + 1; } }",
         ),
         "E0511",
-        "end of the loop body",
+        "at the start of the loop body than at its end",
     );
     rejects(
         &in_pool(
