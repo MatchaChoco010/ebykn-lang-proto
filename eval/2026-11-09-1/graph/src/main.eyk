@@ -1,0 +1,112 @@
+// グラフのアリーナ（設計ノート §1.2）。ノードは Region に置き、辺は相手のノードへの Ptr を Vec に持つ。
+// 自己ループや循環（a → b → a）を、添字のアリーナや Rc<RefCell<..>> と Weak なしで書く。
+
+pub struct GNode { pub val: u64, visited: bool, out: Vec<Ptr<GNode>> }
+
+pub struct Graph { len: u64 } owns { nodes: Region<Ptr<GNode>> }
+
+impl Graph {
+    pub closed spec fn has(&self, n: Ptr<GNode>) -> bool = self@nodes.contains(n);
+}
+
+impl Invariant for Graph {
+    // どの辺も、グラフの中のノードを指す。
+    closed spec fn invariant(&self) -> bool =
+        forall p in self@nodes, forall i in 0..self@nodes[p].out.view().len(),
+            self@nodes.contains(self@nodes[p].out.view()[i]);
+}
+
+impl Graph {
+    pub fn new() -> Self {
+        Graph { len: 0, @nodes: Region::empty() }
+    }
+
+    pub fn add_node(&mut self, v: u64) -> (n: Ptr<GNode>)
+        ensures final(self).has(n),
+            forall m: Ptr<GNode>, old(self).has(m) ==> final(self).has(m),
+    {
+        let n = Ptr::new(GNode { val: v, visited: false, out: Vec::new() });
+        put self@nodes[n];
+        self.len = self.len.wrapping_add(1);
+        n
+    }
+
+    /// 辺 a → b を足す。
+    pub fn add_edge(&mut self, a: Ptr<GNode>, b: Ptr<GNode>)
+        requires old(self).has(a), old(self).has(b),
+        ensures forall m: Ptr<GNode>, old(self).has(m) ==> final(self).has(m),
+    {
+        // `(*a).out.push(b)` と書くと、書き下しが共有の read にして生成コードがコンパイルできない。
+        // そのため写しを作って足し、フィールドごと書き戻す（O(出次数)）。
+        borrow mut self@nodes[a] {
+            let mut out = (*a).out.clone();
+            out.push(b);
+            (*a).out = out;
+        }
+    }
+
+    pub fn out_degree(&self, n: Ptr<GNode>) -> usize
+        requires self.has(n),
+    {
+        borrow self@nodes[n] { (*n).out.len() }
+    }
+
+    /// `n` から出る辺の先の値の和。
+    pub fn neighbors_sum(&self, n: Ptr<GNode>) -> u64
+        requires self.has(n),
+    {
+        let k = borrow self@nodes[n] { (*n).out.len() };
+        let mut i: usize = 0;
+        let mut s: u64 = 0;
+        while i < k
+            invariant self.invariant(), self.has(n), i <= k,
+                k == self@nodes[n].out.view().len(),
+            decreases k - i,
+        {
+            let m = borrow self@nodes[n] { (*n).out[i] };
+            let v = borrow self@nodes[m] { (*m).val };
+            s = s.wrapping_add(v);
+            i = i + 1;
+        }
+        s
+    }
+
+    /// `n` から出る辺の先に印を付ける。
+    pub fn mark_neighbors(&mut self, n: Ptr<GNode>)
+        requires old(self).has(n),
+    {
+        let k = borrow self@nodes[n] { (*n).out.len() };
+        let mut i: usize = 0;
+        while i < k
+            invariant self.invariant(), self.has(n), i <= k,
+                k == self@nodes[n].out.view().len(),
+            decreases k - i,
+        {
+            let m = borrow self@nodes[n] { (*n).out[i] };
+            borrow mut self@nodes[m] { (*m).visited = true; }
+            i = i + 1;
+        }
+    }
+
+    pub fn is_visited(&self, n: Ptr<GNode>) -> bool
+        requires self.has(n),
+    {
+        borrow self@nodes[n] { (*n).visited }
+    }
+}
+
+unchecked fn main() {
+    let mut g = Graph::new();
+    let a = g.add_node(1);
+    let b = g.add_node(10);
+    let c = g.add_node(100);
+    g.add_edge(a, b);
+    g.add_edge(b, a);
+    g.add_edge(b, c);
+    g.add_edge(c, c);
+    println!("out_degree(b) = {}", g.out_degree(b));
+    println!("neighbors_sum(b) = {}", g.neighbors_sum(b));
+    println!("neighbors_sum(c) = {}", g.neighbors_sum(c));
+    g.mark_neighbors(b);
+    println!("visited a b c = {} {} {}", g.is_visited(a), g.is_visited(b), g.is_visited(c));
+}

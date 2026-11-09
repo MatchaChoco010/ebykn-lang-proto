@@ -1,0 +1,12 @@
+// 構造体の値を作ってから、その owns フィールドの領域に権限を入れる。
+pub struct N { pub v: u64 }
+pub struct Pool { root: Ptr<N> } owns { nodes: Region<Ptr<N>> }
+
+impl Pool {
+    pub fn new(v: u64) -> Self {
+        let r = Ptr::new(N { v: v });
+        let mut t = Pool { root: r, @nodes: Region::empty() };
+        put t@nodes[r];
+        t
+    }
+}

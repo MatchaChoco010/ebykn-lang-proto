@@ -1,0 +1,22 @@
+// 参照の引数（&Cell<T> / &Ptr<T>）で領域を添字にする。
+pub struct A { pub v: u64 }
+
+pub struct CellBank { n: u64 } owns { accts: Region<Cell<A>> }
+
+impl CellBank {
+    pub fn get(&self, c: &Cell<A>) -> u64
+        requires self@accts.contains(*c),
+    {
+        borrow self@accts[c] { (*c).v }
+    }
+}
+
+pub struct PtrBank { n: u64 } owns { accts: Region<Ptr<A>> }
+
+impl PtrBank {
+    pub fn get(&self, p: &Ptr<A>) -> u64
+        requires self@accts.contains(*p),
+    {
+        borrow self@accts[p] { (*p).v }
+    }
+}

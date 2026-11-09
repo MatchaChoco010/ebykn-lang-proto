@@ -8,6 +8,7 @@
 | [linearity-broken](linearity-broken/) | 権限の誤り（解放し忘れ E0505、二重解放 E0504）を `ebykn check` が見つけて止める |
 | [linearity-fixed](linearity-fixed/) | `linearity-broken` を直した版。権限の検査と検証を通る |
 | [stack](stack/) | 付録 B の stack。`owns` / `spec` と不変条件。いまは `push` / `pop` が verified にならない |
+| [shared-accounts](shared-accounts/) | `Rc<RefCell<T>>` の置き換え。口座を `Ptr` のハンドルで共有し、二つの口座を `borrow mut` の入れ子で同時に借りる。全項目が verified で、`ebykn build` で実行できる |
 | [main-program](main-program/) | `src/main.eyk` のプログラムを `ebykn build` で実行ファイルにして実行する。表示は検証しない `unchecked fn` に置く（#54） |
 
 ## 試し方
