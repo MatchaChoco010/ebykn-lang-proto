@@ -1,0 +1,55 @@
+%YAML 1.2
+---
+# Ebykn（.eyk / .eykp）の色分け。報告スライドのテンプレート（ebykn-slides.typ）が使う。
+# Rust の字句に、仕様 §4 の文脈キーワードと演算子を足したもの。
+name: Ebykn
+file_extensions: [eyk, eykp]
+scope: source.eyk
+
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.eyk
+    - match: '/\*'
+      push: block_comment
+    - match: '"'
+      push: string
+    - match: "'[^'\\\\]'|'\\\\.'"
+      scope: string.quoted.single.eyk
+    - match: '#!?\['
+      push: attribute
+    - match: '\b[0-9][0-9_]*(\.[0-9_]+)?([iu](8|16|32|64|128|size)|f32|f64)?\b'
+      scope: constant.numeric.eyk
+    - match: '\b(true|false)\b'
+      scope: constant.language.eyk
+    - match: '\b(spec|lemma|unchecked|closed|requires|ensures|returns|decreases|no_panic|uses|gives|by|invariant|owns|take|put|borrow|leak|forall|exists|and|or|props|proof|assert|reveal|hide|lemmas|group)\b'
+      scope: keyword.other.ebykn.eyk
+    - match: '\b(as|async|await|break|const|continue|crate|dyn|else|enum|extern|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|type|unsafe|use|where|while)\b'
+      scope: keyword.control.eyk
+    - match: '\b[a-z_][a-zA-Z0-9_]*!'
+      scope: support.function.macro.eyk
+    - match: '\b[A-Z][a-zA-Z0-9_]*\b'
+      scope: entity.name.type.eyk
+    - match: '\b[a-z_][a-zA-Z0-9_]*(?=\s*\()'
+      scope: entity.name.function.eyk
+    - match: '@[a-z_][a-zA-Z0-9_]*|@'
+      scope: variable.other.permission.eyk
+    - match: '<==>|==>|=~='
+      scope: keyword.operator.logical.eyk
+
+  block_comment:
+    - meta_scope: comment.block.eyk
+    - match: '\*/'
+      pop: true
+
+  string:
+    - meta_scope: string.quoted.double.eyk
+    - match: '\\.'
+      scope: constant.character.escape.eyk
+    - match: '"'
+      pop: true
+
+  attribute:
+    - meta_scope: meta.attribute.eyk
+    - match: '\]'
+      pop: true

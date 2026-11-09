@@ -1,4 +1,4 @@
-//! 外部からの取得（`verus-install` が使う）。
+//! 外部からの取得（`verus-install` と `slides-install` が使う）と、取得したものの sha256 の照合。
 //!
 //! 一時的なエラー（HTTP の 5xx・408・429、接続の失敗）だけを、回数を決めて再試行する。
 //! それ以外（404 などの 4xx、書き込みの失敗）は再試行せずに失敗にする。
@@ -146,6 +146,22 @@ fn outcome(exit: Option<i32>, stdout: &str) -> Result<Outcome, String> {
         (_, Err(_)) => 0,
     };
     Ok(Outcome { exit, http })
+}
+
+/// ファイルの sha256（`sha256sum` で求める）。
+pub fn sha256_of(file: &Path) -> Result<String, String> {
+    let out = Command::new("sha256sum")
+        .arg(file)
+        .output()
+        .map_err(|e| format!("sha256sum を起動できません: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("sha256sum が失敗しました: {}", file.display()));
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| "sha256sum の出力を読めません".to_string())
 }
 
 /// 取得したものの sha256 が固定値と同じか。

@@ -200,21 +200,6 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
-fn sha256_of(file: &Path) -> Result<String, String> {
-    let out = Command::new("sha256sum")
-        .arg(file)
-        .output()
-        .map_err(|e| format!("sha256sum を起動できません: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("sha256sum が失敗しました: {}", file.display()));
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_string)
-        .ok_or_else(|| "sha256sum の出力を読めません".to_string())
-}
-
 /// 固定したリリースの資産を `download` で `zip` に取り、sha256 を固定値と比べる。
 fn fetch_asset(
     pin: &Pin,
@@ -226,7 +211,7 @@ fn fetch_asset(
         pin.release, pin.asset
     );
     download(&url, zip)?;
-    fetch::check_sha256(&pin.asset, &sha256_of(zip)?, &pin.sha256)
+    fetch::check_sha256(&pin.asset, &fetch::sha256_of(zip)?, &pin.sha256)
 }
 
 /// 固定した Verus をキャッシュに入れ、Verus が要求する toolchain を rustup で入れる。
