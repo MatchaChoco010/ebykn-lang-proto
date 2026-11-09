@@ -1,6 +1,6 @@
 # dogfooding 2026-11-09 の 1 回目
 
-- 対象：`develop` の 9cad241（`Ptr<T>` の ZST の検査 #12 まで）
+- 対象：`develop` の 9cad241（`Ptr<T>` の ZST の検査 #12 まで）。PR を出したあと、848b2c8（#51、#58 まで）でも、同じ結果になることを確かめました
 - Verus：`release/0.2026.11.02.8bf68ee`（`cargo xtask verus-install`）
 - `.eykp`（M3）はまだないので、証明が要る関数は `verify` で `failed` になります。これは「M3 待ち」として記録し、バグにはしていません。
 
@@ -148,6 +148,6 @@ results 5 verified, 0 errors
 - `build/verus/` を Verus なしの `cargo build` でビルドすると、消去したフィールドの `dead_code` と、生成コードの `unnecessary braces around block return value` の警告が出る。前者は `OPEN.md` の「M0 の実測」に記録済みで、どちらも動作は変わりません。
 - 自分の書き誤り：補助の `spec fn` に `pub` を付け忘れた（`pub` の関数の `ensures` から非公開の関数は呼べない）。中置の `and` を書いた（`and { .. }` はブロックの形だけで、中置は `&&`）。どちらも診断から直せました。
 
-## examples/ について
+## examples/ に足したもの
 
-rccell は `check` / `verify` / `build` と実行がすべて通るので、`examples/` の候補です。`examples/` とその期待を確かめるゲートは PR #58 で作っている途中で、まだ `develop` にないので、この回では足していません。
+rccell は `check` / `verify` / `build` と実行がすべて通るので、[examples/shared-accounts](../../examples/shared-accounts/) として足しました。

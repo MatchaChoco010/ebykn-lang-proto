@@ -1,0 +1,69 @@
+// Rc<RefCell<T>> の置き換え（設計ノート §1.2）。口座のハンドルは Copy な Ptr<Account> で、何人でも
+// 持てる（Rc の複製に当たる）。権限は Bank の Region が持つ。Rust の RefCell なら同じ口座の二重の
+// borrow_mut が実行時に panic するところを、ここでは `from != to` の静的な義務にする。
+
+pub struct Account { pub balance: u64 }
+
+pub struct Bank { count: u64 } owns { accts: Region<Ptr<Account>> }
+
+impl Bank {
+    // pub の関数の契約から非公開の消去フィールドは読めないので、closed spec fn を通す。
+    pub closed spec fn has(&self, a: Ptr<Account>) -> bool = self@accts.contains(a);
+    pub closed spec fn bal(&self, a: Ptr<Account>) -> u64 = self@accts[a].balance;
+
+    pub fn new() -> Self {
+        Bank { count: 0, @accts: Region::empty() }
+    }
+
+    pub fn open(&mut self, initial: u64) -> (a: Ptr<Account>)
+        ensures final(self).has(a), final(self).bal(a) == initial, !old(self).has(a),
+            forall c: Ptr<Account>, old(self).has(c) ==> final(self).has(c) && final(self).bal(c) == old(self).bal(c),
+    {
+        let a = Ptr::new(Account { balance: initial });
+        put self@accts[a];
+        self.count = self.count.wrapping_add(1);
+        a
+    }
+
+    pub fn balance(&self, a: Ptr<Account>) -> (b: u64)
+        requires self.has(a),
+        ensures b == self.bal(a),
+    {
+        borrow self@accts[a] { (*a).balance }
+    }
+
+    /// `from` から `to` へ `amt` を移す。二つの口座を同時に可変で借りる。
+    pub fn transfer(&mut self, from: Ptr<Account>, to: Ptr<Account>, amt: u64)
+        requires old(self).has(from), old(self).has(to),
+            from != to,
+            old(self).bal(from) >= amt,
+            old(self).bal(to) + amt <= u64::MAX,
+        ensures final(self).bal(from) == old(self).bal(from) - amt,
+            final(self).bal(to) == old(self).bal(to) + amt,
+            forall c: Ptr<Account>, old(self).has(c) ==> final(self).has(c),
+    {
+        borrow mut self@accts[from] {
+            borrow mut self@accts[to] {
+                (*from).balance = (*from).balance - amt;
+                (*to).balance = (*to).balance + amt;
+            }
+        }
+    }
+}
+
+/// 検証される呼び出し側。開いた直後の残高から、振替の結果が決まる。
+pub fn demo() -> (r: (u64, u64))
+    ensures r.0 == 70, r.1 == 35,
+{
+    let mut bank = Bank::new();
+    let alice = bank.open(100);
+    let bob = bank.open(5);
+    let alice_again = alice; // ハンドルの複製（Rc::clone に当たる）
+    bank.transfer(alice, bob, 30);
+    (bank.balance(alice_again), bank.balance(bob))
+}
+
+unchecked fn main() {
+    let (a, b) = demo();
+    println!("alice = {}, bob = {}", a, b);
+}
