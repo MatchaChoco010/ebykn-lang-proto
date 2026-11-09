@@ -4,6 +4,7 @@
 //! トークン列を置いて続ける。一つのファイルの誤りをまとめて報告するため。
 
 mod expr;
+mod macro_attrs;
 
 pub(super) use expr::{attr_name, block, expr, pat};
 
@@ -351,7 +352,7 @@ pub(super) fn mac(m: &syn::Macro) -> ast::Macro {
                     crate::diag::Unimpl::AttrInMacro,
                 )),
             );
-        } else if has_misplaced_attribute(&m.tokens, last == "vec") {
+        } else if macro_attrs::has_misplaced_attribute(&m.tokens, last == "vec") {
             // 安定版の Rust が式の属性を許さない位置（PR #59 の再確認。`Unimpl::AttrPosInMacro`）。
             push(
                 span,
@@ -434,89 +435,6 @@ fn has_unread_attribute(ts: &proc_macro2::TokenStream) -> bool {
                 }
                 _ => false,
             }
-        }
-        _ => false,
-    })
-}
-
-/// マクロの引数の中の属性の位置の文脈。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AttrCx {
-    /// `vec![..]` の要素の並び（要素の頭は、安定版の Rust が式の属性を許す）。
-    Elements,
-    /// `{ .. }` の中（文の頭、match の腕と構造体の欄の頭）。
-    Brace,
-    /// ほか（式の中。`assert!(..)` の引数、括弧、添字など）。
-    Other,
-}
-
-/// トークン列に、安定版の Rust が許さない位置の属性があるか（グループの中を含む）。std のマクロの引数は
-/// トークンのまま持ち、Ebykn が式として読まないので、位置をトークンで決める。許すのは、`vec!` の要素と
-/// 繰り返しの数の頭（先頭と `,`・`;` の後）と、`{ .. }` の中の文・腕・欄の頭（先頭、`;`・`,`・`{ .. }` の
-/// 後）と、そこに続く外側の属性だけ。内側の属性 `#![..]` はどこでも許さない（`{ #![..] .. }` はブロック式
-/// の属性になる。入れ子の `fn` の本体のように許される場所もあるが、トークンでは見分けない）。ほかの位置の
-/// 式の属性は、安定版の Rust では
-/// `attributes on expressions are experimental`（E0658）になり、Verus の toolchain では通るので、
-/// verified なのに Verus なしのビルドが落ちる。トークンでは決めきれないもの（代入・二項演算の文の頭の
-/// 属性）は残る（#130）。
-fn has_misplaced_attribute(ts: &proc_macro2::TokenStream, vec: bool) -> bool {
-    misplaced(ts, if vec { AttrCx::Elements } else { AttrCx::Other })
-}
-
-fn misplaced(ts: &proc_macro2::TokenStream, cx: AttrCx) -> bool {
-    use proc_macro2::{Delimiter, TokenTree};
-    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
-    let punct =
-        |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
-    let bracket = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket);
-    // `tts[k]` が属性の `[..]` か（`#[..]` / `#![..]` の `[..]`）。
-    let attr_body = |k: usize| {
-        bracket(tts.get(k))
-            && (punct(k.checked_sub(1).and_then(|j| tts.get(j)), '#')
-                || (punct(k.checked_sub(1).and_then(|j| tts.get(j)), '!')
-                    && punct(k.checked_sub(2).and_then(|j| tts.get(j)), '#')))
-    };
-    // `i` から始まる外側の属性の、直前のトークン（`#` の前）が属性を許す位置か。属性の並びの二つ目からは、
-    // 一つ目が許されていれば許す（一つ目が許されなければ、そこで拒否している）。
-    let allowed = |i: usize| {
-        let Some(prev) = i.checked_sub(1) else {
-            return cx != AttrCx::Other;
-        };
-        if attr_body(prev) {
-            return true;
-        }
-        match cx {
-            AttrCx::Elements => punct(tts.get(prev), ',') || punct(tts.get(prev), ';'),
-            AttrCx::Brace => {
-                punct(tts.get(prev), ';')
-                    || punct(tts.get(prev), ',')
-                    || matches!(tts.get(prev), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace)
-            }
-            AttrCx::Other => false,
-        }
-    };
-    tts.iter().enumerate().any(|(i, t)| match t {
-        TokenTree::Group(g) => {
-            if attr_body(i) {
-                return false;
-            }
-            let inner_cx = match g.delimiter() {
-                Delimiter::Brace => AttrCx::Brace,
-                // 入れ子の `vec![..]` / `vec!(..)`。
-                Delimiter::Bracket | Delimiter::Parenthesis
-                    if punct(i.checked_sub(1).and_then(|j| tts.get(j)), '!')
-                        && matches!(i.checked_sub(2).and_then(|j| tts.get(j)), Some(TokenTree::Ident(n)) if n == "vec") =>
-                {
-                    AttrCx::Elements
-                }
-                _ => AttrCx::Other,
-            };
-            misplaced(&g.stream(), inner_cx)
-        }
-        TokenTree::Punct(p) if p.as_char() == '#' => {
-            let inner = punct(tts.get(i + 1), '!');
-            let body = if inner { i + 2 } else { i + 1 };
-            bracket(tts.get(body)) && (inner || !allowed(i))
         }
         _ => false,
     })
