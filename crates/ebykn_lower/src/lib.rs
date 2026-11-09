@@ -340,10 +340,13 @@ pub struct Deps<'a> {
 
 /// `build/verus/Cargo.toml`（仕様 §3.2、§1.3）。`[dependencies]` を写し、`vstd` と `ebykn_prelude` を
 /// 足し、`panic = "abort"` を書く。`Ebykn.toml` の相対の `path` は `build/verus/` から見た形に直す。
+///
+/// 空の `[workspace]` を書き、生成クレートをそれだけで一つのワークスペースにする。書かないと、上の
+/// ディレクトリにある Cargo のワークスペースのメンバーとみなされ、cargo が止まる（#78）。
 pub fn cargo_toml(project: &Project, deps: &Deps) -> String {
     let m = &project.manifest;
     let mut s = String::new();
-    s.push_str("[package]\n");
+    s.push_str("[workspace]\n\n[package]\n");
     s.push_str(&format!("name = {}\n", toml_str(&m.name)));
     s.push_str(&format!("version = {}\n", toml_str(&m.version)));
     s.push_str(&format!("edition = {}\n", toml_str(&m.edition)));

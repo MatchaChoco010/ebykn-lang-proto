@@ -60,9 +60,11 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - `[dependencies]` は値を保ったまま、鍵の名前の順に `build/verus/Cargo.toml` へ写します。
 - `[dependencies]` の鍵に `std`・`core`・`alloc`・`vstd`・`ebykn_prelude`・`verus_builtin`・`verus_builtin_macros`（`-` は `_` と同じ）は使えず、`E0002` です。この名前の依存クレートがあると、`::core::clone::Clone` や `use core::..` がそのクレートを指します（#49。`.eyk` の改名の拒否と同じ名前）。
 - 生成する `build/verus/Cargo.toml` の `vstd` は、crates.io の `vstd = "=0.0.0-2026-11-01-0251"`（`cargo verus new` が出す版）です。
+- 生成する `build/verus/Cargo.toml` は空の `[workspace]` を持ち、それだけで一つのワークスペースになります。プロジェクトを Cargo のワークスペースの下に置いても、上の `Cargo.toml` のメンバーとはみなされません。
+- `ebykn` が走らせた外部のコマンドが失敗したときは、コマンド、走らせたディレクトリ、終了コード（シグナルで止まったときはその番号）、コマンドの出力を示します。
 
-* 元の仕様：§3.2 は例だけで、必須の鍵、知らない鍵の扱い、探し方、vstd の取り先を定めていない。
-* 根拠：#17（PR #20、#26）、#6（PR #13）。
+* 元の仕様：§3.2 は例だけで、必須の鍵、知らない鍵の扱い、探し方、vstd の取り先、ワークスペースの下に置いたときの扱いを定めていない。
+* 根拠：#17（PR #20、#26）、#6（PR #13）、#78。
 * 状態：基準で決めた。
 
 ## §4 字句

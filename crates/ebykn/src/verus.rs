@@ -310,18 +310,19 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let name = package_name(build).unwrap_or_default();
     // 消せなければ、前の結果を今の結果と取り違えるおそれがあるので止める。
     for target in ["target", "target/verus-partial"] {
-        let status = Command::new("cargo")
+        let args = ["clean", "--quiet", "-p", &name, "--target-dir", target];
+        let out = Command::new("cargo")
             .current_dir(build)
             .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
-            .args(["clean", "--quiet", "-p", &name, "--target-dir", target])
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            other => {
-                return Err(format!(
-                    "`cargo clean -p {name} --target-dir {target}` failed: {other:?}"
-                ));
-            }
+            .args(args)
+            .output()
+            .map_err(|e| format!("cannot run `cargo {}`: {e}", args.join(" ")))?;
+        if !out.status.success() {
+            return Err(command_failed(
+                &format!("cargo {}", args.join(" ")),
+                build,
+                &out,
+            ));
         }
     }
     let out = cmd
@@ -344,6 +345,41 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         checked: json.map(|j| j.checked),
         compiled,
     })
+}
+
+/// 外部のコマンドが失敗したときの文言：コマンド、走らせたディレクトリ、終了コード（シグナルで
+/// 止まったならそう書く）、コマンドの出力（#78。終了の状態を Debug 表記で出さない）。
+pub fn command_failed(cmd: &str, dir: &Path, out: &std::process::Output) -> String {
+    let how = match out.status.code() {
+        Some(c) => format!("exit code {c}"),
+        None => match signal(&out.status) {
+            Some(s) => format!("killed by signal {s}"),
+            None => "no exit code".into(),
+        },
+    };
+    let mut s = format!("`{cmd}` failed in `{}` ({how})", dir.display());
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let output = output.trim_end();
+    if !output.is_empty() {
+        s.push_str(":\n");
+        s.push_str(output);
+    }
+    s
+}
+
+#[cfg(unix)]
+fn signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn signal(_: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 /// cargo の出力に、クレート `name` を作り直した行（`Checking name v..` / `Compiling name v..`）があるか。
@@ -819,6 +855,34 @@ mod tests {
         std::fs::create_dir_all(base.join("c")).unwrap();
         assert_eq!(relative(&base.join("a/b"), &base.join("c")), "../../c");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_commands_show_the_exit_code_and_output() {
+        use std::os::unix::process::ExitStatusExt;
+        let out = std::process::Output {
+            // 終了コード 101（wait の状態は 101 << 8）。
+            status: std::process::ExitStatus::from_raw(101 << 8),
+            stdout: Vec::new(),
+            stderr: b"error: current package believes it's in a workspace when it's not\n".to_vec(),
+        };
+        let m = command_failed("cargo clean -p app", Path::new("/w/app/build/verus"), &out);
+        assert_eq!(
+            m,
+            "`cargo clean -p app` failed in `/w/app/build/verus` (exit code 101):\nerror: current package believes it's in a workspace when it's not"
+        );
+        assert!(!m.contains("ExitStatus"), "{m}");
+        // シグナルで止まったもの（終了コードがない）。
+        let out = std::process::Output {
+            status: std::process::ExitStatus::from_raw(9),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            command_failed("cargo", Path::new("/w"), &out),
+            "`cargo` failed in `/w` (killed by signal 9)"
+        );
     }
 
     fn facts() -> ItemFacts {
