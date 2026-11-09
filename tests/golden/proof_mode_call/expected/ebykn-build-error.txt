@@ -1,0 +1,2 @@
+cannot call function `proof_mode_call::bump` with mode exec
+ebykn: `cargo verus build` failed on the generated Verus

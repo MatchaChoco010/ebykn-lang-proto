@@ -378,7 +378,7 @@ into_graph(a, b, uses g)                                         // 移動
 - §6.2〜§6.5 の検査は、書き下すファイル（`.eykp` があればそれ。§7.5）の AST にかけ、書き下しに使う事実（領域の解決など）もそこから集めます。索引も書き下すファイルから作るので、`.eykp` だけの補題を証明の中から呼べます。
 - `.eykp` のあるモジュールは、`.eyk` の AST にも同じ検査をかけます。`.eyk` の側の診断はすべて `.eyk` の位置で出し、`.eykp` の側の診断は、対応する `.eyk` に同じ文言の診断がないもの（証明の中の誤り）だけを `.eykp` の位置で出します。剥がし一致を通れば、証明の外のコードは同じなので、同じ誤りが両方に出るためです。
 - 証明の文（§5.7 の `ProofStmt`。`proof { }`、`assert .. by { }` など）は、権限と領域を読めますが、状態は変えられません。証明の文の前と後で、権限の状態（Γ）か領域（R、移動した領域）が違えば `E0520` です。証明は実行されないので、剥がした `.eyk` が同じ権限を持っていなければなりません。取り出して戻す（`take r[p]; put r[p];`）など、前と後で状態が同じものは通します。
-- 証明が実行するコードを変えないことのうち、実行する変数への代入や実行する関数の呼び出しは、Verus のモードの検査が拒みます（`cannot mutate exec-mode place in proof-code`、`cannot call function .. with mode exec`。golden `tests/golden/proof_mode`、`proof_mode_call`）。
+- 証明が実行するコードを変えないことのうち、実行する変数への代入や実行する関数の呼び出しは、Verus のモードの検査が拒みます（`cannot mutate exec-mode place in proof-code`、`cannot call function .. with mode exec`）。`verify` は検証の前に止まり、`build` も `cargo verus build` で止まります（golden `tests/golden/proof_mode`、`proof_mode_call`）。
 
 * 元の仕様：§7.5 は `.eykp` から書き下すとだけ書き、§6 の検査をどちらにかけるかと、証明の中の権限を定めていない。
 * 根拠：#67。
