@@ -1230,7 +1230,18 @@ impl<'a> Walker<'a> {
     }
 
     fn closure(&mut self, c: &ast::Closure) {
-        // クロージャの中では Γ と R を空にする（仕様 §6.2、E0512）。
+        // 論理文脈のクロージャ（`s.map(|p| self@nodes[p].val)` など、spec のクロージャ）は実行されず、
+        // 権限を使わない。Γ と R はそのまま見える（領域添字を認識する）。
+        if self.logic {
+            let saved = self.save_scope();
+            for p in &c.params {
+                self.bind(p);
+            }
+            self.expr(&c.body);
+            self.restore_scope(saved);
+            return;
+        }
+        // 実行文脈のクロージャの中では Γ と R を空にする（仕様 §6.2、E0512）。
         let prev_outer = self.closure_outer.clone();
         let outer = match prev_outer.clone() {
             Some((mut env, mut regions)) => {
