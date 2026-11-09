@@ -786,11 +786,35 @@ pub fn select(all: &[ItemStatus], items: &[&str]) -> Option<Vec<ItemStatus>> {
     )
 }
 
+/// 前提の行の名前（`cfg` の行の文言）。`cfg_uses` は、クレートが頼っている、ビルドの設定で値の変わる cfg
+/// の名前（[`Output::cfg_uses`]）。空でなければ、verified はホストの target・既定の feature・追加の
+/// `--cfg` なし・`test` なしで検証した結果で、ほかの組み合わせのビルドと `cargo test` は検証していない（#27、#87）。
+pub const CFG_ASSUMPTION_EN: &str = "verified for the host target, the default features, no extra `--cfg` and no `cfg(test)`; builds with other targets, features or `--cfg` (for example through `RUSTFLAGS`) and `cargo test` are not verified";
+pub const CFG_ASSUMPTION_JA: &str = "verified は、ホストの target・既定の feature・追加の `--cfg` なし・`test` なしで検証した結果です。ほかの target・feature・`--cfg`（`RUSTFLAGS` で付けたものなど）でのビルドと `cargo test` は検証していません";
+
+/// 頼っている cfg があれば、標準エラーに出す文言（英語と日本語）。なければ `None`（#87 の既定）。
+pub fn cfg_assumption_message(cfg_uses: &[String]) -> Option<(String, String)> {
+    if cfg_uses.is_empty() {
+        return None;
+    }
+    Some((
+        format!(
+            "the crate depends on cfg that the build settings can change ({}): {CFG_ASSUMPTION_EN}",
+            cfg_uses.join(", ")
+        ),
+        format!(
+            "このクレートは、ビルドの設定で値の変わる cfg に頼っています（{}）。{CFG_ASSUMPTION_JA}",
+            cfg_uses.join("、")
+        ),
+    ))
+}
+
 /// `verify --json` の結果（1 行）。
 pub fn status_json(
     items: &[ItemStatus],
     summary: Summary,
     cheating: &Cheating,
+    cfg_uses: &[String],
     success: bool,
 ) -> String {
     let items: Vec<serde_json::Value> = items
@@ -833,11 +857,18 @@ pub fn status_json(
                 "Verus stopped before verification, so the check did not run".into()
         }
     }
+    // 頼っている cfg があれば、検証した組み合わせを前提として出す（なければ null）。
+    let cfg = if cfg_uses.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({"names": cfg_uses, "note": CFG_ASSUMPTION_EN})
+    };
     serde_json::json!({
         "$message_type": "ebykn-verify",
         "success": success,
         "items": items,
         "no_cheating": no_cheating,
+        "cfg_assumption": cfg,
         "results": results,
     })
     .to_string()
@@ -846,11 +877,20 @@ pub fn status_json(
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
 ///
 /// 紛れ込んだ前提は `smuggled 位置 文言` の行、照合できなかったときは `smuggled unreadable: 理由` の行にする。
-pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) -> String {
+/// 頼っている cfg があれば `assumed cfg 名前, ..` の行を出す（[`CFG_ASSUMPTION_EN`]）。
+pub fn status_text(
+    items: &[ItemStatus],
+    summary: Summary,
+    cheating: &Cheating,
+    cfg_uses: &[String],
+) -> String {
     let mut s = String::new();
     for i in items {
         s.push_str(&i.line());
         s.push('\n');
+    }
+    if !cfg_uses.is_empty() {
+        s.push_str(&format!("assumed cfg {}\n", cfg_uses.join(", ")));
     }
     match cheating {
         Cheating::Smuggled(v) => {
@@ -1118,6 +1158,45 @@ mod tests {
         }
     }
 
+    /// 頼っている cfg の前提（#87 の既定）：テキストの行、`--json` の `cfg_assumption`、標準エラーの文言。
+    /// 頼っていなければ、どれも出さない。
+    #[test]
+    fn cfg_assumption_is_shown_only_when_the_crate_uses_cfg() {
+        let names = vec!["my_flag".to_string(), "test".to_string()];
+        let text = status_text(&[], ran(0), &Cheating::Clean, &names);
+        assert!(text.contains("assumed cfg my_flag, test\n"), "{text}");
+        let json: serde_json::Value =
+            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &names, true))
+                .unwrap();
+        assert_eq!(
+            json["cfg_assumption"],
+            serde_json::json!({"names": ["my_flag", "test"], "note": CFG_ASSUMPTION_EN})
+        );
+        let (en, ja) = cfg_assumption_message(&names).unwrap();
+        assert!(
+            en.contains("(my_flag, test)") && en.ends_with(CFG_ASSUMPTION_EN),
+            "{en}"
+        );
+        assert!(
+            ja.contains("（my_flag、test）") && ja.ends_with(CFG_ASSUMPTION_JA),
+            "{ja}"
+        );
+        // `test` と `cargo test` を検証していないことを書く（`cargo test` は `cfg(test)` でビルドする）。
+        assert!(
+            CFG_ASSUMPTION_EN.contains("`cargo test`") && CFG_ASSUMPTION_EN.contains("cfg(test)")
+        );
+        assert!(
+            CFG_ASSUMPTION_JA.contains("`cargo test`") && CFG_ASSUMPTION_JA.contains("`test` なし")
+        );
+
+        let text = status_text(&[], ran(0), &Cheating::Clean, &[]);
+        assert!(!text.contains("assumed cfg"), "{text}");
+        let json: serde_json::Value =
+            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &[], true)).unwrap();
+        assert!(json["cfg_assumption"].is_null(), "{json}");
+        assert!(cfg_assumption_message(&[]).is_none());
+    }
+
     #[test]
     fn filtering_keeps_every_assumption() {
         let st = |item: &str, status: &'static str| ItemStatus {
@@ -1239,6 +1318,7 @@ mod tests {
             external: vec![],
             verus_patterns: Default::default(),
             macros: vec![],
+            cfg_uses: Vec::new(),
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()
@@ -1262,7 +1342,8 @@ mod tests {
                     verified: 1,
                     errors: 1
                 },
-                &Cheating::Clean
+                &Cheating::Clean,
+                &[]
             ),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
@@ -1305,10 +1386,10 @@ mod tests {
             false,
         );
         assert_eq!(
-            status_text(&st, stopped, &Cheating::NotRun),
+            status_text(&st, stopped, &Cheating::NotRun, &[]),
             "unknown k::f\nfailed k::g\nadmit k::l\nresults not verified: Verus stopped before verification (1 errors)\n"
         );
-        let json = status_json(&st, stopped, &Cheating::NotRun, false);
+        let json = status_json(&st, stopped, &Cheating::NotRun, &[], false);
         assert!(
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
@@ -1369,7 +1450,7 @@ mod tests {
             ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
         let st = statuses(&files, &output, &[], Some(&checked), ran2, false);
         assert_eq!(
-            status_text(&st, ran2, &Cheating::Clean),
+            status_text(&st, ran2, &Cheating::Clean, &[]),
             "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
         );
         // 前提なので、項目を絞っても出る。
@@ -1383,7 +1464,7 @@ mod tests {
                 "macro tokio::main on k5::one"
             ]
         );
-        let json = status_json(&shown, ran2, &Cheating::Clean, true);
+        let json = status_json(&shown, ran2, &Cheating::Clean, &[], true);
         assert!(
             json.contains(
                 r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
@@ -1578,18 +1659,38 @@ error: could not compile `drop` (lib) due to 1 previous error
         let r = missing_run(false);
         assert_eq!(r.results, Some((0, 0)));
         assert_eq!(r.summary(), Summary::Stopped { errors: 1 });
-        let text = status_text(&[], r.summary(), &Cheating::NotRun);
+        let text = status_text(&[], r.summary(), &Cheating::NotRun, &[]);
         assert_eq!(
             text,
             "results not verified: Verus stopped before verification (1 errors)\n"
         );
         assert!(!text.contains("0 errors"), "{text}");
-        let json = status_json(&[], r.summary(), &Cheating::NotRun, false);
+        let json = status_json(&[], r.summary(), &Cheating::NotRun, &[], false);
         assert!(json.contains("\"ran\":false"), "{json}");
         // 件数がない（Verus が JSON を出さなかった）ときも同じ。
         let mut none = missing_run(false);
         none.results = None;
         assert_eq!(none.summary(), Summary::Stopped { errors: 1 });
+    }
+
+    #[test]
+    fn cfg_assumptions_are_reported() {
+        let ran = Summary::Ran {
+            verified: 1,
+            errors: 0,
+        };
+        let names = vec!["my_flag".to_string(), "test".to_string()];
+        assert_eq!(
+            status_text(&[], ran, &Cheating::Clean, &names),
+            "assumed cfg my_flag, test\nresults 1 verified, 0 errors\n"
+        );
+        let json = status_json(&[], ran, &Cheating::Clean, &names, true);
+        assert!(
+            json.contains("\"cfg_assumption\":{\"names\":[\"my_flag\",\"test\"]"),
+            "{json}"
+        );
+        let none = status_json(&[], ran, &Cheating::Clean, &[], true);
+        assert!(none.contains("\"cfg_assumption\":null"), "{none}");
     }
 
     #[test]
@@ -1606,12 +1707,12 @@ error: could not compile `drop` (lib) due to 1 previous error
             errors: 0,
         };
         let smuggled = Cheating::Smuggled(vec![e]);
-        let text = status_text(&[], ran, &smuggled);
+        let text = status_text(&[], ran, &smuggled, &[]);
         assert_eq!(
             text,
             "smuggled build/verus/src/lib.rs:22:19 `assume`/`admit` not allowed with `--no-cheating`\nresults 1 verified, 0 errors\n"
         );
-        let json = status_json(&[], ran, &smuggled, false);
+        let json = status_json(&[], ran, &smuggled, &[], false);
         assert!(
             json.contains("\"location\":\"build/verus/src/lib.rs:22:19\""),
             "{json}"
@@ -1619,18 +1720,18 @@ error: could not compile `drop` (lib) due to 1 previous error
         assert!(json.contains("\"checked\":true"), "{json}");
         assert!(json.contains("\"state\":\"smuggled\""), "{json}");
         let unread = Cheating::Unreadable(no_cheating::Unreadable::NoErrors);
-        assert!(status_text(&[], ran, &unread).contains("smuggled unreadable: "));
+        assert!(status_text(&[], ran, &unread, &[]).contains("smuggled unreadable: "));
         // 「読めない」と「走らせていない」は state で見分ける。
-        let unread_json = status_json(&[], ran, &unread, false);
+        let unread_json = status_json(&[], ran, &unread, &[], false);
         assert!(unread_json.contains("\"checked\":false"), "{unread_json}");
         assert!(
             unread_json.contains("\"state\":\"unreadable\""),
             "{unread_json}"
         );
-        let not_run = status_json(&[], ran, &Cheating::NotRun, false);
+        let not_run = status_json(&[], ran, &Cheating::NotRun, &[], false);
         assert!(not_run.contains("\"state\":\"not_run\""), "{not_run}");
         assert_eq!(
-            status_text(&[], ran, &Cheating::Clean),
+            status_text(&[], ran, &Cheating::Clean, &[]),
             "results 1 verified, 0 errors\n"
         );
     }
@@ -1656,7 +1757,7 @@ error: could not compile `drop` (lib) due to 1 previous error
                 errors: 2
             }
         );
-        let json = status_json(&[], failed.summary(), &Cheating::Clean, false);
+        let json = status_json(&[], failed.summary(), &Cheating::Clean, &[], false);
         assert!(
             json.contains("\"ran\":true") && json.contains("\"errors\":2"),
             "{json}"

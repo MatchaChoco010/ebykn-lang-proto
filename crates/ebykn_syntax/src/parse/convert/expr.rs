@@ -5,9 +5,12 @@ use quote::ToTokens;
 use verus_syn as syn;
 use verus_syn::parse::Parser as _;
 
-use super::{attrs, generic_arg, ident, lifetime, lit, mac, member, path, qself, tokens, ty};
+use super::{
+    attrs, binding, binding_as, generic_arg, ident, lifetime, lit, mac, member, path, qself,
+    tokens, ty,
+};
 use crate::ast;
-use crate::diag::Message;
+use crate::diag::{BindingForm, Message};
 use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawVerbatimExpr};
 use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
@@ -625,7 +628,7 @@ fn closure(c: syn::ExprClosure, span: Span) -> ast::Expr {
             }
             Some(ast::Ret {
                 name: named.as_ref().and_then(|n| match &n.1 {
-                    syn::Pat::Ident(i) => Some(ident(&i.ident)),
+                    syn::Pat::Ident(i) => Some(binding(&i.ident)),
                     _ => None,
                 }),
                 ty: ty(t),
@@ -789,7 +792,7 @@ pub(in crate::parse) fn raw_atom(raw: RawAtom) -> ast::ExprKind {
                 .binders
                 .into_iter()
                 .map(|b| {
-                    let id = ident(&b.ident);
+                    let id = binding(&b.ident);
                     let (kind, end) = match b.kind {
                         hook::RawBinderKind::Typed(t) => {
                             let t = ty(&t);
@@ -904,6 +907,10 @@ fn stmt(s: syn::Stmt) -> ast::Stmt {
                 ast::ExprKind::Assign { lhs, rhs }
                     if semi.is_some() && matches!(lhs.kind, ast::ExprKind::Erased { .. }) =>
                 {
+                    // 仕様の代入は属性を書き下さないので、黙って捨てずに拒否する（#27）。
+                    if let Some(a) = lhs.leading_attrs().first() {
+                        push(a.span, cfg_stmt());
+                    }
                     ast::StmtKind::SpecAssign {
                         target: *lhs,
                         value: *rhs,
@@ -1020,10 +1027,26 @@ pub(in crate::parse) fn prover_mode(name: &proc_macro2::Ident) -> ast::ProverMod
     })
 }
 
+fn cfg_stmt() -> crate::diag::Message {
+    crate::diag::Message::Check(crate::diag::CheckMsg::Unimplemented(
+        crate::diag::Unimpl::CfgStmt,
+    ))
+}
+
 /// 文の位置の `Verbatim`（take / put / leak / borrow / ループ / 項目 / 証明の文）。
 pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt {
     let kind = match hook::parse_stmt_verbatim.parse2(ts) {
         Ok((a, raw)) => match raw {
+            RawStmt::Take(_) | RawStmt::Put(_) | RawStmt::Leak(_) if !a.is_empty() => {
+                // `take` / `put` / `leak` は属性を書き下さないので、黙って捨てずに拒否する（#27）。
+                push(span_of(&a[0]), cfg_stmt());
+                match raw {
+                    RawStmt::Take(r) => ast::StmtKind::Take(raw_region_index(r)),
+                    RawStmt::Put(r) => ast::StmtKind::Put(raw_region_index(r)),
+                    RawStmt::Leak(i) => ast::StmtKind::Leak(ident(&i)),
+                    _ => unreachable!(),
+                }
+            }
             RawStmt::Take(r) => ast::StmtKind::Take(raw_region_index(r)),
             RawStmt::Put(r) => ast::StmtKind::Put(raw_region_index(r)),
             RawStmt::Leak(i) => ast::StmtKind::Leak(ident(&i)),
@@ -1058,6 +1081,11 @@ pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt 
 }
 
 pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
+    pat_as(p, BindingForm::Name)
+}
+
+/// [`pat`] の、最上位の名前の束縛を `form` の書き方として読む版（構造体のパターンの省略形）。
+fn pat_as(p: syn::Pat, form: BindingForm) -> ast::Pat {
     use ast::PatKind as P;
     let span = span_of(&p);
     // パターンの外部属性（クロージャの引数の `#[cfg]` など。黙って落とさない。#95）。
@@ -1084,7 +1112,16 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
         syn::Pat::Ident(i) => P::Ident {
             by_ref: i.by_ref.is_some(),
             mutable: i.mutability.is_some(),
-            ident: ident(&i.ident),
+            ident: binding_as(
+                &i.ident,
+                match form {
+                    BindingForm::Shorthand { .. } => BindingForm::Shorthand {
+                        by_ref: i.by_ref.is_some(),
+                        mutable: i.mutability.is_some(),
+                    },
+                    f => f,
+                },
+            ),
             sub: i.subpat.map(|(_, s)| Box::new(pat(*s))),
         },
         syn::Pat::Wild(_) => P::Wild,
@@ -1114,11 +1151,21 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
                 .into_iter()
                 .map(|f| {
                     let span = span_of(&f);
+                    let shorthand = f.colon_token.is_none();
+                    let form = if shorthand {
+                        // `ref` / `mut` は `pat_as` が名前のパターンから読む。
+                        BindingForm::Shorthand {
+                            by_ref: false,
+                            mutable: false,
+                        }
+                    } else {
+                        BindingForm::Name
+                    };
                     ast::FieldPat::Field {
                         attrs: attrs(&f.attrs),
                         member: member(&f.member),
-                        shorthand: f.colon_token.is_none(),
-                        pat: pat(*f.pat),
+                        shorthand,
+                        pat: pat_as(*f.pat, form),
                         span,
                     }
                 })
@@ -1172,14 +1219,22 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                         pat: p,
                         span,
                     } => {
-                        let m = member(&m);
                         let shorthand = p.is_none();
+                        // 省略形（`S { r#type, @g }`）はフィールドの名前で局所の名前を束縛する（#119）。
+                        let bound = match (&m, &p) {
+                            (syn::Member::Named(i), None) => {
+                                Some(binding_as(i, BindingForm::Shorthand { by_ref, mutable }))
+                            }
+                            _ => None,
+                        };
+                        let m = member(&m);
                         let sub = match p {
                             Some(p) => pat(p),
                             None => {
-                                let id = match &m {
-                                    ast::Member::Named(i) => i.clone(),
-                                    ast::Member::Unnamed { span, .. } => ast::Ident {
+                                let id = match (&m, bound) {
+                                    (_, Some(i)) => i,
+                                    (ast::Member::Named(i), None) => i.clone(),
+                                    (ast::Member::Unnamed { span, .. }, None) => ast::Ident {
                                         name: String::new(),
                                         raw: false,
                                         span: *span,
@@ -1207,7 +1262,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                     }
                     hook::RawFieldPat::Erased { attrs: a, ident: i } => ast::FieldPat::Erased {
                         attrs: attrs(&a),
-                        ident: ident(&i),
+                        ident: binding_as(&i, BindingForm::Erased),
                     },
                     hook::RawFieldPat::ErasedRest { attrs: a, span: s } => {
                         ast::FieldPat::ErasedRest {

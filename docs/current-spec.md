@@ -95,6 +95,23 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 * 根拠：#19。呼び出しの引数の `uses &r` は、`uses` が変数なら `uses & r`（ビット積）と区別できない。
 * 状態：判断待ちの既定（#19 の P1 に伴う）。
 
+### Rust の予約語の raw の綴りは、局所の名前に使えない
+
+Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#gen` など）は、局所の名前に使えません（`E0103`）。局所の名前とは、`let`・`match`・`if let`・`for`・関数とクロージャの引数のパターンの束縛（構造体のパターンの省略形 `S { r#type }` と消去フィールドの `@r#type` を含む）、量化子の変数、名前付きの戻り値（`-> (r#type: T)`）、`uses` の領域の名前、const generics の引数です。診断は、書き方ごとに書き換え方を案内します。
+
+- 名前を書いて束縛するところは、`type_` のような別の名前にします。
+- 構造体のパターンの省略形（`S { r#type }`、`S { r#type, @g }`）は、`S { r#type: type_ }` のように別の名前で束縛します。`ref` / `mut` の付いた省略形は、`S { r#type: ref type_ }` のように付けたまま書きます。
+- 消去フィールドのパターン（`@r#type`）には、別の名前で束縛する書き方がありません。`spec` フィールドなら、パターンでは `@..` で外し、構造体の値から `s@r#type` のように読みます。`owns` フィールドなら、フィールドの名前を変えます（`@..` で外すと、権限を `leak` するのと同じになるため）。
+- 対象の語は `crates/ebykn_syntax/src/reserved.rs` の `RAW_KEYWORDS` です。厳格な予約語と将来のための予約語（`abstract`、`yield` など）と、版で予約語になった `async`・`await`・`dyn`・`try`（2018）、`gen`（2024）です。版で予約語になった語は、`Ebykn.toml` の `edition` がその版より前なら拒否しません（2021 の `r#gen` は通ります）。`edition` が数として読めなければ拒否します。
+- 予約語でない名前の raw の綴り（`r#foo`、弱いキーワードの `r#union`・`r#raw`、Verus の句の `r#requires`）は通ります。
+- 関数・型・モジュール・トレイト・型の別名・構造体のフィールド・型の引数の名前は、raw の綴りのまま通します（Verus が通すので、`fn r#gen` や `s.r#type` はそのまま書けます）。`const`・`static`・列挙子・列挙子のフィールドの raw の名前は、Verus が予約語でない `r#foo` でも拒否します。これは別の問題で、#147 で扱います。
+- 中を読まないトークン列（マクロの引数など）の中の束縛は見ません。そこに書いたものは、Verus の `function body check` のままです。
+- パターンの名前は字句で判定するので、予約語の raw の綴りの unit struct をパターンに書くと（`pub struct r#type;` の後の `let r#type = x;`）、Rust ではパスのパターンでも `E0103` になります。`r#type {}` か `crate::r#type` と書きます。
+
+* 元の仕様：§4 は識別子を Rust のものとし、raw の綴りに触れない。
+* 根拠：#119。固定した Verus は、予約語を `r#` で名前にした局所の名前を SMT の記号に `r#type@` のまま書き、z3 が読めないので、検証条件に出ると `function body check` で失敗する（`spec fn` の引数なら定義が効かず、使う側が `postcondition not satisfied` になる）。`ebykn check` は通るので、`verify` で初めて分かり、文言から原因が分からない（`tests/verus-probes/raw_keyword_local.rs`。2021 の `r#gen` が通ることは `raw_keyword_local_2021.rs`）。書き下しで別の名前に変えない理由は `OPEN.md` の 2026-11-10 の行。
+* 状態：基準で決めた。
+
 ### `borrow` は式の位置にも書ける
 
 `borrow r[p] { .. }` / `borrow mut r[p] { .. }` は、式が始まる位置ならどこにでも書けます。`if` / `match` と同じブロック式で、値を持ちます。match の腕に書いたときは、続く腕の前に `,` が要ります（構文解析器のフォークが、Ebykn の式をブロック式と見なさないため）。
@@ -105,7 +122,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### Rust の版の予約語は `r#` を付けて名前にする
 
-`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は `r#gen` と書くよう案内します。`r#gen` は書き下しでも `r#gen` のままです。
+`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は、関数・型・モジュール・フィールドの名前なら `r#gen` と書き、局所の名前なら `gen_` などの別の名前を使うよう案内します（局所の名前の `r#gen` は `E0103`。§4「Rust の予約語の raw の綴りは、局所の名前に使えない」）。`r#gen` は書き下しでも `r#gen` のままです。
 
 - 生成する `build/verus/` は `Ebykn.toml` の `edition`（既定は `2024`）でビルドするので、`r#` のない `gen` は生成コードの構文エラーになります。rustc の edition 2024 と同じく、書いた所で拒否します。
 - 書いた所とは、識別子の位置すべてです（関数・変数・引数・フィールド・型・モジュールの名前、パス、マクロの引数の中）。トークン列で判定するので、`stringify!(gen)` のように Rust 2024 でも書ける形も拒否します。
@@ -177,24 +194,36 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 #16 の調査では、関数の本体の中の式・文のマクロ（std のマクロと利用者の `macro_rules!`）は、展開した後も Verus が手で書いたコードと同じく検証します（`println!` 系と `write!` は Verus が拒否する）。derive・属性マクロが `verus!` の外に作る項目は検証されず、それを前提に呼び出し側が verified になりえます（#49）。依存クレートの derive と属性マクロは拒否せず、それが付いた項目を `ebykn verify` の前提の一覧に出します（#53 の提案の 3。下の「[依存クレートの derive と属性マクロ](#依存クレートの-derive-と属性マクロ)」）。
 
-今の develop（#16 の既定の許可リストと、#27 の既定 B）：
+今の develop（#16 の既定の許可リストと、#27 の拒否リスト）：
 
 - `.eyk` で呼べるマクロは固定の一覧だけです（`crates/ebykn_syntax/src/lib.rs` の `ALLOWED_MACROS`）。
-  - std の `vec`、`println`、`print`、`eprintln`、`eprint`、`format`、`format_args`、`write`、`writeln`、`panic`、`assert`、`assert_eq`、`assert_ne`、`debug_assert`、`debug_assert_eq`、`debug_assert_ne`、`unreachable`、`unimplemented`、`todo`、`matches`、`concat`、`stringify`、`line`、`column`、`module_path`、`include_str`、`include_bytes`、`compile_error`。裸の名前か、`std` / `core` / `alloc` から始まるパスで呼べます。
+  - std の `vec`、`println`、`print`、`eprintln`、`eprint`、`format`、`format_args`、`write`、`writeln`、`panic`、`assert`、`assert_eq`、`assert_ne`、`unreachable`、`unimplemented`、`todo`、`matches`、`concat`、`stringify`、`line`、`column`、`module_path`、`compile_error`、`cfg`。裸の名前か、`std` / `core` / `alloc` から始まるパスで呼べます。
   - vstd の `seq`、`set`、`map`。裸の名前だけで呼べます。
-- ほかのマクロの呼び出しは、どこに書いても拒否します。項目・文・式・パターン・型・trait / impl / extern の中、一覧のマクロの引数の中、属性の値（`#[doc = m!()]`）を含み、自作の `macro_rules!` の定義と `include!` も含みます。診断は一覧と、自作のマクロが要るならそれを使う関数を `unchecked fn` にすれば書けることを示します。
+- ほかのマクロの呼び出しは、どこに書いても拒否します。項目・文・式・パターン・型・trait / impl / extern の中、一覧のマクロの引数の中、属性の値（`#[doc = m!()]`）を含み、自作の `macro_rules!` の定義も含みます。診断は一覧と、自作のマクロが要るならそれを使う関数を `unchecked fn` にすれば書けることを示します。
 - `verus!` と、Verus・vstd の証明用・内部用のマクロ（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_MACROS`）は、Verus の構文として拒否します。それを取り込む・改名する `use` と、一覧の名前を外のクレートから取り込む・その名前に改名する `use`（`use foo::vec;`）も拒否します。
 - 属性は `#[path]`、`#[macro_use]`（`cfg_attr` の中を含む）を拒否し、`#[verus_verify]` / `#[verus_spec]` はパスの最後の名前で拒否します。
 - vstd のマクロの引数は Ebykn の式として読みます。std のマクロの引数と、中を読まない Rust の式・型・項目・where 句・境界・属性の値はトークン列のまま持ち、証明と Verus の構文に当たる形（`proof { }`、`assert(`・`reveal(`・`reveal_with_fuel(`・`hide(`・`assume(`・`admit(`・`assume_(`、`forall|`・`exists|`・`choose|`、`let ghost` / `let tracked`、`proof fn` / `exec fn`）と、呼べないマクロの呼び出しを字句的に探して拒否します。`fn` の直後の名前は宣言なので見ません。`&&&` / `|||` は探しません。
-- std のマクロの引数の中に権限の操作（Γ・R の名前への `*X`・`X@`・`X.free()`、`self@`、`take` / `put` / `borrow`、`leak X@`、`uses` / `gives` を持つ関数の呼び出し、`Ptr::new` などの権限を作る呼び出し）があれば `E0003` です。引数の中の属性（`#[..]`、`#![..]`）も、`cfg` に限らず `E0003` です。
-- `cfg!`（`std::cfg!` / `core::cfg!` を含む）と、関数の中に付けた `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は `E0003` です。関数の中とは、文・式・`let`・match の腕・構造体リテラルの欄・構造体パターンの欄（`@x` を含む）・引数・クロージャの引数・本体の中の項目と、本体の中で定義した構造体・列挙の欄と列挙子です。Ebykn が中を読む項目（`fn`、`struct`、`enum`、`trait`、`impl`、`type`、`const`。impl の中の `type` を含む）のジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。項目の中でも本体の中でも）も `E0003` です。検査は cfg を評価せずに引数の並びを読むためです。`union` や trait の中の `type` / `const` のように、中を読まずに Rust のまま渡す項目のジェネリクスの引数は通します（rustc が `verify` と素のビルドで同じに評価する）。cfg でない属性は書き下しに残します。構造体パターンの `..` と `@..` の前には、rustc と同じく属性を書けません（`E0001`）。書き下しは `..` に属性を付けられないためです（#95）。項目に付ける `#[cfg]` は通します（Verus が見なかった項目は `verify` で `unknown`、同じパスの重複は `E0003`）。
-- `env!` / `option_env!` / `file!`（`std::` / `core::` から始まるパスを含む）は、`unchecked fn` の本体の外では、どこに書いても `E0003` です。値が要るなら `unchecked fn` で包みます。`unchecked fn` の本体の中の入れ子の `fn` では、その `fn` 自身が `unchecked` かどうかで決め直します。
-- `line!` / `column!` / `module_path!` / `include_str!` / `include_bytes!` は、Verus の実行と素のビルドで同じ値になるので通します。ただし生成コードの位置とモジュールを指すので、`include_str!` で読むファイルは `build/verus/src/` から見たパス（`"../../../src/data.txt"` など）で書きます。
+- std のマクロの引数の中に権限の操作（Γ・R の名前への `*X`・`X@`・`X.free()`、`self@`、`take` / `put` / `borrow`、`leak X@`、`uses` / `gives` を持つ関数の呼び出し、`Ptr::new` などの権限を作る呼び出し）があれば `E0003` です。引数の中の属性は、`cfg`・`cfg_attr`・lint の属性（`allow`、`warn`、`deny`、`forbid`、`expect`）だけを許し、ほか（`#[inline]`、`#[derive(..)]`、属性マクロ、`#[clippy::..]` などのパスの属性）は `E0003` です。引数はトークンのまま持つので、derive や属性マクロが作るコードを見られないためです。許す属性も、書ける位置を引数のトークンで決めます。Ebykn がトークンから見分けられる、安定版の Rust が属性を許す位置は、`vec!` の要素と繰り返しの数の頭と、`{ .. }` の中の文・match の腕・構造体の欄の頭（先頭、`;`・`,`・`{ .. }` の後）の外側の属性だけで、ここだけに書けます。安定版の Rust はほかにも呼び出しやメソッドの引数などで属性を許しますが、トークンでは見分けないので `E0003` です。安定版の Rust が許さない位置（`assert!(#[allow(unused)] (a > 0))`、`assert_eq!(#[cfg(..)] a, b)`、`let x = #[..] a;` の初期値など）と、内側の属性 `#![..]`（`{ #![..] .. }` はブロック式の属性になる）を通すと、Verus の toolchain では通るので、verified なのに Verus なしのビルドが E0658 で落ちるためです（PR #59 の再確認）。位置は引数のトークンで決めるので、許す位置の式が代入・二項演算・型変換・範囲で始まるとき（`vec![#[allow(unused)] a + 1]`、`assert!({ #[allow(unused)] 0..a; true })`）は見分けられず、通ります（#130）。
+- 拒否リスト（`crates/ebykn_syntax/src/denylist.rs` の `DENYLIST`、#27）：検証したコードと配るコードを食い違わせる形を、一つの表で `E0001` にします。表の各項目は、壊す理由（診断の文言）と再現の例を持ち、`crates/ebykn_check/tests/denylist.rs` が、表のすべての項目について、再現の例と書ける位置の総当たりが拒否されることを確かめます。
+  - cfg：`verus_keep_ghost`、`verus_keep_ghost_body`、`verus_only`、`verus_verify_core`、`verus_no_vstd`（Verus が検証するときに自分で設定する。#16 の調査）、`debug_assertions`（検証の dev では有効、release のビルドでは無効）、`panic`（パニックの戦略は根になるクレートのプロファイルで決まり、`build/verus/Cargo.toml` の `panic = "abort"` は、そのクレートが根のときだけ効く）を条件に含む `cfg!(..)`（`std::cfg!` / `core::cfg!`）、`#[cfg(..)]` / `#![cfg(..)]`、`#[cfg_attr(条件, ..)]` を拒否します。`cfg_attr` は、中の `cfg(..)` に加えて条件そのものも見ます（`#[cfg_attr(verus_keep_ghost, derive(..))]` は Verus のときだけ impl を作る）。述語は `all` / `any` / `not` の入れ子の中まで識別子をすべて見ます（`feature = "x"` の値は文字列なので見ない。`r#` は外す）。トークン列で見るので、項目・本体・マクロの引数・属性の値・`unchecked fn` の本体のどこでも効きます（cfg には `unchecked fn` の例外を作らない）。
+  - マクロ：`env!` / `option_env!`（`ebykn verify` は Verus に `CARGO_TERM_COLOR=never` を渡し、`RUSTUP_TOOLCHAIN` は Verus の toolchain になる）、`file!`（検証では `src/lib.rs`、別のクレートから path で依存されると絶対パス）、`include!`（Ebykn が読まないコードを取り込む。#16 の調査の `assume(false)` の持ち込み）、`include_bytes!` / `include_str!`（読むファイルが Verus の実行とビルドで違いうる。`/proc/self/cmdline`、`/proc/self/environ` など）、`debug_assert!` / `debug_assert_eq!` / `debug_assert_ne!`（std の展開の中で `cfg(debug_assertions)` に届き、引数が検証では実行され、release のビルドでは実行されない）。裸の名前か `std::` / `core::` から始まるパスで、どこに書いても（本体・`const`・`static`・属性の値・マクロの引数の中も）拒否します。`include!` のほかは、`unchecked fn` の本体の中でだけ許します（本体は検査せず、`verify` が証明なしの前提として一覧に出す。入れ子の `fn` は自分の `unchecked` で決め直す）。
+  - `line!` / `column!` / `module_path!` は許します（生成コードの位置と、生成するモジュールのパス。Verus の実行と素のビルドで同じ値になる）。
+  - 拒否リストにない cfg（`test`、`feature`、`target_os` などの target 系、利用者が `--cfg` で付ける名前）は、関数の中・マクロの引数の中を含めて許します。ただし、Verus の検証と同じ設定（ホストの target、既定の feature、追加の `--cfg` なし、`test` なし）でビルドしたときだけ食い違いません。別の target・別の feature・`RUSTFLAGS` の `--cfg`・`cargo test` でのビルドは、検証したのと別のコードになります。
+  - そのため、クレートがこうした cfg に頼っていれば（項目・本体・マクロの引数・`cfg_attr` の条件のどこでも。`all()` / `any()` と `true` / `false` だけの述語は除く。`r#true` は名前として数える）、`ebykn verify` は前提の一覧に必ず 1 行出します。テキストでは `assumed cfg 名前, ..` の行、`--json` では `cfg_assumption`（`names` と `note`）、標準エラーには英日の文言で、「verified は、ホストの target・既定の feature・追加の `--cfg` なし・`test` なしで検証した結果。ほかの組み合わせのビルドと `cargo test` は検証していない」ことと、頼っている名前を出します（`tests/golden/cfg_allowed/`）。前提なので、verify の成否は変えません。
+  - これは #87（needs review、P0）の判断が出るまでの既定で、#87 の案 B の前半に当たります。`build` が違う組み合わせを拒否する部分（案 B の後半）は、#87 の判断の後にします。
+- 文と式の cfg：§6 の検査は cfg を評価しないので、次のものに付いた `#[cfg]`（`cfg_attr` の中の `cfg` を含む。`r#cfg` / `r#cfg_attr` の綴りも同じ）は `E0003` です（PR #59 のレビュー）。
+  - 権限の状態（Γ）を変える文・式・構造体リテラルの欄（`let n = q.free();`、権限を消費する呼び出し、`Ptr::new` で権限を作る `let`、配列とタプルの要素・呼び出しとメソッドの引数・欄の値の `q.free()` など）。消えると、§6 が見ないまま権限を捨てる・作る。前後で Γ を比べて決める。
+  - 発散する文・式・欄（`return`、`break`、`continue`。欄の値の `return` も）。消えると、§6 が到達しないと見た後ろのコードが実行される。
+- ジェネリクスの引数とパターンの cfg（#95）：Ebykn が中を読む項目（`fn`、`struct`、`enum`、`trait`、`impl`、`type`、`const`。impl の中の `type` を含む）のジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。項目の中でも本体の中でも）と、パターン（クロージャの引数、構造体パターンの欄と `@x`。`fn` の引数のパターンの中の欄も）に付けた `#[cfg(..)]` は `E0003` です（`fn` の引数そのものの `#[cfg]` は、下の「ほかの位置」のとおり書けます）。検査は cfg を評価せずに引数の並びを読み、パターンの名前（`@x` なら権限）を束縛するためです。`union` や trait の中の `type` / `const` のように、中を読まずに Rust のまま渡す項目のジェネリクスの引数は通します（rustc が `verify` と素のビルドで同じに評価する）。cfg でない属性は書き下しに残します。構造体パターンの `..` と `@..` の前には、rustc と同じく属性を書けません（`E0001`）。書き下しは `..` に属性を付けられないためです。トークンの検査が拒否リストの `E0001` にする属性には、`E0003` を重ねません。`E0001` になるのは、`cfg(述語)` の述語か、`cfg_attr(条件, ..)` の条件か並びの中の `cfg(..)` / `cfg_attr(..)` に拒否リストの名前がある属性です（判定は `crates/ebykn_syntax/src/denylist.rs` の `for_each_cfg_pred` の一つで、トークンの検査と `attr_denied` が共有します）。lint の名前（`#[cfg_attr(all(), allow(verus_keep_ghost))]`）のように述語でない所に名前を書いた属性は `E0001` にならないので、同じ並びの `#[cfg]` は `E0003` です。重ねないかどうかは属性ごとに決め、隣の属性では決めません。
+- 代入・二項演算・型変換の文（`x = e`、`x += e`、`*p = v`、`(*p).f = v`、`a == 0;`、`a as u64;`）には、cfg に限らずどの属性も付けられません（`E0003`）。構文解析器が文の属性を左の項に移す形で、安定版の Rust では書けません（`attributes on expressions are experimental`。Verus の toolchain では通るが、Verus なしのビルドで落ちる）。cfg で消える代入は、Verus も「removing an expression is not supported」で拒否します。
+- ほかの式の属性も、安定版の Rust が許す位置だけに書けます。許すのは、代入・二項演算・型変換でない文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数です。ほかの位置（`let x = #[allow(unused)] a;` の初期値、`if` の条件、`return` の値、`match` の対象と腕の本体、括弧の中、構造体リテラルの欄の値、クロージャの本体など）の式の属性は、cfg に限らず `E0003` です。安定版の Rust では `attributes on expressions are experimental`（E0658）になり、Verus の toolchain では通るので、verified なのに Verus なしのビルドが落ちるためです（PR #59 の再確認）。論理文脈（契約・`spec fn` の本体など）の式は Verus なしのビルドで消えるので対象外です。構造体リテラルの欄そのもの（`S { #[cfg(..)] b: 2 }`）と match の腕に付ける属性は、式の属性ではないので書けます（`crates/ebykn_check/tests/cfg_stmt.rs`）。
+- `take` / `put` / `leak` / 仕様の代入（`x@f = e`）には、どの属性も付けられません（属性を書き下さない）。仕様の代入の属性は、取り込んだ `verus_syn` が捨てていたので、トークンに戻して読みます（`vendor/verus_syn/src/stmt.rs` の `EBYKN:`。`verus_syn` の `printing` の feature の下にある）。
+- ほかの位置（`let`、項目、構造体の欄の定義、match の腕、引数の定義、呼び出し・ブロック・`if`・`while` の文、マクロの引数の中）の属性と、権限を操作も発散もしない式・欄の cfg は、書き下しにそのまま残します。`crates/ebykn_lower/tests/cfg_attrs.rs` が位置ごとに確かめ、`tests/golden/cfg_allowed/` が Verus で検証します。
 - 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）。外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ）は、項目に付けたものを前提の一覧に出し、ほかの位置のものを拒否します（下の「依存クレートの derive と属性マクロ」）。項目に付けた手続きマクロが健全な証明（`proof!{ reveal(..) }` など）を持ち込む経路は残ります（#16 の判断の案 X / 案 Y）。
 
 * 元の仕様：マクロの扱いを定めていない。§5 は Rust の文法を土台とする。
-* 根拠：#16（PR #15、#20、#26）、#27（PR #26、`tests/golden/cfg_in_body/`）、#53、#49。`assume_specification .. ensures false` や `admit()` が一つ紛れ込むだけで何でも verified になる（P0）。
-* 状態：判断待ちの既定（#53）。今の develop は上の許可リスト。cfg と `env!` などの拒否リストへの組み替え（#27）は実装中（PR #59）。
+* 根拠：#16（PR #15、#20、#26）、#27（PR #26、PR #59、`tests/golden/denylist/`、`tests/golden/cfg_allowed/`）、#53、#49、#87。`assume_specification .. ensures false` や `admit()` が一つ紛れ込むだけで何でも verified になる（P0）。
+* 状態：判断待ちの既定（#53、#87）。マクロは上の許可リスト、cfg とビルドで値の変わるマクロは上の拒否リスト（作者が決めた方針。#27）。derive と属性マクロは下の「依存クレートの derive と属性マクロ」（#49）。
 
 ### 依存クレートの derive と属性マクロ
 
@@ -215,7 +244,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
   - 内側の属性 `#![..]`（ファイルの先頭、`mod` の中）：上の Rust の組み込みの属性のうち、名前を覆い隠せないもの（`test`・`derive`・`global_allocator` を除く）だけです。依存クレートの属性マクロ、ツールの属性、`#![feature(..)]` は書けません。安定版の Rust は内側の属性マクロを許しませんが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で動くので、`verify` では内側の属性マクロが走ります（`mod m { #![evil::x] }` が一覧にない `impl` を足せる）。`#![feature(..)]` を拒否するのは、`#![feature(proc_macro_hygiene)]` で文・式の属性マクロも走るようになるためです。
   - 文・式・`let`・match の腕の外側の属性：内側と同じ組み込みの属性と、ツールの属性（`#[rustfmt::skip] let ..`）です。ここに付く属性マクロは、Verus でも E0658（`proc_macro_hygiene` は有効でない）で大きく失敗します。`E0001` は、`#![feature]` の拒否の後ろの二重の守りです。
 - `#[override]` は `override` が予約語なので構文解析が読めず（`E0001`）、`#[r#override]` は利用者が束縛した名前として前提に出します。
-- raw の綴り：予約語の raw の綴り（`r#unsafe`、`r#override`）は予約語とは別の名前で、利用者が束縛した名前として扱います（`#[r#unsafe(..)]` は組み込みの `unsafe(..)` の包みではない）。予約語でない名前の raw の綴り（`r#derive`、`r#cfg`、`r#repr`、`r#test`）は、素の名前と同じです（rustc と同じ）。組み込みの属性の名前を比べる検査（関数の中の `#[cfg]` の `E0003`、`#[repr]`、`#[test]` の `external` など）も、すべて raw の綴りを素の名前と同じに比べます（#122）。比べる関数は `Ident::is_name`・`Attr::is_builtin`・`macros::token_is_name` の 3 つで、ゲート `check-attr-names` は、3 つを通さない比較のうち 2 つの形を拒否します。`.is("名前")` と、1 行の中でトークンの識別子（同じ行の `Ident(x)` で束縛した `x` か、`.to_string()` で終わる式）と `"名前"` を `==` / `!=` で比べる形です（#132）。名前を変数で渡す `.is(name)`、名前を変数に入れてから比べる形、`matches!`・`match` の腕・`.eq(..)` での比較、括弧で包んだ `(i.to_string())`、前の行で束縛した `Ident(i)` の比較、改行をまたぐ `==` は捕まえません。これらの形は、raw の綴りのテストが落ちることで見つけます。
+- raw の綴り：予約語の raw の綴り（`r#unsafe`、`r#override`）は予約語とは別の名前で、利用者が束縛した名前として扱います（`#[r#unsafe(..)]` は組み込みの `unsafe(..)` の包みではない）。予約語でない名前の raw の綴り（`r#derive`、`r#cfg`、`r#repr`、`r#test`）は、素の名前と同じです（rustc と同じ）。組み込みの属性の名前を比べる検査（パターンとジェネリクスの引数の `#[cfg]` の `E0003`、権限を操作するか発散する文・式の `#[cfg]` の `E0003`、拒否リストの cfg の `E0001`、`#[repr]`、`#[test]` の `external` など）も、すべて raw の綴りを素の名前と同じに比べます（#122）。比べる関数は `Ident::is_name`・`Attr::is_builtin`・`macros::token_is_name` の 3 つで、ゲート `check-attr-names` は、3 つを通さない比較のうち 2 つの形を拒否します。`.is("名前")` と、1 行の中でトークンの識別子（同じ行の `Ident(x)` で束縛した `x` か、`.to_string()` で終わる式）と `"名前"` を `==` / `!=` で比べる形です（#132）。名前を変数で渡す `.is(name)`、名前を変数に入れてから比べる形、`matches!`・`match` の腕・`.eq(..)` での比較、括弧で包んだ `(i.to_string())`、前の行で束縛した `Ident(i)` の比較、改行をまたぐ `==` は捕まえません。これらの形は、raw の綴りのテストが落ちることで見つけます。
 
 * 元の仕様：マクロの扱いを定めていない。
 * 根拠：#49（PR #57）、#53。`tests/golden/external_macros/`（属性マクロを付けた `ensures r == 1` の関数が verified と出ても、Verus なしのビルドでは 0 を返す。前提の一覧に `macro` の行が出る）、`crates/ebykn_syntax/tests/macros.rs`（綴りの総当たり）、`crates/ebykn_check/tests/attr_positions.rs`（位置の拒否）、プローブ `external_impl_of_spec_trait.rs`・`std_derive_no_spec.rs`・`automatically_derived_body.rs`（OPEN.md の「M0 の実測」）。
@@ -590,19 +619,20 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 ### §10.1 仕様にないコード
 
-元の仕様の §10.1 の表にないコードです。元の仕様は、構文エラー、プロジェクトの誤り、未実装の機能、§6.4 の `&mut` の事後条件、ZST の `Ptr`、呼び出しで渡す領域に当たるコードを持ちません。
+元の仕様の §10.1 の表にないコードです。元の仕様は、構文エラー、プロジェクトの誤り、未実装の機能、§6.4 の `&mut` の事後条件、ZST の `Ptr`、呼び出しで渡す領域、局所の名前の raw の綴りに当たるコードを持ちません。
 
 | コード | 内容 | 元の仕様 | 根拠 | 状態 |
 | --- | --- | --- | --- | --- |
-| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文も、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
+| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文、拒否リスト（§5 の「マクロ」。#27）に当たる cfg とマクロも、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
+| `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |
 | `E0519` | 呼び出しで渡す領域の状態の誤り：移動した領域を使う、借りた領域か `self@x` を移動で渡す、`&` で借りた領域を `&mut` で渡す、同じ呼び出しで同じ領域を `&mut` か移動を含めて二度渡す（§5.2） | 同上 | #19 | 判断待ちの既定 |
 
-`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0517`〜`E0519` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
+`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0103` は字句の番号帯の続きです。`E0517`〜`E0519` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
 
 ### §10.1 位置の数え方
 

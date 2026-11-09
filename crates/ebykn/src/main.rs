@@ -330,12 +330,12 @@ fn verify(
     if opts.json {
         println!(
             "{}",
-            ebykn::verus::status_json(&shown, v.summary, &v.cheating, success)
+            ebykn::verus::status_json(&shown, v.summary, &v.cheating, &output.cfg_uses, success)
         );
     } else {
         print!(
             "{}",
-            ebykn::verus::status_text(&shown, v.summary, &v.cheating)
+            ebykn::verus::status_text(&shown, v.summary, &v.cheating, &output.cfg_uses)
         );
     }
     if let ebykn::verus::Summary::Stopped { errors } = v.summary {
@@ -391,6 +391,9 @@ fn verify(
             );
         }
         Cheating::Clean | Cheating::NotRun => {}
+    }
+    if let Some((en, ja)) = ebykn::verus::cfg_assumption_message(&output.cfg_uses) {
+        say(opts, &en, &ja);
     }
     if !unproven.is_empty() {
         say(
