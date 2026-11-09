@@ -3,3 +3,9 @@ name = "ebykn_syntax"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+# 構文解析器は OPEN-1 の既定どおり verus_syn のフォーク（vendor/、AGENTS.md「外部から取り込むコード」）。
+verus_syn = { path = "../../vendor/verus_syn", default-features = false, features = ["full", "parsing", "printing", "clone-impls"] }
+proc-macro2 = { version = "1.0.101", default-features = false, features = ["span-locations"] }
+quote = { version = "1.0.35", default-features = false }
