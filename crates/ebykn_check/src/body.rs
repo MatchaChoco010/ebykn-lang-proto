@@ -5,6 +5,7 @@
 //! `OPEN.md` に書いた（分岐の比べ方、`borrow` の借用の扱い、`gives` の戻し方など）。
 
 mod calls;
+mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -241,6 +242,13 @@ impl<'a> Walker<'a> {
         if !diverges {
             self.exit(e.span);
         }
+    }
+
+    /// 論理のブロック（`.eykp` の `lemma fn` の本体）。
+    pub fn logic_block(&mut self, b: &Block) {
+        let prev = std::mem::replace(&mut self.logic, true);
+        self.block(b);
+        self.logic = prev;
     }
 
     /// 論理の本体（`spec fn` の本体、`impl Invariant` の述語）。
@@ -671,6 +679,14 @@ impl<'a> Walker<'a> {
                 self.spec_assign(target);
                 let prev = std::mem::replace(&mut self.logic, true);
                 self.expr(value);
+                self.logic = prev;
+                false
+            }
+            StmtKind::Proof(p) => {
+                // 証明の文は論理の文脈で読む。`proof { }` の中の権限の扱いは、`.eykp` を検査する
+                // ときに決める（#67）。
+                let prev = std::mem::replace(&mut self.logic, true);
+                self.proof_stmt(p, s.span);
                 self.logic = prev;
                 false
             }
@@ -1106,7 +1122,12 @@ impl<'a> Walker<'a> {
                 d
             }
             ExprKind::Struct(lit) => self.struct_lit(e, lit),
-            ExprKind::Quant { binders, body, .. } => {
+            ExprKind::Quant {
+                binders,
+                triggers,
+                body,
+                ..
+            } => {
                 let prev = std::mem::replace(&mut self.logic, true);
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
@@ -1116,6 +1137,7 @@ impl<'a> Walker<'a> {
                         }
                     }
                 }
+                self.triggers(triggers);
                 self.expr(body);
                 self.logic = prev;
                 false
@@ -1152,8 +1174,9 @@ impl<'a> Walker<'a> {
                     && ebykn_syntax::reserved::is_call(kind)
                     && !self.locals.contains(&i.name)
                 {
-                    self.diags
-                        .push(e.span, crate::names::message(kind, &i.name, &i.name));
+                    // 検査するのは今は `.eyk` だけ（`.eykp` の検査は #67）。
+                    let m = crate::names::message(kind, &i.name, &i.name, false);
+                    self.diags.push(e.span, m);
                 }
                 false
             }

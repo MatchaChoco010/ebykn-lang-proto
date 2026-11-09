@@ -390,6 +390,7 @@ impl Index {
                 ItemKind::Mod(m) => (&m.ident, DefKind::Module),
                 ItemKind::Const(c) => (&c.ident, DefKind::Other),
                 ItemKind::Static(s) => (&s.ident, DefKind::Other),
+                ItemKind::LemmaGroup(g) => (&g.ident, DefKind::Other),
                 ItemKind::Use(t) => {
                     scope.imports.extend(parse_use(&t.tokens));
                     continue;

@@ -13,13 +13,20 @@ fn fill(t: &str, name: &str) -> String {
     t.replace("NAME", name)
 }
 
-/// 少なくとも一つ E0001 が出る（ほかのコードが混ざってもよい）。
+/// 拒否されることを確かめる（ほかのコードが混ざってもよい）。証明の構文の関数は E0303（`.eyk` の
+/// 証明構文）。ただし `reveal_with_fuel`（Verus の書き方）と、`reveal::<T>(..)` のように構文解析器
+/// （Verus の構文）が読めない綴りは E0001 になる。
 #[track_caller]
-fn rejected(src: &str) {
+fn rejected(src: &str, kind: ReservedKind) {
+    let want: &[&str] = if kind == ReservedKind::ProofCall {
+        &["E0303", "E0001"]
+    } else {
+        &["E0001"]
+    };
     let c = codes(src);
     assert!(
-        c.iter().any(|c| c == "E0001"),
-        "拒否されない: {c:?}\n---\n{src}"
+        c.iter().any(|c| want.contains(&c.as_str())),
+        "{want:?} で拒否されない: {c:?}\n---\n{src}"
     );
 }
 
@@ -120,7 +127,7 @@ fn every_reserved_name_is_rejected_in_every_spelling() {
             } else {
                 fill(t, name)
             };
-            rejected(&src);
+            rejected(&src, kind);
             tried += 1;
         }
     }
