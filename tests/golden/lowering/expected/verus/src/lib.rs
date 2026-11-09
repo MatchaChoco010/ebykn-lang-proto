@@ -60,7 +60,7 @@ impl Pool {
     }
 
     fn add(&mut self, v: u64) -> (p: Ptr < Node >)
-    ensures final(self).nodes@.contains(p), final(self).nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), {
+    ensures final(self).nodes@.contains(p), final(self).nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), final(self).order@.len() == old(self).order@.len() + 1, {
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
             self.nodes.borrow_mut().insert(__eyk_perm_p);
@@ -102,6 +102,14 @@ ensures final(r).contains(p), final(r).index(p) == old(r).index(p), {
     proof {
         r.insert(__eyk_perm_p);
     }
+}
+
+pub fn bump(x: &mut u64) -> u64
+requires *old(x) < 100,
+returns *old(x), {
+    let y = *x;
+    *x = y + 1;
+    y
 }
 
 pub fn total(v: Vec < u64 >) -> u64 {

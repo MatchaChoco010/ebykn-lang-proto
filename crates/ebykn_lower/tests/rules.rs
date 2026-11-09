@@ -111,6 +111,12 @@ fn ensures_of_mut_parameters_are_written_as_is() {
         &src,
         "ensures final(self).r@.index(p).val == 1, old(self).r@.index(p).val == 0, final(self).q@.len() == 0,",
     );
+    // `old(x@f)` / `final(x@f)` は `old(x).f@` / `final(x).f@`（Verus の `old` は `&mut` の引数そのもの
+    // にしか付けられない）。
+    let src = format!(
+        "{PRE}impl P {{ fn f(&mut self) ensures old(self@q).len() <= final(self@q).len(), {{ }} }}"
+    );
+    has(&src, "ensures old(self).q@.len() <= final(self).q@.len(),");
     let src = format!(
         "{PRE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures final(r)[p].val == old(r)[p].val, {{ }}"
     );

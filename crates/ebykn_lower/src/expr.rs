@@ -562,17 +562,31 @@ impl Cx<'_> {
     }
 
     fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr]) -> String {
-        // `old(*p)` / `final(*p)` は `old(p@).value()` / `final(p@).value()`。
         if let ExprKind::Path { qself: None, path } = &func.kind
             && let Some(f) = path.as_ident()
             && (f.is("old") || f.is("final"))
             && let [arg] = args
-            && let ExprKind::Unary {
+        {
+            // `old(*p)` / `final(*p)` は `old(p@).value()` / `final(p@).value()`。
+            if let ExprKind::Unary {
                 op: UnOp::Deref, ..
             } = &arg.kind
-            && let Some(x) = self.facts.derefs.get(&SpanKey::from(arg.span)).cloned()
-        {
-            return format!("{}({}).value()", f.name, perm_var(&x));
+                && let Some(x) = self.facts.derefs.get(&SpanKey::from(arg.span)).cloned()
+            {
+                return format!("{}({}).value()", f.name, perm_var(&x));
+            }
+            // `old(x@f)` / `final(x@f)` は `old(x).f@` / `final(x).f@`（`old` / `final` は `&mut` の
+            // 引数そのものにしか付けられない。`self@f` は `self.f@` なので、外に出す）。
+            if matches!(arg.kind, ExprKind::Erased { .. }) {
+                let mut fields = Vec::new();
+                let mut root = arg;
+                while let ExprKind::Erased { base, field } = &root.kind {
+                    fields.push(format!(".{}@", ident(field)));
+                    root = base;
+                }
+                fields.reverse();
+                return format!("{}({}){}", f.name, self.expr(root), fields.concat());
+            }
         }
         let f = self.expr(func);
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();

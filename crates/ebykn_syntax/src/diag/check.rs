@@ -419,6 +419,12 @@ pub enum CheckMsg {
     ShadowHeld {
         name: String,
     },
+    /// 契約の式で、権限を持つ名前 `name` を量化子・クロージャ・パターンで束縛し直した中の
+    /// `p@` / `*p`（`written`）。書き下しは外側の引数の権限を指す（#10 のレビュー）。
+    PermOfRebound {
+        written: String,
+        name: String,
+    },
 
     // E0508
     WriteShared {
@@ -509,7 +515,7 @@ impl CheckMsg {
             PermNotOwned { .. } | UsesArgNotVar { .. } => Code::E0504,
             PermLeft { .. } | PermDiscarded => Code::E0505,
             AssignHeld { .. } => Code::E0506,
-            ShadowHeld { .. } => Code::E0507,
+            ShadowHeld { .. } | PermOfRebound { .. } => Code::E0507,
             WriteShared { .. } => Code::E0508,
             ConsumeBorrowed { .. } => Code::E0509,
             BranchMismatch { .. } => Code::E0510,
@@ -751,6 +757,12 @@ impl CheckMsg {
             (ShadowHeld { name }, Ja) => format!(
                 "権限 `{name}@` を持っている間は、`{name}` を束縛し直せません"
             ),
+            (PermOfRebound { written, name }, En) => format!(
+                "`{written}` refers to the permission of the parameter `{name}`, but `{name}` is bound again around it (by a quantifier, closure, pattern or `let`); give the bound variable another name"
+            ),
+            (PermOfRebound { written, name }, Ja) => format!(
+                "`{written}` は引数 `{name}` の権限を指しますが、その外側で `{name}` を束縛し直しています（量化子、クロージャ、パターン、`let`）。束縛する変数の名前を変えます"
+            ),
 
             (WriteShared { name }, En) => format!(
                 "cannot write through `{name}` because the permission `{name}@` is only borrowed (shared)"
@@ -865,7 +877,7 @@ impl CheckMsg {
                     None => format!("`{written}` is a `&mut` argument"),
                 };
                 format!(
-                    "{what}, so `ensures` must say which value it means: write `final({written})` for the value after the call or `old({written})` for the value at entry"
+                    "{what}, so a postcondition (`ensures` / `returns`) must say which value it means: write `final({written})` for the value after the call or `old({written})` for the value at entry"
                 )
             }
             (BareMutInEnsures { written, perm }, Ja) => {
@@ -874,7 +886,7 @@ impl CheckMsg {
                     None => format!("`{written}` は `&mut` の引数なので"),
                 };
                 format!(
-                    "{what}、`ensures` ではどちらの値かを書きます。呼び出しの後の値なら `final({written})`、入口の値なら `old({written})` と書きます"
+                    "{what}、事後条件（`ensures` / `returns`）ではどちらの値かを書きます。呼び出しの後の値なら `final({written})`、入口の値なら `old({written})` と書きます"
                 )
             }
 

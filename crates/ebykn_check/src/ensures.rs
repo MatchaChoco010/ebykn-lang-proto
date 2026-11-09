@@ -1,15 +1,23 @@
-//! `ensures` の中の裸の `&mut` 引数（#10 の決定：案 B）。
+//! 契約の式の中の、`&mut` 引数と権限の参照（#10 の決定：案 B）。
 //!
-//! Verus と同じく、`ensures` で `&mut` 引数を `old(..)` も `final(..)` も付けずに書くことを
-//! 許さない。どちらの値か（入口か、呼び出しの後か）を書かせる。対象は、`&mut self`
-//! （`self: &mut Self` を含む）、`x: &mut T`、`uses r: &mut Region<..>` の `r` と、
-//! `uses &mut p@` の権限（`p@` と、権限を通した読み `*p`）。`requires` の裸の `x` は入口の値
-//! なので見ない（Verus と同じ）。§6.4 の展開が足す `ensures P[final(x)]` は利用者の式では
-//! ないので、ここには来ない。
+//! 1. 事後条件（`ensures` と `returns`）で `&mut` 引数を `old(..)` も `final(..)` も付けずに書く
+//!    ことを、Verus と同じく許さない（`E0004`）。どちらの値か（入口か、呼び出しの後か）を書かせる。
+//!    対象は、`&mut self`（`self: &mut Self` を含む）、`x: &mut T`、`uses r: &mut Region<..>` の
+//!    `r` と、`uses &mut p@` の権限（`p@` と、権限を通した読み `*p`）。`requires` の裸の `x` は
+//!    入口の値なので見ない（Verus と同じ）。§6.4 の展開が足す `ensures P[final(x)]` は利用者の式
+//!    ではないので、ここには来ない。量化子・クロージャの引数、`match` の腕、`let` のパターンで
+//!    束縛し直した `&mut` 引数の名前は、その中では束縛した値を指すので報告しない。
+//! 2. 権限を持つ名前 `p`（`uses` の権限と、事後条件の `gives` の権限）を量化子などで束縛し直した
+//!    中の `p@` / `*p` は、どの句でも `E0507` にする。書き下しは束縛に従わず、`p@` / `*p` をいつも
+//!    外側の引数の権限にするので、束縛した `p` の権限とは読めない（`old` / `final` の下でも同じ）。
 //!
-//! 量化子・クロージャの引数、`match` の腕、`let` のパターンで束縛した同じ名前は外の引数を
-//! 隠すので、報告しない。中を読まないマクロの引数（トークン列）は見ない。そこに裸の `&mut`
-//! 引数があれば Verus が同じ理由で拒む（黙っては誤らない）。
+//! 中を読まないマクロの引数（トークン列）も、`&mut` 引数の名前を探して `E0004` にする（権限の
+//! `p@` / `*p` は、トークン列の中にあれば本体の検査（[`crate::body`]）が `E0003` にする）。引数として
+//! 参照を丸ごと渡す形（`matches!(g(x), 3)`）は、裸のまま Verus に渡ると入口の値と読まれ、黙って
+//! 誤るため。トークン列の中の束縛（クロージャの引数など）は読まないので、そこで束縛し直した名前も
+//! 引数として報告する（その形はマクロの外で書く）。`old(..)` / `final(..)` の括弧の中では
+//! `&mut` 引数を報告しない。`.` / `::` の直後の名前（フィールドやパスの途中）と、直後に `:` が
+//! 続く名前は見ない。位置はマクロ全体にする。
 
 use std::collections::BTreeSet;
 
@@ -17,17 +25,16 @@ use ebykn_syntax::ast::{
     self, Block, ExprKind, FieldPat, Param, PatKind, PermMode, StmtKind, TypeKind, UnOp, UsesItem,
 };
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message};
+use ebykn_syntax::span::Span;
 
 use crate::body::ident_of;
 use crate::index::pat_ident;
 
-/// 関数の `ensures` を検査し、裸の `&mut` 引数を E0004 にする。
+/// 関数の契約を検査する。
 pub fn check(sig: &ast::Signature, contract: &ast::Contract, out: &mut Vec<Diagnostic>) {
-    let mut v = Visitor {
-        muts: BTreeSet::new(),
-        perms: BTreeSet::new(),
-        out,
-    };
+    let mut muts = BTreeSet::new();
+    let mut mut_perms = BTreeSet::new();
+    let mut perms = BTreeSet::new();
     for p in &sig.params {
         match p {
             Param::Receiver {
@@ -35,14 +42,14 @@ pub fn check(sig: &ast::Signature, contract: &ast::Contract, out: &mut Vec<Diagn
                 mutable: true,
                 ..
             } => {
-                v.muts.insert("self".into());
+                muts.insert("self".to_string());
             }
             Param::Receiver { ty: Some(ty), .. } if is_mut_ref(ty) => {
-                v.muts.insert("self".into());
+                muts.insert("self".to_string());
             }
             Param::Typed { pat, ty, .. } if is_mut_ref(ty) => {
                 if let Some(i) = pat_ident(pat) {
-                    v.muts.insert(i.name.clone());
+                    muts.insert(i.name.clone());
                 }
             }
             _ => {}
@@ -51,23 +58,46 @@ pub fn check(sig: &ast::Signature, contract: &ast::Contract, out: &mut Vec<Diagn
     for u in contract.uses() {
         match u {
             UsesItem::Named { ident, ty, .. } if is_mut_ref(ty) => {
-                v.muts.insert(ident.name.clone());
+                muts.insert(ident.name.clone());
             }
-            UsesItem::Perm {
-                mode: PermMode::Mut,
-                ident,
-                ..
-            } => {
-                v.perms.insert(ident.name.clone());
+            UsesItem::Perm { mode, ident, .. } => {
+                perms.insert(ident.name.clone());
+                if *mode == PermMode::Mut {
+                    mut_perms.insert(ident.name.clone());
+                }
             }
             _ => {}
         }
     }
-    if v.muts.is_empty() && v.perms.is_empty() {
-        return;
-    }
-    for e in contract.ensures() {
-        v.expr(e);
+    let gives: BTreeSet<String> = contract.gives().map(|g| g.name.clone()).collect();
+    for c in &contract.clauses {
+        let (es, post): (&[ast::Expr], bool) = match &c.kind {
+            ast::ClauseKind::Ensures(es) => (es, true),
+            ast::ClauseKind::Returns(e) => (std::slice::from_ref(e), true),
+            ast::ClauseKind::Requires(es) | ast::ClauseKind::Decreases(es) => (es, false),
+            _ => continue,
+        };
+        let mut v = Visitor {
+            post,
+            muts: if post { muts.clone() } else { BTreeSet::new() },
+            mut_perms: if post {
+                mut_perms.clone()
+            } else {
+                BTreeSet::new()
+            },
+            perms: if post {
+                perms.union(&gives).cloned().collect()
+            } else {
+                perms.clone()
+            },
+            rebound: BTreeSet::new(),
+            at: false,
+            out,
+        };
+        if v.muts.is_empty() && v.perms.is_empty() {
+            continue;
+        }
+        v.exprs(es);
     }
 }
 
@@ -76,30 +106,78 @@ fn is_mut_ref(ty: &ast::Type) -> bool {
 }
 
 struct Visitor<'o> {
-    /// `&mut` の引数（`self` を含む）と `uses r: &mut Region<..>` の `r`。
+    /// 事後条件（`ensures` / `returns`）か。
+    post: bool,
+    /// 事後条件で `old` / `final` が要る `&mut` の引数（`self` を含む）と `uses r: &mut Region<..>`
+    /// の `r`。束縛し直すと外す。
     muts: BTreeSet<String>,
-    /// `uses &mut p@` の `p`。
+    /// 事後条件で `old` / `final` が要る `uses &mut p@` の `p`。
+    mut_perms: BTreeSet<String>,
+    /// 権限を持つ名前（束縛し直しても外さない）。
     perms: BTreeSet<String>,
+    /// 束縛し直した、権限を持つ名前。
+    rebound: BTreeSet<String>,
+    /// `old(..)` / `final(..)` の下か。
+    at: bool,
     out: &'o mut Vec<Diagnostic>,
 }
 
+/// `old(e)` / `final(e)` なら `e`。
+fn old_or_final(e: &ast::Expr) -> Option<&ast::Expr> {
+    match &e.kind {
+        ExprKind::Call { func, args } if args.len() == 1 => match &func.kind {
+            ExprKind::Path { qself: None, path }
+                if path
+                    .as_ident()
+                    .is_some_and(|i| i.is("old") || i.is("final")) =>
+            {
+                Some(&args[0])
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 impl Visitor<'_> {
-    fn report(&mut self, span: ebykn_syntax::span::Span, written: String, perm: Option<String>) {
-        self.out.push(Diagnostic::new(
-            span,
-            Message::Check(CheckMsg::BareMutInEnsures { written, perm }),
-        ));
+    fn push(&mut self, span: Span, m: CheckMsg) {
+        self.out.push(Diagnostic::new(span, Message::Check(m)));
     }
 
-    /// `f` の中だけ、`names` を隠す。
+    fn bare(&mut self, span: Span, written: String, perm: Option<String>) {
+        self.push(span, CheckMsg::BareMutInEnsures { written, perm });
+    }
+
+    /// `p@` / `*p` の参照（`written` は書いた形）。
+    fn perm_ref(&mut self, span: Span, p: &str, written: String) {
+        if self.rebound.contains(p) {
+            self.push(
+                span,
+                CheckMsg::PermOfRebound {
+                    written,
+                    name: p.to_string(),
+                },
+            );
+        } else if self.post && !self.at && self.mut_perms.contains(p) {
+            self.bare(span, written, Some(p.to_string()));
+        }
+    }
+
+    /// `f` の中だけ、`names` を束縛し直したものとして扱う。
     fn shadowed(&mut self, names: &BTreeSet<String>, f: impl FnOnce(&mut Self)) {
-        let saved = (self.muts.clone(), self.perms.clone());
+        let saved = (self.muts.clone(), self.rebound.clone());
+        self.rebind(names);
+        f(self);
+        (self.muts, self.rebound) = saved;
+    }
+
+    fn rebind(&mut self, names: &BTreeSet<String>) {
         for n in names {
             self.muts.remove(n);
-            self.perms.remove(n);
+            if self.perms.contains(n) {
+                self.rebound.insert(n.clone());
+            }
         }
-        f(self);
-        (self.muts, self.perms) = saved;
     }
 
     fn exprs(&mut self, es: &[ast::Expr]) {
@@ -109,22 +187,26 @@ impl Visitor<'_> {
     }
 
     fn expr(&mut self, e: &ast::Expr) {
-        match &e.kind {
+        if let Some(arg) = old_or_final(e) {
             // `old(e)` / `final(e)` の下は、どちらの値かが書いてある。
-            ExprKind::Call { func, args }
-                if args.len() == 1
-                    && matches!(&func.kind, ExprKind::Path { qself: None, path }
-                        if path.as_ident().is_some_and(|i| i.is("old") || i.is("final"))) => {}
+            let prev = std::mem::replace(&mut self.at, true);
+            self.expr(arg);
+            self.at = prev;
+            return;
+        }
+        match &e.kind {
             ExprKind::Path { qself: None, path } => {
                 if let Some(i) = path.as_ident()
+                    && self.post
+                    && !self.at
                     && self.muts.contains(&i.name)
                 {
-                    self.report(e.span, i.name.clone(), None);
+                    self.bare(e.span, i.name.clone(), None);
                 }
             }
             ExprKind::Perm(x) => {
                 if self.perms.contains(&x.name) {
-                    self.report(e.span, format!("{}@", x.name), Some(x.name.clone()));
+                    self.perm_ref(e.span, &x.name, format!("{}@", x.name));
                 }
             }
             ExprKind::Unary {
@@ -132,7 +214,7 @@ impl Visitor<'_> {
                 expr,
             } if ident_of(expr).is_some_and(|x| self.perms.contains(&x.name)) => {
                 let x = ident_of(expr).expect("ident").name.clone();
-                self.report(e.span, format!("*{x}"), Some(x));
+                self.perm_ref(e.span, &x, format!("*{x}"));
             }
             ExprKind::Array(es) | ExprKind::Tuple(es) => self.exprs(es),
             ExprKind::Repeat { expr, len } => {
@@ -220,7 +302,7 @@ impl Visitor<'_> {
                         self.expr(x);
                     }
                 }
-                ast::MacroArgs::Tokens => {}
+                ast::MacroArgs::Tokens => self.tokens(m.tokens.clone(), m.span),
             },
             ExprKind::Range { start, end, .. } => {
                 for x in [start, end].into_iter().flatten() {
@@ -247,15 +329,17 @@ impl Visitor<'_> {
             }
             ExprKind::AndOr { exprs, .. } => self.exprs(exprs),
             ExprKind::Borrow { region, body, .. } => {
-                if let ast::Region::SelfField { self_span, .. } = &region.region
-                    && self.muts.contains("self")
-                {
-                    self.report(*self_span, "self".into(), None);
-                }
-                if let ast::Region::Var(r) = &region.region
-                    && self.muts.contains(&r.name)
-                {
-                    self.report(r.span, r.name.clone(), None);
+                if self.post && !self.at {
+                    if let ast::Region::SelfField { self_span, .. } = &region.region
+                        && self.muts.contains("self")
+                    {
+                        self.bare(*self_span, "self".into(), None);
+                    }
+                    if let ast::Region::Var(r) = &region.region
+                        && self.muts.contains(&r.name)
+                    {
+                        self.bare(r.span, r.name.clone(), None);
+                    }
                 }
                 self.expr(&region.index);
                 self.block(body);
@@ -269,7 +353,7 @@ impl Visitor<'_> {
     }
 
     fn block(&mut self, b: &Block) {
-        let saved = (self.muts.clone(), self.perms.clone());
+        let saved = (self.muts.clone(), self.rebound.clone());
         for s in &b.stmts {
             match &s.kind {
                 StmtKind::Let(l) => {
@@ -281,10 +365,7 @@ impl Visitor<'_> {
                     }
                     let mut names = BTreeSet::new();
                     pat_names(&l.pat, &mut names);
-                    for n in names {
-                        self.muts.remove(&n);
-                        self.perms.remove(&n);
-                    }
+                    self.rebind(&names);
                 }
                 StmtKind::Expr { expr, .. } => self.expr(expr),
                 StmtKind::SpecAssign { target, value } => {
@@ -298,7 +379,48 @@ impl Visitor<'_> {
                 | StmtKind::Leak(_) => {}
             }
         }
-        (self.muts, self.perms) = saved;
+        (self.muts, self.rebound) = saved;
+    }
+
+    /// 中を読まないマクロの引数。位置はマクロ全体にする。
+    fn tokens(&mut self, ts: proc_macro2::TokenStream, span: Span) {
+        use proc_macro2::{Delimiter, TokenTree};
+        let tts: Vec<TokenTree> = ts.into_iter().collect();
+        let punct = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
+        let mut i = 0;
+        while i < tts.len() {
+            match &tts[i] {
+                TokenTree::Group(g) => self.tokens(g.stream(), span),
+                TokenTree::Ident(id) => {
+                    let name = id.to_string();
+                    let after_dot =
+                        i > 0 && (punct(tts.get(i - 1), '.') || punct(tts.get(i - 1), ':'));
+                    let path_head = punct(tts.get(i + 1), ':');
+                    let is_at = (name == "old" || name == "final")
+                        && matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis);
+                    if is_at {
+                        // `old(..)` / `final(..)` の中：`&mut` 引数は書いてよい。
+                        let prev = std::mem::replace(&mut self.at, true);
+                        if let Some(TokenTree::Group(g)) = tts.get(i + 1) {
+                            self.tokens(g.stream(), span);
+                        }
+                        self.at = prev;
+                        i += 2;
+                        continue;
+                    }
+                    if !after_dot
+                        && !path_head
+                        && self.post
+                        && !self.at
+                        && self.muts.contains(&name)
+                    {
+                        self.bare(span, name.clone(), None);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
     }
 }
 

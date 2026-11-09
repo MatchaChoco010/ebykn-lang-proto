@@ -21,16 +21,41 @@ impl Log {
         ensures self@order.len() > 0, self@nodes[p].val == 0,
     { }
 
-    // `final(..)` / `old(..)` の下と、束縛し直した名前は通す。
+    // `final(..)` / `old(..)` の下は通す。
     fn ok(&mut self, p: Ptr<Node>)
         ensures final(self).view() == old(self).view().push(p), final(self)@nodes[p].val == 0,
-            forall self: int, self >= 0,
+            old(self@order).len() <= final(self@order).len(),
     { }
 }
 
 pub fn set(x: &mut u64, p: Ptr<Node>) uses &mut p@
     requires *x == 0, p@.is_init(),
     ensures *x == 1, p@.is_init(), (*p).val == 1,
+{ }
+
+// 束縛し直した `&mut` 引数の名前は、その中では束縛した値を指すので通す。
+pub fn rebind(x: &mut u64, s: Seq<u64>)
+    ensures forall x: u64, x >= 0, s.map(|i: int, x: u64| x) == s,
+{ }
+
+// 権限を持つ名前を束縛し直した中の `p@` / `*p` は、`old` / `final` の下でも E0507（書き下しは外側の
+// `p` の権限を指す）。
+pub fn rebound(p: Ptr<Node>, s: Seq<Ptr<Node>>) uses &mut p@
+    requires p@.is_init(), s.contains(p), (*p).val == 0,
+    ensures final(p@).is_init(), forall p in s, p@ == old(p@),
+{ }
+
+spec fn get(y: &mut u64) -> u64 = *y;
+
+// `returns` も事後条件。
+pub fn ret(x: &mut u64) -> u64
+    requires *x == 3,
+    returns get(x)
+{ 3 }
+
+// 中を読まないマクロの引数に参照を丸ごと渡す形。
+pub fn in_macro(x: &mut u64)
+    ensures matches!(get(x), 3), matches!(get(final(x)), 3),
 { }
 
 pub fn region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>

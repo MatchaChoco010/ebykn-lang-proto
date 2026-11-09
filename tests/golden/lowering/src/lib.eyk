@@ -1,6 +1,6 @@
 // 書き下し（仕様 §7.3、§7.2）の形を一通り使う例。stack にない形（`*p` の読み書き、`uses &mut p@` /
 // `uses &p@`、`gives`、`borrow` / `borrow mut`、領域変数、純粋関数、本体のない `lemma fn`、
-// `unchecked fn`、`impl View`、ループ句、量化子、`ensures` の `final(..)` / `old(..)`）を書き下し、生成した
+// `unchecked fn`、`impl View`、ループ句、量化子、`ensures` と `returns` の `final(..)` / `old(..)`）を書き下し、生成した
 // Verus がそのまま検証を通ることを CI で確かめる（`expected/status.txt`）。`ensures` の `&mut` 引数は
 // `final(..)`（呼び出しの後）か `old(..)`（入口）で書く（#10）。
 pub struct Node { pub val: u64, pub next: Option<Ptr<Node>> }
@@ -52,6 +52,7 @@ impl Pool {
     fn add(&mut self, v: u64) -> (p: Ptr<Node>)
         ensures final(self)@nodes.contains(p), final(self)@nodes[p].val == v,
             final(self).view() == old(self).view().push(p),
+            final(self@order).len() == old(self@order).len() + 1,
     {
         let p = Ptr::new(Node { val: v, next: None });
         put self@nodes[p];
@@ -79,6 +80,15 @@ pub fn with_region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
 {
     take r[p];
     put r[p];
+}
+
+pub fn bump(x: &mut u64) -> u64
+    requires *old(x) < 100,
+    returns *old(x)
+{
+    let y = *x;
+    *x = y + 1;
+    y
 }
 
 pub fn total(v: Vec<u64>) -> u64 {
