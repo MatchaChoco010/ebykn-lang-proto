@@ -3,8 +3,8 @@
 //! `build/verus/` を Verus なしの cargo と `ebykn build` でビルドする（OPEN-11、#80）。どちらも成功を期待し、
 //! `expected/build-error.txt` があるケースだけは、両方が失敗し、その各行がビルドの出力に含まれることを
 //! 期待する（検証は通りビルドで止まるもの。#12）。`expected/ebykn-build-error.txt` があるケースは、`ebykn build`
-//! だけがその行で失敗することを期待する（`check` で止まるもの）。最後に、Verus が要るので `#[ignore]` にしたテスト（[`IGNORED`]。#37 の
-//! `--no-cheating` の照合の再現）を `--ignored` で走らせ、どれも実際に走って通ったことを確かめる。
+//! だけがその行で失敗することを期待する（`check` で止まるもの）。最後に、Verus が要るので `#[ignore]` にした
+//! 結合テスト（[`IGNORED`]）を `--ignored` で走らせ、どれも実際に走って通ったことを確かめる。
 //!
 //! Verus が要るので `gates` には入れず、CI の Verus のジョブで走らせる。依存の版は、ケースの
 //! `expected/verus/Cargo.lock` を `build/verus/` に写して固定する。
@@ -501,49 +501,146 @@ mod tests {
         assert!(!ran_one(&failed));
     }
 
-    #[test]
-    fn ignored_tests_exist() {
-        for (_, target, name) in IGNORED {
-            let src = real(&format!("crates/ebykn/tests/{target}.rs"));
-            assert!(src.contains(&format!("fn {name}()")), "{target}::{name}");
-            assert!(src.contains("#[ignore"), "{target}");
-        }
+    /// 追跡している `.rs`（`vendor/` を除く）の、パスと中身。
+    fn tracked_sources() -> Vec<(String, String)> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        crate::list_files(root)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.ends_with(".rs") && !f.starts_with("vendor/"))
+            .map(|f| {
+                let text = real(&f);
+                (f, text)
+            })
+            .collect()
     }
 
-    #[test]
-    fn every_ignored_test_is_listed() {
-        // IGNORED にない `#[ignore]` のテストは、どこでも走らない。
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let files = crate::list_files(root).unwrap();
+    /// `#[ignore]` の付いたテストを（パッケージ、テストのターゲット、テストの名前）で集める。
+    ///
+    /// `IGNORED` は `cargo test -p <パッケージ> --test <ターゲット>` で走らせるので、走らせられるのは
+    /// `crates/<パッケージ>/tests/<ターゲット>.rs` の中のものだけ。ほかの場所（`src/` の単体テスト、xtask、
+    /// `tests/` の下のディレクトリ）の `#[ignore]` と、後に `fn` を読めない `#[ignore]` は誤りにする。
+    fn ignored_tests(files: &[(String, String)]) -> Result<Vec<(String, String, String)>, String> {
         let mut found = Vec::new();
-        for f in &files {
-            let Some(target) = f
-                .strip_prefix("crates/ebykn/tests/")
-                .and_then(|t| t.strip_suffix(".rs"))
-            else {
-                continue;
-            };
-            let src = real(f);
-            let lines: Vec<&str> = src.lines().collect();
+        let mut errors = Vec::new();
+        for (path, text) in files {
+            let place = path
+                .strip_prefix("crates/")
+                .and_then(|p| p.split_once("/tests/"))
+                .and_then(|(pkg, t)| Some((pkg, t.strip_suffix(".rs")?)))
+                .filter(|(pkg, t)| !pkg.contains('/') && !t.contains('/'));
+            let lines: Vec<&str> = text.lines().collect();
             for (i, l) in lines.iter().enumerate() {
                 if !l.trim_start().starts_with("#[ignore") {
                     continue;
                 }
+                let at = format!("{path}:{}", i + 1);
+                let Some((pkg, target)) = place else {
+                    errors.push(format!("{at}: IGNORED から走らせられない場所の #[ignore]"));
+                    continue;
+                };
+                // 後に続く属性・コメント・空行を飛ばした最初の行が `fn 名前(` であること。
                 let name = lines[i + 1..]
                     .iter()
-                    .find_map(|l| l.trim_start().strip_prefix("fn "))
-                    .and_then(|r| r.split('(').next())
-                    .unwrap_or_else(|| panic!("{f}:{}: #[ignore] の後に fn がない", i + 1));
-                found.push((target.to_string(), name.to_string()));
+                    .map(|l| l.trim_start())
+                    .find(|l| !(l.is_empty() || l.starts_with("#[") || l.starts_with("//")))
+                    .and_then(|l| l.strip_prefix("fn "))
+                    .and_then(|r| r.split_once('('))
+                    .map(|(n, _)| n.trim());
+                match name {
+                    Some(n) if !n.is_empty() => {
+                        found.push((pkg.to_string(), target.to_string(), n.to_string()))
+                    }
+                    _ => errors.push(format!("{at}: #[ignore] の後に fn 名前( を読めない")),
+                }
             }
         }
-        let mut listed: Vec<(String, String)> = IGNORED
-            .iter()
-            .map(|(_, t, n)| (t.to_string(), n.to_string()))
-            .collect();
+        if !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
         found.sort();
-        listed.sort();
-        assert_eq!(found, listed, "#[ignore] のテストと IGNORED が食い違う");
+        Ok(found)
+    }
+
+    fn listed() -> Vec<(String, String, String)> {
+        let mut v: Vec<_> = IGNORED
+            .iter()
+            .map(|(p, t, n)| (p.to_string(), t.to_string(), n.to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn every_ignored_test_is_listed() {
+        // IGNORED にない `#[ignore]` のテストは、どこでも走らない。IGNORED にあって `#[ignore]` のない
+        // テストは、golden-verify が 0 件で通さないが、ここでも食い違いとして捕まえる。
+        let files = tracked_sources();
+        assert!(
+            files
+                .iter()
+                .any(|(f, _)| f == "crates/ebykn/tests/no_cheating.rs")
+        );
+        assert_eq!(ignored_tests(&files), Ok(listed()));
+    }
+
+    #[test]
+    fn fails_when_an_ignored_test_is_missing_from_the_list() {
+        let files = tracked_sources();
+        let with = |path: &str, edit: &dyn Fn(&str) -> String| -> Vec<(String, String)> {
+            let mut f = files.clone();
+            let e = f.iter_mut().find(|(p, _)| p == path).expect(path);
+            e.1 = edit(&e.1);
+            f
+        };
+        let forgotten = "#[test]\n#[ignore = \"x\"]\nfn forgotten_elsewhere() {}\n\n#[test]";
+        // ほかのパッケージの結合テスト：集めるが IGNORED にない。
+        let other = with("crates/ebykn_check/tests/project.rs", &|t| {
+            mutate(t, "#[test]", forgotten)
+        });
+        let got = ignored_tests(&other).unwrap();
+        assert!(
+            got.contains(&(
+                "ebykn_check".into(),
+                "project".into(),
+                "forgotten_elsewhere".into()
+            )),
+            "{got:?}"
+        );
+        assert_ne!(got, listed());
+        // パッケージの列も比べる（同じターゲットと名前でも、別のパッケージなら食い違い）。
+        let mut moved = files.clone();
+        let e = moved
+            .iter_mut()
+            .find(|(p, _)| p == "crates/ebykn/tests/target_dir.rs")
+            .unwrap();
+        e.0 = "crates/ebykn_check/tests/target_dir.rs".into();
+        assert_ne!(ignored_tests(&moved).unwrap(), listed());
+        // 単体テストの #[ignore]：IGNORED から走らせられない。
+        let unit = with("crates/ebykn/src/verus.rs", &|t| {
+            mutate(t, "\n    #[test]\n", "\n    #[test]\n    #[ignore]\n")
+        });
+        let e = ignored_tests(&unit).unwrap_err();
+        assert!(e.contains("crates/ebykn/src/verus.rs:"), "{e}");
+        // tests/ の下のディレクトリと xtask の #[ignore] も同じ。
+        let support = with("crates/ebykn_check/tests/support/mod.rs", &|t| {
+            format!("{t}\n#[test]\n#[ignore]\nfn hidden() {{}}\n")
+        });
+        assert!(ignored_tests(&support).is_err());
+        let xtask = with("xtask/src/golden.rs", &|t| {
+            format!("{t}\n#[test]\n#[ignore]\nfn hidden() {{}}\n")
+        });
+        assert!(ignored_tests(&xtask).is_err());
+        // 後に fn を読めない #[ignore]。
+        let unreadable = with("crates/ebykn/tests/no_cheating.rs", &|t| {
+            mutate(
+                t,
+                "fn smuggled_assumptions_fail_verify()",
+                "async fn smuggled_assumptions_fail_verify()",
+            )
+        });
+        let e = ignored_tests(&unreadable).unwrap_err();
+        assert!(e.contains("no_cheating.rs:"), "{e}");
     }
 
     #[test]

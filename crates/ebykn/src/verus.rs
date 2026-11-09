@@ -914,38 +914,106 @@ mod tests {
         assert_eq!(cmd.get_current_dir(), Some(build));
     }
 
-    #[test]
-    fn fails_when_cargo_is_called_outside_the_cargo_helper() {
-        // `cargo` を通らない呼び出しは、成果物の置き場を cargo の設定に任せてしまう（#137）。
-        let needle = ["Command::new(", "\"cargo\")"].concat();
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut found = Vec::new();
-        for entry in std::fs::read_dir(&src).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
+    /// `src/` の下の `.rs`（サブディレクトリも）を、`src/` からのパスと中身の組で読む。
+    fn crate_sources() -> Vec<(String, String)> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, base, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.push((rel, std::fs::read_to_string(&path).unwrap()));
+                }
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+        }
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        walk(&src, &src, &mut out);
+        out.sort();
+        out
+    }
+
+    /// cargo の呼び出し（`Command::new("cargo")`）が、テストの外では `verus.rs` の `fn cargo(` の中の
+    /// 1 か所だけか。`cargo` を通らない呼び出しは、成果物の置き場を cargo の設定に任せてしまう（#137）。
+    fn cargo_only_in_helper(files: &[(String, String)]) -> Result<(), String> {
+        let needle = ["Command::new(", "\"cargo\")"].concat();
+        let mut found = Vec::new();
+        for (rel, text) in files {
             let body = text
                 .split_once("\n#[cfg(test)]\nmod tests {")
                 .map_or(text.as_str(), |(b, _)| b);
-            for _ in body.matches(needle.as_str()) {
-                found.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            for (at, _) in body.match_indices(needle.as_str()) {
+                found.push((rel.as_str(), body, at));
             }
         }
-        assert_eq!(
-            found,
-            ["verus.rs"],
-            "cargo の呼び出しは verus.rs の cargo だけで作る"
-        );
-        let verus = std::fs::read_to_string(src.join("verus.rs")).unwrap();
-        let at = verus.find(needle.as_str()).unwrap();
-        let def = verus[..at].rfind("\nfn ").expect("関数の中にない");
-        assert!(
-            verus[def..].starts_with("\nfn cargo("),
-            "{}",
-            &verus[def..at]
-        );
+        let [(rel, body, at)] = found[..] else {
+            let at: Vec<&str> = found.iter().map(|(r, _, _)| *r).collect();
+            return Err(format!("cargo の呼び出しが 1 か所でない: {at:?}"));
+        };
+        if rel != "verus.rs" {
+            return Err(format!("cargo の呼び出しが verus.rs の外にある: {rel}"));
+        }
+        match body[..at].rfind("\nfn ") {
+            Some(def) if body[def..].starts_with("\nfn cargo(") => Ok(()),
+            _ => Err("cargo の呼び出しが fn cargo の中にない".into()),
+        }
+    }
+
+    /// `from` を `to` に置き換える。壊す操作が当たったことを先に確かめる。
+    fn mutate(src: &str, from: &str, to: &str) -> String {
+        assert!(src.contains(from), "壊す操作が当たらない: {from:?}");
+        let out = src.replacen(from, to, 1);
+        assert_ne!(out, src);
+        out
+    }
+
+    #[test]
+    fn cargo_is_called_only_in_the_cargo_helper() {
+        let files = crate_sources();
+        assert!(files.iter().any(|(r, _)| r == "verus.rs"), "{files:?}");
+        assert_eq!(cargo_only_in_helper(&files), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_cargo_is_called_outside_the_cargo_helper() {
+        let files = crate_sources();
+        let stray = "\nfn stray() -> Command {\n    Command::new(\"cargo\")\n}\n";
+        let with = |rel: &str, edit: &dyn Fn(&str) -> String| -> Vec<(String, String)> {
+            let mut f = files.clone();
+            let e = f.iter_mut().find(|(r, _)| r == rel).expect(rel);
+            e.1 = edit(&e.1);
+            f
+        };
+        // ほかのファイルの呼び出し。
+        let other = with("sync.rs", &|t| {
+            mutate(t, "\nuse ", &format!("{stray}\nuse "))
+        });
+        assert!(cargo_only_in_helper(&other).is_err());
+        // サブディレクトリのファイルの呼び出し（読む範囲から漏れない）。
+        let mut sub = files.clone();
+        sub.push((
+            "sub/mod.rs".into(),
+            format!("use std::process::Command;{stray}"),
+        ));
+        assert!(cargo_only_in_helper(&sub).is_err());
+        // verus.rs の中でも、fn cargo の外の呼び出し。
+        let outside = with("verus.rs", &|t| {
+            mutate(t, "\npub fn run(", &format!("{stray}\npub fn run("))
+        });
+        assert!(cargo_only_in_helper(&outside).is_err());
+        // fn cargo の中の呼び出しを、別の名前の関数に移したもの。
+        let renamed = with("verus.rs", &|t| mutate(t, "\nfn cargo(", "\nfn cargo_any("));
+        assert!(cargo_only_in_helper(&renamed).is_err());
+        // テストの中の呼び出しは数えない。
+        let in_tests = with("verus.rs", &|t| {
+            mutate(t, "\nmod tests {\n", &format!("\nmod tests {{\n{stray}"))
+        });
+        assert_eq!(cargo_only_in_helper(&in_tests), Ok(()));
     }
 
     #[test]

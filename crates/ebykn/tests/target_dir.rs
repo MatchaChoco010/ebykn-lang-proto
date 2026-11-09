@@ -35,6 +35,15 @@ fn ebykn(dir: &Path, arg: &str) -> std::process::Output {
         .expect("ebykn を起動する")
 }
 
+/// 落ちた回も含めて、作ったディレクトリ（vstd と prelude のビルドを含む）を消す。
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 #[ignore = "固定した Verus が要る。cargo xtask golden-verify が --ignored で走らせる"]
 fn verify_ignores_the_parent_target_dir() {
@@ -49,6 +58,7 @@ fn verify_ignores_the_parent_target_dir() {
     if base.exists() {
         std::fs::remove_dir_all(&base).unwrap();
     }
+    let _scratch = Scratch(base.clone());
     let elsewhere = base.join("elsewhere");
     let config = base.join(".cargo/config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
@@ -88,10 +98,10 @@ fn verify_ignores_the_parent_target_dir() {
             "{round} 回目：成果物が親の設定の target-dir（{}）に置かれた",
             elsewhere.display()
         );
+        // `cargo verus focus` の成果物も、消す側（`cargo clean -p`）と同じ target-dir の下にある。
         assert!(
-            dir.join("build/verus/target").is_dir(),
-            "{round} 回目：build/verus/target がない"
+            dir.join("build/verus/target/verus-partial").is_dir(),
+            "{round} 回目：build/verus/target/verus-partial がない"
         );
     }
-    let _ = std::fs::remove_dir_all(&base);
 }
