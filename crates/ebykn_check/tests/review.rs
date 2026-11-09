@@ -141,46 +141,94 @@ fn s3_destructuring_assignment_is_e0506() {
     );
 }
 
-// ---- S4：borrow ブロックを break / continue で抜ける（#21 の既定 A） ----
+// ---- S4：borrow ブロックを break / continue / return / ? で抜ける（#21 の既定 D） ----
 
+/// 抜ける点で `borrow` ブロックが終わる。抜けた先の Γ には借りた権限が残らない。
 #[test]
-fn s4_break_or_continue_out_of_borrow_is_e0511() {
-    rejects(
-        &in_pool(
-            "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { borrow self@nodes[p] { break; } i = i + 1; } }",
-        ),
-        "E0511",
-        "cannot `break` out of the `borrow` block of `p`",
-    );
-    rejects(
-        &in_pool(
-            "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { i = i + 1; borrow mut self@nodes[p] { continue; } } }",
-        ),
-        "E0511",
-        "`continue`",
-    );
+fn s4_jumping_out_of_borrow_ends_the_block() {
+    // #21 のコメントの例。
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { borrow mut self@nodes[p] { if (*p).val == 0 { break; } } i = i + 1; } }",
+    ));
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { borrow self@nodes[p] { break; } i = i + 1; } }",
+    ));
+    // `continue` も（抜けた先の Γ はループの入口と同じ）。
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { i = i + 1; borrow mut self@nodes[p] { continue; } } }",
+    ));
     // `loop` を抜けた後に借用中の状態を残さない（後の take / put は通る）。
-    rejects(
-        &in_pool(
-            "pub fn f(&mut self, p: Ptr<Node>) { loop { borrow mut self@nodes[p] { break; } } take self@nodes[p]; put self@nodes[p]; }",
-        ),
-        "E0511",
-        "`break`",
-    );
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>) { loop { borrow mut self@nodes[p] { break; } } take self@nodes[p]; put self@nodes[p]; }",
+    ));
     // ラベル付きのブロックも同じ。
-    rejects(
-        &in_pool(
-            "pub fn f(&mut self, p: Ptr<Node>) { 'a: { borrow self@nodes[p] { break 'a; } } take self@nodes[p]; put self@nodes[p]; }",
-        ),
-        "E0511",
-        "`break`",
-    );
-    // ブロックの中で閉じたループの break は通る。return も通る（#21 の既定 A）。
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>) { 'a: { borrow self@nodes[p] { break 'a; } } take self@nodes[p]; put self@nodes[p]; }",
+    ));
+    // 入れ子の borrow を一度に抜ける。
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>) { loop { borrow mut self@nodes[p] { borrow mut self@nodes[q] { break; } } } take self@nodes[p]; put self@nodes[p]; }",
+    ));
+    // ブロックの中で閉じたループの break、return。
     accepts(&in_pool(
         "pub fn f(&mut self, p: Ptr<Node>) { borrow self@nodes[p] { loop { break; } } }",
     ));
     accepts(&in_pool(
-        "pub fn f(&mut self, p: Ptr<Node>) { borrow self@nodes[p] { return; } }",
+        "pub fn f(&mut self, p: Ptr<Node>) { borrow mut self@nodes[p] { return; } }",
+    ));
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, o: Option<u64>) -> Option<u64> { borrow mut self@nodes[p] { let v = o?; (*p).val = v; } Some(0) }",
+    ));
+}
+
+/// 抜けた先の比較は、借りた権限を消したあとの Γ で行う（ほかの権限の食い違いは今までどおり）。
+#[test]
+fn s4_permissions_other_than_the_borrow_are_still_compared() {
+    // `take` した権限を持ったまま `break` すると、ほかの `break` と食い違う。食い違いに `p@` は出ない。
+    let src = in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>, c: bool) { loop { if c { break; } borrow mut self@nodes[p] { take self@nodes[q]; if c { break; } put self@nodes[q]; } } }",
+    );
+    rejects(
+        &src,
+        "E0511",
+        "`q@` is not held after the loop but owned at this `break`",
+    );
+    let (_, lines) = run(&src);
+    assert!(!lines[0].contains("`p@`"), "{}", lines[0]);
+    // `continue` で、本体の始めにない権限を持ち越す。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>, n: u64) { let mut i = 0; while i < n { i = i + 1; borrow mut self@nodes[p] { take self@nodes[q]; continue; } } }",
+        ),
+        "E0511",
+        "`q@`",
+    );
+    // `return` で、所有した権限を残す（E0505）。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>) { borrow mut self@nodes[p] { take self@nodes[q]; return; } }",
+        ),
+        "E0505",
+        "`q@`",
+    );
+}
+
+/// `borrow mut` の中の `?` は、戻り値の型を `Option` / `Result` と書いた関数だけ（書き下しで展開する）。
+#[test]
+fn s4_try_inside_borrow_mut_needs_option_or_result() {
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, o: Result<u64, u8>) -> Result<u64, u8> { borrow mut self@nodes[p] { (*p).val = o?; } Ok(0) }",
+    ));
+    rejects(
+        &format!(
+            "{PRELUDE}type R = Option<u64>;\nimpl Pool {{ pub fn f(&mut self, p: Ptr<Node>, o: Option<u64>) -> R {{ borrow mut self@nodes[p] {{ (*p).val = o?; }} Some(0) }} }}\n"
+        ),
+        "E0003",
+        "`?` inside `borrow mut`",
+    );
+    // 共有の borrow は戻すものがないので、そのまま。
+    accepts(&format!(
+        "{PRELUDE}type R = Option<u64>;\nimpl Pool {{ pub fn f(&mut self, p: Ptr<Node>, o: Option<u64>) -> R {{ borrow self@nodes[p] {{ let v = o?; }} Some(0) }} }}\n"
     ));
 }
 

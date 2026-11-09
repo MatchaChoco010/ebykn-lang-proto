@@ -93,8 +93,11 @@ pub struct Walker<'a> {
     closure_outer: Option<(Env, BTreeSet<String>)>,
     /// 論理文脈（契約・`spec fn` の本体・`seq!` の引数など）か。
     logic: bool,
-    /// 開いている `borrow` ブロックの名前と、開いたときの枠の数（#21 の既定）。
-    borrows: Vec<(String, usize)>,
+    /// 開いている `borrow` ブロックの名前と、開いたときの枠の数、`borrow mut` か（#21 の既定 D）。
+    borrows: Vec<(String, usize, bool)>,
+    /// 関数の戻り値の型が `Option<..>` / `Result<..>` と書いてあるか（`borrow mut` の中の `?` を
+    /// 書き下しで展開できるか）。
+    try_known: bool,
     /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
     bound_source: Option<SpanKey>,
 }
@@ -114,12 +117,14 @@ impl<'a> Walker<'a> {
             closure_outer: None,
             logic: false,
             borrows: Vec::new(),
+            try_known: false,
             bound_source: None,
         }
     }
 
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
+        self.try_known = sig.ret.as_ref().is_some_and(|r| try_type(&r.ty));
         for p in &sig.params {
             let (ast::Param::Typed { attrs, span, .. } | ast::Param::Receiver { attrs, span, .. }) =
                 p;
@@ -971,7 +976,16 @@ impl<'a> Walker<'a> {
             }
             ExprKind::Try(x) => {
                 let d = self.expr(x);
-                // `?` の早期 return は `return` と同じ扱い（仕様 §6.2）。
+                // `borrow mut` の中の `?` は、書き下しで失敗の経路に権限を戻す `match` に展開する。
+                // 失敗の値の形は戻り値の型で決めるので、`Option` / `Result` と書いていなければ扱えない。
+                if !self.try_known && self.borrows.iter().any(|(_, _, m)| *m) {
+                    self.diags.push(
+                        e.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::TryInBorrowMut)),
+                    );
+                }
+                // `?` の早期 return は `return` と同じ扱い（仕様 §6.2）。抜ける経路では `borrow`
+                // ブロックが終わる（#21 の既定 D）。借りた権限は `Owned` でないので E0505 に数えない。
                 self.exit(e.span);
                 d
             }
@@ -1397,9 +1411,12 @@ impl<'a> Walker<'a> {
             None => false,
         };
         if introduced && let Some(x) = &x {
-            self.borrows.push((x.clone(), self.frames.len()));
+            self.borrows.push((x.clone(), self.frames.len(), mutable));
         }
         let d = self.block(body);
+        if d && mutable {
+            self.facts.diverging_borrows.insert(e.span.into());
+        }
         if introduced && let Some(x) = x {
             self.borrows.pop();
             self.env.remove(&x);
@@ -1574,17 +1591,12 @@ impl<'a> Walker<'a> {
         let Some(target) = target else {
             return;
         };
-        // `borrow` ブロックを `break` / `continue` で抜けるのは E0511（#21 の既定 A。`loop` と
-        // ラベル付きのブロックも同じ）。抜けた先の Γ には、借りた権限を残さない。
-        let crossed: Vec<String> = self
-            .borrows
-            .iter()
-            .filter(|(_, depth)| *depth > target)
-            .map(|(n, _)| n.clone())
-            .collect();
-        for name in crossed {
-            env.remove(&name);
-            self.push(span, CheckMsg::JumpOutOfBorrow { name, is_continue });
+        // 行き先より内側で開いた `borrow` ブロックは、抜ける点で終わる（#21 の既定 D。書き下しは
+        // 抜ける前に権限を領域に戻す）。抜けた先の Γ は、借りた権限を消したもので比べる。
+        for (name, depth, _) in &self.borrows {
+            if *depth > target {
+                env.remove(name);
+            }
         }
         if let Some(f) = self.frames.get_mut(target) {
             if is_continue {
@@ -1853,4 +1865,15 @@ fn path_text(p: &ast::Path) -> String {
         .map(|s| s.ident.name.as_str())
         .collect::<Vec<_>>()
         .join("::")
+}
+
+/// 型の最後の名前が `Option` / `Result` か（`ebykn_lower` が `?` を展開する形）。
+fn try_type(t: &ast::Type) -> bool {
+    match &t.kind {
+        ast::TypeKind::Path { qself: None, path } => path
+            .segments
+            .last()
+            .is_some_and(|s| matches!(s.ident.name.as_str(), "Option" | "Result")),
+        _ => false,
+    }
 }

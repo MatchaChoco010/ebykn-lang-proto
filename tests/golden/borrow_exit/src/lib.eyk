@@ -1,0 +1,163 @@
+// #21 の既定 D：`borrow mut` のブロックを `break` / `continue` / `return` / `?` で抜けるときにも、
+// 抜ける前に権限を領域に戻す。どの関数も、抜けた後に Pool の不変条件（order の要素がすべて nodes に
+// ある）を示す。`find_zero_leaked` は戻さずに抜ける同じ形で、不変条件を示せずに失敗する。
+pub struct Node { pub val: u64 }
+
+pub struct Pool { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl Invariant for Pool {
+    closed spec fn invariant(&self) -> bool = forall q in self@order, self@nodes.contains(q);
+}
+
+impl Pool {
+    // #21 のコメントの例：while の中で borrow mut から break する。
+    fn find_zero(&mut self, p: Ptr<Node>, n: u64)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        let mut i = 0;
+        while i < n
+            invariant i <= n, self@order.contains(p), self.invariant(),
+            decreases n - i,
+        {
+            borrow mut self@nodes[p] {
+                if (*p).val == 0 { break; }
+            }
+            i = i + 1;
+        }
+    }
+
+    // 戻さずに抜ける（take と leak で書く）と、不変条件を示せない。
+    fn find_zero_leaked(&mut self, p: Ptr<Node>, n: u64)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        let mut i = 0;
+        while i < n
+            invariant i <= n, self@order.contains(p), self.invariant(),
+            decreases n - i,
+        {
+            take self@nodes[p];
+            if (*p).val == 0 { leak p@; break; }
+            put self@nodes[p];
+            i = i + 1;
+        }
+    }
+
+    fn skip_zero(&mut self, p: Ptr<Node>, n: u64)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        let mut i = 0;
+        while i < n
+            invariant i <= n, self@order.contains(p), self.invariant(),
+            decreases n - i,
+        {
+            i = i + 1;
+            borrow mut self@nodes[p] {
+                if (*p).val == 0 { continue; }
+                (*p).val = (*p).val - 1;
+            }
+        }
+    }
+
+    fn big_or_zero(&mut self, p: Ptr<Node>) -> u64
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        borrow mut self@nodes[p] {
+            if (*p).val > 10 { return (*p).val; }
+            (*p).val = 0;
+        }
+        0
+    }
+
+    fn set_some(&mut self, p: Ptr<Node>, o: Option<u64>) -> Option<u64>
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        borrow mut self@nodes[p] { (*p).val = o?; }
+        Some(0)
+    }
+
+    fn set_ok(&mut self, p: Ptr<Node>, o: Result<u64, u8>) -> Result<u64, u8>
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        borrow mut self@nodes[p] { (*p).val = o?; }
+        Ok(0)
+    }
+
+    // 入れ子の borrow を一度に抜ける（内側から戻す）。
+    fn nested(&mut self, p: Ptr<Node>, q: Ptr<Node>, n: u64)
+        requires old(self).invariant(), old(self)@order.contains(p), old(self)@order.contains(q), p != q,
+        ensures self.invariant(),
+    {
+        let mut i = 0;
+        while i < n
+            invariant i <= n, self@order.contains(p), self@order.contains(q), p != q, self.invariant(),
+            decreases n - i,
+        {
+            borrow mut self@nodes[p] {
+                borrow mut self@nodes[q] {
+                    if (*p).val == (*q).val { break; }
+                }
+            }
+            i = i + 1;
+        }
+    }
+
+    // ブロックの中で閉じたループの break は、権限を戻さない。
+    fn inner_loop(&mut self, p: Ptr<Node>)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        borrow mut self@nodes[p] {
+            let v = (*p).val;
+            let mut k: u64 = 0;
+            while k < 5
+                invariant k <= 5,
+                decreases 5 - k,
+            {
+                if k == v { break; }
+                k = k + 1;
+            }
+            (*p).val = k;
+        }
+    }
+
+    // ラベル付きのブロックへ値を持って抜ける（値は権限を戻す前に読む）。ブロックの中のラベル付きの
+    // ブロックで閉じる break は、権限を戻さない。
+    fn labeled(&mut self, p: Ptr<Node>) -> u64
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        let v = 'a: {
+            borrow mut self@nodes[p] {
+                'b: {
+                    if (*p).val == 1 { break 'b; }
+                    (*p).val = 2;
+                }
+                if (*p).val > 5 { break 'a (*p).val; }
+            }
+            0
+        };
+        v
+    }
+
+    // loop を抜けた後に take / put が通る。
+    fn loop_then_take(&mut self, p: Ptr<Node>)
+        requires old(self).invariant(), old(self)@order.contains(p),
+        ensures self.invariant(),
+    {
+        loop
+            invariant self@order.contains(p), self.invariant(),
+            decreases 1int,
+        {
+            borrow mut self@nodes[p] { break; }
+        }
+        take self@nodes[p];
+        (*p).val = 1;
+        put self@nodes[p];
+    }
+}

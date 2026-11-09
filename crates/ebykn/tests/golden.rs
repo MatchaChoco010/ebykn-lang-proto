@@ -309,6 +309,7 @@ fn lowered_verus_matches_expected() {
         "stack:verus",
         "lowering:verus",
         "assumed:verus",
+        "borrow_exit:verus",
         "linearity:diag",
     ] {
         assert!(kinds.iter().any(|k| k == want), "{want} がない: {kinds:?}");

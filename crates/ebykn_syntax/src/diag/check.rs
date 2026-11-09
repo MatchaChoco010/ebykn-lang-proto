@@ -168,6 +168,9 @@ pub enum Unimpl {
     EnvMacro,
     /// `file!`（`unchecked fn` の本体の外。#27 の既定）。
     FileMacro,
+    /// 戻り値の型を `Option<..>` / `Result<..>` と書いていない関数の、`borrow mut` の中の `?`
+    /// （#21 の既定 D。失敗の経路で権限を戻す展開の形を決められない）。
+    TryInBorrowMut,
 }
 
 impl Unimpl {
@@ -254,6 +257,12 @@ impl Unimpl {
             }
             (Unimpl::FileMacro, Lang::Ja) => {
                 "`unchecked fn` の本体の外の `file!` はまだ扱えません。パスは cargo のクレートのコンパイルの仕方で変わる（Verus で検証するときは相対、別のクレートから依存されると絶対）ためです。値が要るなら `unchecked fn` で包みます"
+            }
+            (Unimpl::TryInBorrowMut, Lang::En) => {
+                "`?` inside `borrow mut` is supported only when the function's return type is written as `Option<..>` or `Result<..>`, because the permission is put back before returning on the failure path, which needs the shape of the failure value; write the `match` explicitly"
+            }
+            (Unimpl::TryInBorrowMut, Lang::Ja) => {
+                "`borrow mut` の中の `?` は、関数の戻り値の型を `Option<..>` か `Result<..>` と書いたときだけ扱えます。失敗の経路では権限を戻してから返すので、失敗の値の形が要るためです。`match` で明示的に書きます"
             }
             (Unimpl::CfgInBody, Lang::En) => {
                 "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"
@@ -457,12 +466,6 @@ pub enum CheckMsg {
         at: LoopPoint,
     },
 
-    /// `borrow` ブロックを `break` / `continue` で抜ける（#21 の既定）。
-    JumpOutOfBorrow {
-        name: String,
-        is_continue: bool,
-    },
-
     // E0512
     PermInClosure {
         name: String,
@@ -530,7 +533,7 @@ impl CheckMsg {
             WriteShared { .. } => Code::E0508,
             ConsumeBorrowed { .. } => Code::E0509,
             BranchMismatch { .. } => Code::E0510,
-            LoopMismatch { .. } | JumpOutOfBorrow { .. } => Code::E0511,
+            LoopMismatch { .. } => Code::E0511,
             PermInClosure { .. } => Code::E0512,
             SpecFieldAsRegion { .. } => Code::E0513,
             MethodCallUses { .. } => Code::E0514,
@@ -747,14 +750,6 @@ impl CheckMsg {
             (PermDiscarded, Ja) => {
                 "ここで返る権限が捨てられます。結果を `let x = ..;` で変数に束縛します".into()
             }
-            (JumpOutOfBorrow { name, is_continue }, En) => format!(
-                "cannot `{}` out of the `borrow` block of `{name}`; end the block first",
-                if *is_continue { "continue" } else { "break" }
-            ),
-            (JumpOutOfBorrow { name, is_continue }, Ja) => format!(
-                "`{name}` の `borrow` ブロックから `{}` で抜けることはできません。先にブロックを終えます",
-                if *is_continue { "continue" } else { "break" }
-            ),
             (AssignHeld { name }, En) => format!(
                 "cannot assign to `{name}` while its permission `{name}@` is held"
             ),
