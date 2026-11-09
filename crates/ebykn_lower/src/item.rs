@@ -233,6 +233,8 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
             return;
         }
         ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) => return,
+        ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
+        ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
     };
     cx.note_macros(&item.attrs, || cx.item_path(&name.name));
 }
