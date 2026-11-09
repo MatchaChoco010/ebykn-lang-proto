@@ -76,16 +76,21 @@ fn misplaced(ts: &TokenStream, cx: AttrCx) -> bool {
             if attr_body(i) {
                 return false;
             }
-            let inner_cx = match g.delimiter() {
-                Delimiter::Brace => AttrCx::Brace,
-                // 入れ子の `vec![..]` / `vec!(..)`。
-                Delimiter::Bracket | Delimiter::Parenthesis
-                    if punct(before(i, 1), '!') && ident(before(i, 2), &["vec"]) =>
-                {
-                    AttrCx::Elements
-                }
-                _ => AttrCx::Other,
-            };
+            // 入れ子のマクロの呼び出し `名前!(..)` / `名前![..]` / `名前!{..}` の引数は、区切りの種類によらず、
+            // `vec!` なら要素の並び、ほかは式の中として見る（`println!{..}` の `{ .. }` はブロックでない）。
+            // `if !{ .. }` のような予約語の後の `!` もマクロとして見て、中の属性を拒否する側に倒す。
+            let inner_cx =
+                if punct(before(i, 1), '!') && matches!(before(i, 2), Some(TokenTree::Ident(_))) {
+                    if ident(before(i, 2), &["vec"]) {
+                        AttrCx::Elements
+                    } else {
+                        AttrCx::Other
+                    }
+                } else if g.delimiter() == Delimiter::Brace {
+                    AttrCx::Brace
+                } else {
+                    AttrCx::Other
+                };
             misplaced(&g.stream(), inner_cx)
         }
         TokenTree::Punct(p) if p.as_char() == '#' => {
@@ -111,57 +116,83 @@ fn misplaced(ts: &TokenStream, cx: AttrCx) -> bool {
     })
 }
 
-/// 文と項目の頭のキーワード（属性は文か項目に付く）。`const { .. }` と `unsafe { .. }` はブロックの式として
-/// [`block_like`] が見る。
+/// `{ .. }` の中の文と項目の頭のキーワード（属性は文か項目に付く）。`const { .. }` と `unsafe { .. }` は
+/// ブロックの式として [`block_like`] が見る。
 const STMT_KEYWORDS: &[&str] = &[
     "let", "fn", "struct", "enum", "use", "const", "static", "impl", "mod", "trait", "type", "pub",
     "extern",
 ];
 
-/// 前置のキーワード（属性はその式に付き、続く式はその被演算子になる）。
-const PREFIX_KEYWORDS: &[&str] = &["return", "break", "continue"];
+/// ブロックのような式の頭のキーワード。
+const BLOCK_KEYWORDS: &[&str] = &["if", "match", "while", "for", "loop", "unsafe", "const"];
 
-/// 許す位置の属性に続くトークン `t`（属性の並びの後から、引数の終わりまで）が、属性をそのまま受ける形か。
+/// 許す位置の属性に続くトークン `t`（属性の並びの後から、引数の終わりまで）が、安定版の Rust が属性を
+/// そのまま受けると分かっている形か。分からない形は、すべて拒否する（綴りを一つずつ塞ぐのでなく、
+/// 分かっている形だけを通す。PR #140 のレビュー）。
 ///
 /// 構文解析器は、式の外側の属性を、代入・二項演算・型変換・範囲の左の項に移す（`#[a] x = 1` の属性は `x`
 /// に付く）。左の項は安定版の Rust が属性を許す位置でないので、E0658 になる。`..` で始まる範囲の属性は、
-/// 構文解析器が拒否する。そこで、続く式を区切り（`,`・`;`）まで読み、二項演算・代入・型変換・範囲の記号が
-/// 最上位（グループの外）に一つでもあれば拒否する。前置の演算子（`-`、`!`、`*`、`&`）、パス（`a::b`、
-/// `<T as Tr>::f`、`f::<T>`）、メソッド呼び出しと欄、`?`、マクロの呼び出しは読む。読めない記号は拒否する。
+/// 構文解析器が拒否する。そこで、続く式を区切り（`,`・`;`）まで読み（[`operators_absent`]）、すべての
+/// トークンを読めて、二項演算・代入・型変換・範囲の記号が最上位（グループの外）にないときだけ許す。
 ///
-/// 次は、続く式を読まずに許す：文と項目（[`STMT_KEYWORDS`]）、`return` などの前置のキーワード、
-/// クロージャ、`{ .. }` の中の match の腕（区切りまでに `=>`）と構造体の欄（`名前: 式`）、`{ .. }` の中で
-/// ブロックのような式（[`block_like`]）で終わる文（後ろは次の文になる。`.` か `?` が続けば読み続ける）。
+/// 次の形は、続く式をそこまで読まずに許す：
+/// - `{ .. }` の中の文と項目（[`STMT_KEYWORDS`]、`unsafe fn` など）、match の腕（区切りまでに `=>`）、
+///   構造体の欄（`名前: 式`）。
+/// - 戻り値の型のないクロージャ（`|x| 本体`、`move || 本体`）。本体が式の終わりまで続くので、属性は
+///   クロージャ全体に付く。戻り値の型を書いたクロージャ（`|| -> T { .. }`）は本体がブロックで終わり、後ろに
+///   `as` や二項演算が続きうるので許さない。
+/// - ブロックのような式（[`block_like`]）。`{ .. }` の中では、その後ろに `.` も `?` も続かなければ、文は
+///   そこで終わる（後ろは次の文になる）。`.` か `?` が続くときと、`vec!` の要素では、後ろを読み続ける。
+///   ブロックのような式の終わりが分からなければ許さない。
 fn target_ok(t: &[TokenTree], cx: AttrCx) -> bool {
     let first = t.first();
-    if ident(first, &["const", "unsafe"]) && group(t.get(1), Delimiter::Brace) {
-        // `const { .. }` / `unsafe { .. }` はブロックの式（下の `block_like`）。
-    } else if ident(first, STMT_KEYWORDS)
-        || (ident(first, &["unsafe"]) && matches!(t.get(1), Some(TokenTree::Ident(_))))
-        || ident(first, PREFIX_KEYWORDS)
-        || punct(first, '|')
-        || ident(first, &["move"])
-    {
-        return true;
-    }
     if cx == AttrCx::Brace {
+        let item = (ident(first, STMT_KEYWORDS)
+            && !(ident(first, &["const"]) && group(t.get(1), Delimiter::Brace)))
+            || (ident(first, &["unsafe"]) && matches!(t.get(1), Some(TokenTree::Ident(_))));
         let field = matches!(first, Some(TokenTree::Ident(_) | TokenTree::Literal(_)))
             && punct(t.get(1), ':')
             && !joint(t.get(1), ':');
-        if field || fat_arrow(t) {
+        if item || field || fat_arrow(t) {
             return true;
         }
     }
-    let (start, operand) = match block_like(t) {
-        Some(end) => {
-            if cx == AttrCx::Brace && !punct(t.get(end), '.') && !punct(t.get(end), '?') {
-                return true;
-            }
-            (end, true)
+    if let Some(ok) = closure_ok(t) {
+        return ok;
+    }
+    let label = punct(first, '\'');
+    if label || ident(first, BLOCK_KEYWORDS) || group(first, Delimiter::Brace) {
+        let Some(end) = block_like(t) else {
+            return false;
+        };
+        if cx == AttrCx::Brace && !punct(t.get(end), '.') && !punct(t.get(end), '?') {
+            return true;
         }
-        None => (0, false),
+        return operators_absent(t, end, true);
+    }
+    operators_absent(t, 0, false)
+}
+
+/// `t` がクロージャ（`|..|`、`||`、`move` の付いたもの）で始まるなら、許すか。戻り値の型のないものだけを
+/// 許す。クロージャでなければ `None`。
+fn closure_ok(t: &[TokenTree]) -> Option<bool> {
+    let k = usize::from(ident(t.first(), &["move"]));
+    if !punct(t.get(k), '|') {
+        return (k == 1).then_some(false);
+    }
+    // 引数の並びの終わり（`||` なら二つ目の `|` の次）。
+    let end = if joint(t.get(k), '|') && punct(t.get(k + 1), '|') {
+        k + 2
+    } else {
+        let close = t
+            .iter()
+            .enumerate()
+            .skip(k + 1)
+            .find(|(_, x)| punct(Some(x), '|'))
+            .map(|(j, _)| j)?;
+        close + 1
     };
-    operators_absent(t, start, operand)
+    Some(!(joint(t.get(end), '-') && punct(t.get(end + 1), '>')) && t.get(end).is_some())
 }
 
 /// 区切り（`,`・`;`）までの最上位に `=>` があるか（match の腕）。
@@ -179,13 +210,10 @@ fn fat_arrow(t: &[TokenTree]) -> bool {
 
 /// `t` の先頭のブロックのような式（`{ .. }`、`if`、`match`、`while`、`for`、`loop`、`unsafe { .. }`、
 /// `const { .. }`、ラベル `'l:` の付いたもの）の終わりの位置。条件と本体の中は読まない（属性はこの式全体に
-/// 付く）。
+/// 付く）。本体の `{ .. }` を確かに見分けられないときは `None`（[`body_brace`]）。
 fn block_like(t: &[TokenTree]) -> Option<usize> {
-    let k = if punct(t.first(), '\'')
-        && matches!(t.get(1), Some(TokenTree::Ident(_)))
-        && punct(t.get(2), ':')
-    {
-        3
+    let k = if punct(t.first(), '\'') {
+        (matches!(t.get(1), Some(TokenTree::Ident(_))) && punct(t.get(2), ':')).then_some(3)?
     } else {
         0
     };
@@ -194,23 +222,52 @@ fn block_like(t: &[TokenTree]) -> Option<usize> {
         Some(TokenTree::Ident(n)) if n == "unsafe" || n == "const" || n == "loop" => {
             group(t.get(k + 1), Delimiter::Brace).then_some(k + 2)
         }
-        Some(TokenTree::Ident(n)) if n == "while" || n == "for" || n == "match" => {
-            first_brace(t, k + 1).map(|b| b + 1)
+        Some(TokenTree::Ident(n)) if n == "while" || n == "match" => {
+            body_brace(t, k + 1).map(|b| b + 1)
+        }
+        Some(TokenTree::Ident(n)) if n == "for" => {
+            // パターンは `in` まで。パターンの中の `{ .. }`（構造体のパターン）は本体と見分けにくいので、
+            // パターンに `{ .. }` があれば許さない。
+            let r#in = t
+                .iter()
+                .enumerate()
+                .skip(k + 1)
+                .take_while(|(_, x)| !group(Some(x), Delimiter::Brace))
+                .find(|(_, x)| ident(Some(x), &["in"]))
+                .map(|(j, _)| j)?;
+            body_brace(t, r#in + 1).map(|b| b + 1)
         }
         Some(TokenTree::Ident(n)) if n == "if" => if_chain(t, k),
         _ => None,
     }
 }
 
-/// `t[from..]` の最上位で最初の `{ .. }` の位置（`;`・`,` より前）。条件の中の構造体リテラルは Rust が
-/// 許さないので、最初の `{ .. }` が本体になる。
-fn first_brace(t: &[TokenTree], from: usize) -> Option<usize> {
+/// `t[from..]` の条件（`if` / `while` の条件、`match` の対象、`for` の `in` の後）に続く本体の `{ .. }` の
+/// 位置。条件の中の構造体リテラルは Rust が許さないが、`{ .. }` は条件の中にも書ける（`if let S { v } = s`
+/// の構造体のパターン、`if { b }` のブロック、`match m!{..}` のマクロ、`if || { .. }` のクロージャ、入れ子の
+/// `if` / `match`）。そこで、最上位で最初の `{ .. }` を本体とみなすのは、条件が次をすべて満たすときだけにする：
+/// 空でない、`let` とブロックのような式の頭のキーワード（[`BLOCK_KEYWORDS`]、`move`・`async`・`return`・
+/// `break`）と `|` を含まない、`{ .. }` の直前が被演算子の終わり（名前、リテラル、`( .. )` / `[ .. ]`、`?`）。
+/// どれかを満たさなければ `None`。
+fn body_brace(t: &[TokenTree], from: usize) -> Option<usize> {
+    const COND_KEYWORDS: &[&str] = &["let", "move", "async", "return", "break", "continue"];
     for (k, tok) in t.iter().enumerate().skip(from) {
-        if group(Some(tok), Delimiter::Brace) {
-            return Some(k);
-        }
-        if punct(Some(tok), ';') || punct(Some(tok), ',') {
-            return None;
+        match tok {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+                let end_of_operand = k > from
+                    && match &t[k - 1] {
+                        TokenTree::Ident(n) => !BLOCK_KEYWORDS.iter().any(|w| n == w),
+                        TokenTree::Literal(_) => true,
+                        TokenTree::Group(g) => g.delimiter() != Delimiter::Brace,
+                        TokenTree::Punct(p) => p.as_char() == '?',
+                    };
+                return end_of_operand.then_some(k);
+            }
+            TokenTree::Ident(n) if BLOCK_KEYWORDS.iter().chain(COND_KEYWORDS).any(|w| n == w) => {
+                return None;
+            }
+            TokenTree::Punct(p) if matches!(p.as_char(), '|' | ';' | ',') => return None,
+            _ => {}
         }
     }
     None
@@ -218,7 +275,7 @@ fn first_brace(t: &[TokenTree], from: usize) -> Option<usize> {
 
 /// `t[k]` の `if` から始まる `if .. { .. } else if .. { .. } else { .. }` の終わりの位置。
 fn if_chain(t: &[TokenTree], k: usize) -> Option<usize> {
-    let end = first_brace(t, k + 1)? + 1;
+    let end = body_brace(t, k + 1)? + 1;
     if !ident(t.get(end), &["else"]) {
         return Some(end);
     }

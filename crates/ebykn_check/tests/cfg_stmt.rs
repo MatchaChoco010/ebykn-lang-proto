@@ -193,6 +193,16 @@ const MACRO_UNSTABLE_POSITIONS: &[&str] = &[
     "pub fn f(a: u32) -> u32 { assert!({ $A ..a; true }); a }",
     "pub fn f(a: u32) -> u32 { assert!({ $A a.clone() + 1 } == a + 1); a }",
     "pub fn f(a: u32) -> u32 { assert!({ $A match a { _ => a }.clone() + 1 } == a + 1); a }",
+    // ブロックのような式の終わりを見分けられない形と、波括弧で呼んだ入れ子のマクロと、戻り値の型を書いた
+    // クロージャ（PR #140 のレビュー）
+    "pub struct S<T> { pub v: T }\npub fn f(s: S<u32>) -> usize { let v = vec![{ $A if let S { v } = s { (v,) } else { (0,) }.0 & 1 }]; v.len() }",
+    "pub fn f(a: u32, b: bool) -> usize { let v = vec![{ $A if { b } { a } else { a }.clone() + 1 }]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![{ $A match { a } { _ => a }.clone() + 1 }]; v.len() }",
+    "pub fn f(b: bool) -> usize { let v = vec![vec!{$A if b { 1u8 } else { 2 } & 1}]; v.len() }",
+    "pub unchecked fn show(a: u32) { println!(\"{}\", format!{\"{}\", $A a}); }",
+    "pub fn f(a: u32) -> u32 { assert!({ println!{\"{}\", $A a}; true }); a }",
+    "pub fn f(a: u32) -> u32 { assert!(vec!{$A {a} + 1}.len() == 1); a }",
+    "pub unchecked fn show() -> usize { let v = vec![$A || -> u32 { 1 } as fn() -> u32]; v.len() }",
 ];
 
 const MACRO_STABLE_POSITIONS: &[&str] = &[
@@ -213,6 +223,9 @@ const MACRO_STABLE_POSITIONS: &[&str] = &[
     "pub fn f(a: u32) -> u32 { assert!({ $A if a == 1 { } a == a }); a }",
     "pub fn f(a: u32) -> u32 { assert!(match a { $A 0 | 1 => a + 1 == 2, _ => true }); a }",
     "pub fn f(a: u32) -> u32 { assert!({ $A let y = a + 1; y > a }); a }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A |y: u32| y + a]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![vec!{$A a, 1}]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A (a + 1), $A (a as u32)]; v.len() }",
 ];
 
 #[test]

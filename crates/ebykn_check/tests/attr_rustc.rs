@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 /// 属性の位置を拒否する Ebykn の診断の文言（`Unimpl::AttrPosInMacro`、`Unimpl::ExprAttr`、
-/// `Unimpl::CfgStmt`、`..` で始まる範囲の属性を拒否する構文解析器の E0001）。
+/// `Unimpl::CfgStmt`）と、構文解析器の E0001（`..` で始まる範囲の属性、ループの後ろに続く `.` など）。
 const ATTR_DIAGS: &[&str] = &[
-    "attributes are not allowed on range expressions starting with `..`",
+    "E0001: syntax error",
     "an attribute at this position inside the arguments of this macro is not supported",
     "an attribute on this expression is not supported",
     "neither is any attribute on an assignment, binary operation or cast statement",
@@ -45,9 +45,13 @@ const CONTEXTS: &[&str] = &[
     "vec![1u8; { $A $E; 2 }]",
     "vec![S { $A v: $E }]",
     "vec![{ $A let y = $E; 1u8 }]",
+    // 波括弧で呼んだ入れ子の std のマクロ（`{ .. }` はブロックでない。PR #140 のレビュー）
+    "vec![vec!{$A $E}]",
+    "vec![{ vec!{$A $E}; 1u8 }]",
+    "vec![format!{\"{:?}\", $A $E}]",
 ];
 
-/// 式の形。`a: u32`、`b: bool`、`let mut x = 0u32` が使える。
+/// 式の形。`a: u32`、`b: bool`、`s: S<u32>`、`let mut x = 0u32` が使える。
 const FORMS: &[&str] = &[
     "a",
     "1",
@@ -107,6 +111,21 @@ const FORMS: &[&str] = &[
     "S { v: a }.v + 1",
     "vec![a].len()",
     "vec![a].len() + 1",
+    // ブロックのような式の終わりを見分けにくい形（PR #140 のレビュー）
+    "if let S { v } = s { (v,) } else { (0,) }.0 & 1",
+    "if let S { v } = s { v } else { a }",
+    "if { b } { a } else { a }.clone() + 1",
+    "match { a } { _ => a }.clone() + 1",
+    "while { false } { }.clone() == ()",
+    "for S { v } in vec![S { v: a }] { }.clone() == ()",
+    "if b { a } else if let S { v } = s { v } else { a }.clone() + 1",
+    "if a == 1 { 1 } else { a }",
+    "if b { 1u8 } else { 2 } & 1",
+    // 戻り値の型を書いたクロージャ（本体がブロックで終わり、後ろに `as` が続く）
+    "|| -> u32 { 1 } as fn() -> u32",
+    "move || -> u32 { 1 } as fn() -> u32",
+    "|y: u32| -> u32 { y } as fn(u32) -> u32",
+    "|y: u32| -> u32 { y }",
 ];
 
 const ATTRS: &[&str] = &["#[allow(unused)]", "#[allow(unused)] #[allow(unused)]"];
@@ -116,7 +135,7 @@ const HEADER: &str =
 
 fn fragment(ctx: &str, attr: &str, form: &str) -> String {
     let body = ctx.replace("$A", attr).replace("$E", form);
-    format!("pub fn f(a: u32, b: bool) {{ let mut x = 0u32; let v = {body}; }}")
+    format!("pub fn f(a: u32, b: bool, s: S<u32>) {{ let mut x = 0u32; let v = {body}; }}")
 }
 
 /// 安定版の rustc で、行ごとの誤りを返す（行番号 → 文言）。各断片を 1 行の関数にして、一つのファイルで
