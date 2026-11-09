@@ -90,6 +90,7 @@ impl Cx<'_> {
 
     /// 関数の本体の中の `use lemmas g;`（§7.2）。
     pub(crate) fn use_lemmas_stmt(&self, p: &ast::Path) -> String {
+        self.note_use_lemmas(p, false);
         let s = format!("broadcast use {};", self.path(p));
         if self.proof {
             s

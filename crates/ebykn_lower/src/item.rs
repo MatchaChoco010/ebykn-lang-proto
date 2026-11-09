@@ -221,7 +221,10 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
             ),
             None,
         ),
-        ItemKind::UseLemmas(p) => (format!("{a}broadcast use {};", cx.path(p)), None),
+        ItemKind::UseLemmas(p) => {
+            cx.note_use_lemmas(p, true);
+            (format!("{a}broadcast use {};", cx.path(p)), None)
+        }
         // 部分集合型と `impl spec` は検査が E0003 にする。`mod` と `impl` は [`item_pieces`]。
         ItemKind::Subset(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) | ItemKind::Impl(_) => {
             (String::new(), None)
@@ -471,6 +474,8 @@ fn struct_text(cx: &Cx, a: &str, v: &str, s: &ast::Struct) -> String {
 /// 書く（#10 の決定。裸のものは検査が E0004 にする）。
 fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<'a> {
     let mut c = cx.clone();
+    // 依存の辺の始点（[`crate::deps`]）。
+    c.current = Some(cx.item_path(&sig.ident.name));
     c.perms = BTreeMap::new();
     c.rename = BTreeMap::new();
     c.gives = None;

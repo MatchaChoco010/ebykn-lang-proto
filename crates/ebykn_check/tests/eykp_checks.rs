@@ -34,19 +34,95 @@ fn proofs_cannot_change_permissions() {
     assert!(d.is_empty(), "{d:?}");
 }
 
+/// 証明の中では、状態を変える操作を、前と後で状態が同じでも E0520 にする（#149 のレビューの B1）。
 #[test]
-fn proofs_cannot_take_or_put() {
+fn proofs_cannot_take_put_or_leak_even_when_the_state_returns() {
     let src = format!(
-        "{NODE}fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> requires r.contains(p) {{ }}\n"
+        "{NODE}pub fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> requires old(r).contains(p) {{ }}\n"
     );
-    let proof = src.replace("{ }", "{ proof { take r[p]; put r[p]; } }");
-    let d = run(&src, &proof);
-    // 取り出して戻すと状態は同じだが、証明の中の `take` / `put` は剥がした `.eyk` にない操作。
-    // 状態が同じなら E0520 にはしない（読むのと同じ）。
-    assert!(d.iter().all(|l| !l.contains("E0520")), "{d:?}");
-    let proof = src.replace("{ }", "{ proof { take r[p]; } }");
-    let d = run(&src, &proof);
+    for body in [
+        // 取り出して捨てる（`.eyk` の契約が「残す」なら、証明で消したことになる）。
+        "{ proof { take r[p]; leak p@; } }",
+        // 取り出して戻す。
+        "{ proof { take r[p]; put r[p]; } }",
+        "{ proof { take r[p]; } }",
+        "{ assert true by { take r[p]; put r[p]; }; }",
+    ] {
+        let proof = src.replace("{ }", body);
+        let d = run(&src, &proof);
+        assert!(
+            d.iter().any(|l| l.contains("E0520") && l.contains("`p@`")),
+            "{body}: {d:?}"
+        );
+        assert_eq!(
+            d.iter().filter(|l| l.contains("E0520")).count(),
+            1,
+            "{body}: {d:?}"
+        );
+    }
+    // 領域の間で移す。
+    let src2 = format!(
+        "{NODE}pub fn mv(p: Ptr<Node>) uses a: &mut Region<Ptr<Node>>, b: &mut Region<Ptr<Node>> requires old(a).contains(p), !old(b).contains(p) {{ }}\n"
+    );
+    let d = run(
+        &src2,
+        &src2.replace("{ }", "{ proof { take a[p]; put b[p]; } }"),
+    );
     assert!(d.iter().any(|l| l.contains("E0520")), "{d:?}");
+    // 読む借用は書ける。
+    let d = run(
+        &src,
+        &src.replace(
+            "{ }",
+            "{ proof { borrow r[p] { assert (*p).v == (*p).v; } } }",
+        ),
+    );
+    assert!(d.is_empty(), "{d:?}");
+    // 消去フィールドへの代入も E0520。
+    let src3 =
+        "pub struct S { a: u64 } spec { n: int }\nimpl S {\n    pub fn f(&mut self) { }\n}\n";
+    let d = run(src3, &src3.replace("{ }", "{ proof { self@n = 1; } }"));
+    assert!(
+        d.iter().any(|l| l.contains("E0520") && l.contains("`@n`")),
+        "{d:?}"
+    );
+}
+
+/// `spec let` はスコープの名前を覆えない（E0521。#149 のレビューの B2）。覆うと、後ろの `.eyk` の文の
+/// 指すものが変わる。
+#[test]
+fn spec_let_cannot_shadow_names_in_scope() {
+    let src = format!(
+        "{NODE}pub fn mv(p: Ptr<Node>, q: Ptr<Node>) uses to: &mut Region<Ptr<Node>>, from: &mut Region<Ptr<Node>> requires old(from).contains(p), !old(to).contains(p) {{\n    take from[p];\n    put to[p];\n}}\n"
+    );
+    let proof = src.replace(
+        "    take from[p];",
+        "    spec let p = q;\n    take from[p];",
+    );
+    let d = run(&src, &proof);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(
+        d[0].starts_with("proof/lib.eykp:3:14: E0521") && d[0].contains("`p`"),
+        "{d:?}"
+    );
+    // 消去フィールドへの代入の右辺も同じ。
+    let src2 = "pub struct S { a: u64 } spec { n: int }\nimpl S {\n    pub fn f(&mut self, x: int) {\n        self@n = x;\n    }\n}\n";
+    let proof2 = src2.replace(
+        "        self@n = x;",
+        "        spec let x = 0int;\n        self@n = x;",
+    );
+    let d = run(src2, &proof2);
+    assert!(
+        d.iter().any(|l| l.contains("E0521") && l.contains("`x`")),
+        "{d:?}"
+    );
+    // 新しい名前なら通る。
+    let ok = src.replace(
+        "    take from[p];",
+        "    spec let before = q;\n    take from[p];",
+    );
+    let d = run(&src, &ok);
+    assert!(d.is_empty(), "{d:?}");
 }
 
 /// `.eyk` の誤りは `.eyk` の位置で一度だけ出す（`.eykp` の同じ誤りを重ねない）。
@@ -69,4 +145,21 @@ fn errors_inside_proofs_are_reported_in_the_proof_file() {
     let proof = "lemma fn l(x: int) ensures x == x { assert self@v == 1; }\n";
     let d = run(src, proof);
     assert!(d.iter().any(|l| l.starts_with("proof/lib.eykp:")), "{d:?}");
+}
+
+/// `lemma group` の要素は、モジュールの直下の `lemma fn` だけ（#149 のレビューの nit）。
+#[test]
+fn lemma_group_members_are_module_level_lemmas() {
+    let src = "pub struct S {}\nimpl S {\n    lemma fn m() ensures true;\n}\nlemma fn l() ensures true;\nfn f() {}\n";
+    let ok = format!("{src}lemma group g {{ l }}\n");
+    let d = run(src, &ok);
+    assert!(d.is_empty(), "{d:?}");
+    for bad in ["S::m", "f", "nothing"] {
+        let d = run(src, &format!("{src}lemma group g {{ {bad} }}\n"));
+        assert!(
+            d.iter()
+                .any(|l| l.contains("E0001") && l.contains(&format!("`{bad}` in `lemma group`"))),
+            "{bad}: {d:?}"
+        );
+    }
 }

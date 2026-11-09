@@ -5,6 +5,7 @@
 //! トークン列に読み直してから [`print`] で整形する（仕様 §12 はトークン列で組み立てるとする。
 //! 元の位置は M6 の source map で持たせる。`OPEN.md`）。
 
+pub mod deps;
 mod expr;
 mod item;
 pub mod print;
@@ -67,6 +68,10 @@ pub struct Output {
     /// std でも組み込みでもない手続きマクロ（依存クレートの derive と属性マクロ）が付いた項目。
     /// マクロが作る項目は Verus が検証しないので、`verify` が前提の一覧に必ず出す（#49）。
     pub macros: Vec<MacroUse>,
+    /// 項目から依存先への辺（[`deps`]。§9.1 の呼び出しグラフ）。
+    pub depends: BTreeMap<String, std::collections::BTreeSet<deps::Dep>>,
+    /// モジュールの直下の `use lemmas`：（モジュールの名前、依存先）。その下のすべての項目からの辺。
+    pub module_depends: Vec<(String, deps::Dep)>,
 }
 
 /// 項目に付いた、Verus が検証しない項目を作る手続きマクロ（#49）。
@@ -90,6 +95,8 @@ pub(crate) struct Report {
     exec: Vec<String>,
     verus_patterns: BTreeMap<String, String>,
     macros: Vec<MacroUse>,
+    deps: BTreeMap<String, std::collections::BTreeSet<deps::Dep>>,
+    module_deps: Vec<(String, deps::Dep)>,
 }
 
 /// 書き下しの文脈。式ごとに複製して使う（[`Cx::sub`]）。
@@ -125,6 +132,10 @@ pub(crate) struct Cx<'a> {
     pub rel: &'a str,
     /// `lemma group` の要素の補題（`broadcast proof fn` にする）。
     pub broadcast: &'a std::collections::BTreeSet<ItemPath>,
+    /// `lemma group` の要素（[`deps::Groups`]）。
+    pub groups: &'a deps::Groups,
+    /// いま書き下している項目（依存の辺の始点。[`deps`]）。
+    pub current: Option<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -296,18 +307,28 @@ pub fn lower_with_crates(
     // `lemma group` の要素の補題は `broadcast proof fn` にする（Verus の `broadcast group` は
     // `broadcast proof fn` だけを受け付ける）。
     let mut broadcast = std::collections::BTreeSet::new();
+    let mut groups = deps::Groups::new();
     project.for_each_module(|module, _, items| {
         for it in items {
             if let ast::ItemKind::LemmaGroup(g) = &it.kind {
+                let mut members = Vec::new();
                 for p in &g.members {
                     let segs: Vec<String> =
                         p.segments.iter().map(|s| s.ident.name.clone()).collect();
-                    if let ebykn_check::index::Resolved::Fn(path) =
-                        checked.index.resolve(module, p.leading_colon, &segs, None)
-                    {
-                        broadcast.insert(path);
+                    match checked.index.resolve(module, p.leading_colon, &segs, None) {
+                        ebykn_check::index::Resolved::Fn(path) => {
+                            members.push(Some(
+                                std::iter::once(project.manifest.name.clone())
+                                    .chain(path.iter().cloned())
+                                    .collect::<Vec<_>>()
+                                    .join("::"),
+                            ));
+                            broadcast.insert(path);
+                        }
+                        _ => members.push(None),
                     }
                 }
+                groups.insert((module.to_vec(), g.ident.name.clone()), members);
             }
         }
     });
@@ -342,6 +363,8 @@ pub fn lower_with_crates(
             bindings: &bindings,
             rel: &rel,
             broadcast: &broadcast,
+            groups: &groups,
+            current: None,
         };
         let mut pieces = Vec::new();
         for a in &ast.attrs {
@@ -363,6 +386,8 @@ pub fn lower_with_crates(
     out.exec = r.exec;
     out.verus_patterns = r.verus_patterns;
     out.macros = r.macros;
+    out.depends = r.deps;
+    out.module_depends = r.module_deps;
     Ok(out)
 }
 

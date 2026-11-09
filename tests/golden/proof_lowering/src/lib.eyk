@@ -1,5 +1,6 @@
 // .eykp からの書き下し（仕様 §7.2、§7.4、§7.5。#67）。証明は proof/lib.eykp にある。本体のある補題は
-// Verus の結果で verified になり、本体のない補題 `unproven` は admit のまま。
+// Verus の結果で verified になり、本体のない補題 `unproven` は admit のまま。`unproven` に頼る `leans` は
+// unverified（§9.1 の 3）。
 
 pub spec fn double(x: int) -> int = x + x;
 
@@ -35,4 +36,9 @@ pub fn twice(x: u64) -> (r: u64)
     ensures r == double(x as int)
 {
     x + x
+}
+
+/// 本体のない補題に頼る。
+pub fn leans(x: u64) -> u64 {
+    x
 }

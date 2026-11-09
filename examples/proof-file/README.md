@@ -38,7 +38,6 @@ proof/lib.eykp:12:19: E0304: このファイルから証明を剥がしても、
 ebykn: 検査が 1 件のエラーで失敗しました
 ```
 
-
 証明ファイルをどけると、`src/lib.eyk` から書き下すので、補題 `double_monotonic` は証明なしの前提（`admit`）になります。
 
 ```console

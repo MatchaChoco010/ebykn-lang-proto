@@ -396,7 +396,7 @@ impl Cx<'_> {
                 let ins = self.jump_inserts(l);
                 let v = expr.as_ref().map(|x| self.expr(x));
                 let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
-                with_inserts(&ins, v, |v| {
+                with_inserts(&ins, v, self.proof, |v| {
                     format!("break{l}{}", v.map(|v| format!(" {v}")).unwrap_or_default())
                 })
             }
@@ -404,12 +404,12 @@ impl Cx<'_> {
                 let l = label.as_ref().map(|l| l.name.as_str());
                 let ins = self.jump_inserts(l);
                 let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
-                with_inserts(&ins, None, |_| format!("continue{l}"))
+                with_inserts(&ins, None, self.proof, |_| format!("continue{l}"))
             }
             ExprKind::Return(x) => {
                 let ins = self.return_inserts();
                 let v = x.as_ref().map(|x| self.expr(x));
-                with_inserts(&ins, v, |v| self.ret(v))
+                with_inserts(&ins, v, self.proof, |v| self.ret(v))
             }
             ExprKind::Call { func, args, uses } => self.call(e, func, args, uses),
             ExprKind::MethodCall {
@@ -688,6 +688,7 @@ impl Cx<'_> {
                 return format!("{}({}){}", f.name, self.expr(root), fields.concat());
             }
         }
+        self.note_call(func);
         let f = self.expr(func);
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         a.extend(self.extra_args(e.span, uses));
@@ -703,6 +704,7 @@ impl Cx<'_> {
         args: &[Expr],
         uses: &[ast::RegionArg],
     ) -> String {
+        self.note_method(method);
         let key = SpanKey::from(e.span);
         if let Some(x) = self.facts.frees.get(&key).cloned() {
             return format!("{x}.free(Tracked({}))", perm_var(&x));
@@ -861,7 +863,7 @@ impl Cx<'_> {
                 "Err(::core::convert::From::from(__eyk_err))",
             ),
         };
-        let fail = with_inserts(&ins, None, |_| self.ret(Some(fail.into())));
+        let fail = with_inserts(&ins, None, self.proof, |_| self.ret(Some(fail.into())));
         format!("match {v} {{ {ok} => __eyk_ok, {err} => {fail} }}")
     }
 
@@ -987,6 +989,16 @@ impl Cx<'_> {
             format!("{head}{body_s} by {by_s};")
         } else {
             format!("{head}{} implies {body_s} by {by_s};", conds.join(" && "))
+        }
+    }
+
+    /// 証明の文を包む：実行する関数の中なら `proof { s }`、証明の文脈（`proof { }` の中、補題の本体）では
+    /// そのまま（Verus は証明の中の入れ子の `proof { }` を受け付けない）。
+    pub(crate) fn in_proof(&self, s: &str) -> String {
+        if self.proof {
+            s.to_string()
+        } else {
+            format!("proof {{ {s} }}")
         }
     }
 
@@ -1119,7 +1131,8 @@ impl Cx<'_> {
             self.exits.pop();
             restore(&mut self.perms, &p, saved);
             format!(
-                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ proof {{ {rx}.insert({v}); }} __eyk_res }}; __eyk_res }}"
+                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ {} __eyk_res }}; __eyk_res }}",
+                self.in_proof(&format!("{rx}.insert({v});"))
             )
         } else {
             let saved = self.perms.insert(p.clone(), PermKind::Ref);
@@ -1223,11 +1236,11 @@ impl Cx<'_> {
                     return String::new();
                 };
                 let p = index_name(ri);
-                format!(
-                    "proof {{ {}.insert({}); }}",
+                self.in_proof(&format!(
+                    "{}.insert({});",
                     self.region_exec(&r, true),
                     perm_var(&p)
-                )
+                ))
             }
             // `leak p@;` は何も出さない（§7.3）。
             StmtKind::Leak(_) => String::new(),
@@ -1238,7 +1251,7 @@ impl Cx<'_> {
                 };
                 let b = self.expr(base);
                 let v = self.in_logic(value);
-                format!("proof {{ {b}.{} = Ghost({v}); }}", erased_field(field))
+                self.in_proof(&format!("{b}.{} = Ghost({v});", erased_field(field)))
             }
         }
     }
@@ -1281,15 +1294,21 @@ fn borrow_inserts(scopes: &[ExitScope]) -> Vec<String> {
 
 /// 抜ける文 `jump` の前に、権限を戻す文 `ins` を置く。値があれば先に評価して束縛する（値の式が
 /// 借りている権限を読むことがある）。
+/// `in_proof` は証明の文脈か（そのときは `proof { }` で包まない）。
 fn with_inserts(
     ins: &[String],
     v: Option<String>,
+    in_proof: bool,
     jump: impl FnOnce(Option<String>) -> String,
 ) -> String {
     if ins.is_empty() {
         return jump(v);
     }
-    let proof = format!("proof {{ {} }}", ins.join(" "));
+    let proof = if in_proof {
+        ins.join(" ")
+    } else {
+        format!("proof {{ {} }}", ins.join(" "))
+    };
     match v {
         Some(v) => format!(
             "{{ let __eyk_exit = {v}; {proof} {} }}",

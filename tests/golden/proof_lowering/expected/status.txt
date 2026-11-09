@@ -6,4 +6,5 @@ verified proof_lowering::sum_below
 admit proof_lowering::unproven
 verified proof_lowering::count
 verified proof_lowering::twice
-results 7 verified, 0 errors
+unverified proof_lowering::leans (depends on proof_lowering::unproven, a lemma without a body)
+results 8 verified, 0 errors

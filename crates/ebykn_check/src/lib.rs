@@ -1,9 +1,9 @@
 //! 静的検査（仕様 §6）とプロジェクトの読み込み（仕様 §3）。
 //!
 //! 入口は [`project::load`] と [`check`]。§6.1（剥がし一致、[`strip`]）と §6.2〜§6.5（線形性、領域添字、
-//! 絞り込みの署名展開、索引と名前解決）を実装している。§6.2〜§6.5 が見るのは `.eyk` だけ（`.eykp` の
-//! 本体の検査は #67）。§6.6（自己完結）は M3、部分集合型・trait の契約は M4、性質ファイルは M5 で、
-//! どれも書かれていれば `E0003`（未実装）にする。
+//! 絞り込みの署名展開、索引と名前解決）を実装している。§6.2〜§6.5 は、`.eykp` のあるモジュールでは
+//! `.eyk` と `.eykp` の両方にかける（[`check`]）。§6.6（自己完結）は M3、部分集合型・trait の契約は M4、
+//! 性質ファイルは M5 で、どれも書かれていれば `E0003`（未実装）にする。
 
 pub mod body;
 pub mod ensures;
@@ -182,9 +182,29 @@ pub fn check_items(
             | ItemKind::TypeAlias(_)
             | ItemKind::Mod(_)
             | ItemKind::Use(_)
-            | ItemKind::LemmaGroup(_)
             | ItemKind::UseLemmas(_)
             | ItemKind::Rust(_) => {}
+            // 要素はモジュールの直下の `lemma fn`（書き下しは `broadcast proof fn` にする。Verus の
+            // `broadcast group` は `broadcast proof fn` だけを受け付ける）。
+            ItemKind::LemmaGroup(g) => {
+                for m in &g.members {
+                    let segs: Vec<String> =
+                        m.segments.iter().map(|s| s.ident.name.clone()).collect();
+                    let r = index.resolve(module, m.leading_colon, &segs, None);
+                    let lemma = matches!(r, index::Resolved::Fn(_))
+                        && index
+                            .callee(&r)
+                            .is_some_and(|f| f.kind == index::FnKind::Lemma);
+                    if !lemma {
+                        diags.push(
+                            m.span,
+                            Message::Check(CheckMsg::LemmaGroupMember {
+                                written: segs.join("::"),
+                            }),
+                        );
+                    }
+                }
+            }
         }
     }
 }

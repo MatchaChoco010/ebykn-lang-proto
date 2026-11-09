@@ -503,6 +503,10 @@ pub enum CheckMsg {
     NotARegionArg {
         name: String,
     },
+    /// `lemma group` の要素が、モジュールの直下の `lemma fn` に解決しない（#67）。
+    LemmaGroupMember {
+        written: String,
+    },
     /// `impl Invariant for T` の中身の形が違う。
     InvariantImplShape,
     /// `impl View for T` の中に `type V` と `spec fn` 以外がある。
@@ -684,6 +688,10 @@ pub enum CheckMsg {
     PermChangedInProof {
         names: Vec<String>,
     },
+    /// `spec let` のパターンが、スコープにある名前（引数・ローカル・権限・領域）を覆った（E0521。#67）。
+    SpecLetShadows {
+        name: String,
+    },
 
     // W0601
     RefinementNested {
@@ -719,6 +727,7 @@ impl CheckMsg {
             NotARegion { .. }
             | NotARegionArg { .. }
             | InvariantImplShape
+            | LemmaGroupMember { .. }
             | ViewImplShape
             | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
@@ -750,6 +759,7 @@ impl CheckMsg {
             | RegionSharedAsMut { .. }
             | RegionPassedTwice { .. } => Code::E0519,
             PermChangedInProof { .. } => Code::E0520,
+            SpecLetShadows { .. } => Code::E0521,
             RefinementNested { .. } => Code::W0601,
         }
     }
@@ -826,12 +836,24 @@ impl CheckMsg {
             ),
 
             (PermChangedInProof { names }, En) => format!(
-                "this proof changes the state of {}; a proof in the proof file (`proof {{ }}`, `assert .. by {{ }}`, ..) may read permissions and regions but not take, put, free, leak, create or move them, because the source without its proofs must hold the same permissions",
+                "this proof changes the permissions or regions {}; a proof in the proof file (`proof {{ }}`, `assert .. by {{ }}`, ..) may read permissions and regions (`borrow r[p] {{ }}`, `*p`, `r[p]`) but not take, put, leak, borrow mutably, create, move or assign them (`x@f = e`), even when it puts them back, because the source without its proofs must do the same with them",
                 names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
             ),
             (PermChangedInProof { names }, Ja) => format!(
-                "この証明は {} の状態を変えています。証明ファイルの証明（`proof {{ }}`、`assert .. by {{ }}` など）は、権限と領域を読めますが、`take`・`put`・解放・`leak`・作成・移動はできません。証明を剥がしたソースが、同じ権限を持っていなければならないためです",
+                "この証明は権限か領域 {} を変えています。証明ファイルの証明（`proof {{ }}`、`assert .. by {{ }}` など）は、権限と領域を読めます（`borrow r[p] {{ }}`、`*p`、`r[p]`）が、`take`・`put`・`leak`・`borrow mut`・作成・移動・代入（`x@f = e`）はできません。戻すとしてもできません。証明を剥がしたソースが、同じ権限で同じことをしなければならないためです",
                 names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join("、")
+            ),
+            (SpecLetShadows { name }, En) => format!(
+                "`spec let` cannot bind `{name}`, which is already a name in scope (a parameter, a local, a permission or a region); the code after it would refer to the ghost value instead, so the source without its proofs would mean something else; give it another name"
+            ),
+            (SpecLetShadows { name }, Ja) => format!(
+                "`spec let` で `{name}` を束縛できません。スコープにある名前（引数・ローカル・権限・領域）です。覆うと後ろのコードがこの ghost の値を指し、証明を剥がしたソースと意味が変わるので、別の名前にします"
+            ),
+            (LemmaGroupMember { written }, En) => format!(
+                "syntax error: `{written}` in `lemma group` is not a `lemma fn` at the module level of this crate; a lemma group can list only such lemmas (they become Verus `broadcast proof fn`s), not lemmas in an `impl` or in a function body, nor other groups"
+            ),
+            (LemmaGroupMember { written }, Ja) => format!(
+                "構文エラー: `lemma group` の `{written}` は、このクレートのモジュールの直下の `lemma fn` ではありません。`lemma group` に並べられるのはそうした補題だけです（Verus の `broadcast proof fn` にします）。`impl` や関数の本体の中の補題、ほかのグループは並べられません"
             ),
             (Unimplemented(u), En) => format!("not implemented yet: {}", u.text(En)),
             (Unimplemented(u), Ja) => format!("未実装: {}", u.text(Ja)),

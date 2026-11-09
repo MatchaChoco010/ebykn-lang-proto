@@ -1,5 +1,6 @@
 //! `.eykp` の証明の文（仕様 §5.7）の走査。証明の文は論理の文脈で読む。証明は権限と領域を読めるが、
-//! 状態は変えられない（E0520。剥がした `.eyk` が同じ権限を持つように。#67）。
+//! 状態を変える操作はできない（E0520）。`spec let` はスコープの名前を覆えない（E0521）。どちらも、剥がした
+//! `.eyk` の文が同じ意味を持つように（#67）。
 
 use ebykn_syntax::ast;
 use ebykn_syntax::diag::CheckMsg;
@@ -8,35 +9,50 @@ use ebykn_syntax::span::Span;
 use super::Walker;
 
 impl Walker<'_> {
-    /// 証明の文を論理の文脈で読み、権限か領域の状態を変えたら E0520 にして、変える前の状態に戻す。
+    /// 証明の文を論理の文脈で読む。中で権限か領域の状態を変える操作（`take`・`put`・`leak`・`borrow mut`・
+    /// `x@f = e`・移動や `&mut` で渡す `uses`・領域の作成）を一度でもしたら E0520 にする（前と後の状態が
+    /// 同じでも。取り出して捨てる、領域の間で移す、を通さないため）。読む操作（`borrow r[p] { }`、論理の
+    /// `*p` / `r[p]`）は通す。E0520 のあとは、証明の前の状態に戻して続ける。
     pub(super) fn proof_stmt_in_logic(&mut self, p: &ast::ProofStmt, span: Span) {
         let before = (
             self.env.clone(),
             self.regions.clone(),
             self.moved_regions.clone(),
         );
+        let outer = self.proof_ops.replace(Vec::new());
         let prev = std::mem::replace(&mut self.logic, true);
         self.proof_stmt(p, span);
         self.logic = prev;
-        let mut names: Vec<String> = self
-            .env
-            .keys()
-            .chain(before.0.keys())
-            .filter(|k| self.env.get(*k) != before.0.get(*k))
-            .map(|k| format!("{k}@"))
-            .collect();
-        names.extend(
-            self.regions
-                .symmetric_difference(&before.1)
-                .chain(self.moved_regions.symmetric_difference(&before.2))
-                .cloned(),
-        );
+        let mut names = std::mem::replace(&mut self.proof_ops, outer).unwrap_or_default();
         names.sort();
         names.dedup();
         if !names.is_empty() {
-            self.push(span, CheckMsg::PermChangedInProof { names });
+            // 入れ子の証明の文の中の操作は、いちばん外の証明の文で一度だけ報告する。
+            match &mut self.proof_ops {
+                Some(o) => o.extend(names),
+                None => self.push(span, CheckMsg::PermChangedInProof { names }),
+            }
         }
         (self.env, self.regions, self.moved_regions) = before;
+    }
+
+    /// `spec let` のパターンが、スコープにある名前（引数・ローカル・権限・領域）を覆うなら E0521。
+    /// `spec let` は関数の本体の `let ghost` になるので、覆うと、後ろの `.eyk` の文（`take r[p]` の
+    /// 添字、`x@f = e` の右辺、ループの句など、Verus が ghost として読む位置）の指すものが変わる。
+    fn spec_let_shadow(&mut self, l: &ast::Local) {
+        let saved = std::mem::take(&mut self.locals);
+        self.add_locals(&l.pat);
+        let bound = std::mem::replace(&mut self.locals, saved);
+        for name in bound {
+            let taken = self.locals.contains(&name)
+                || self.env.contains_key(&name)
+                || self.known.contains(&name)
+                || self.regions.contains(&name)
+                || self.var_types.contains_key(&name);
+            if taken {
+                self.push(l.pat.span, CheckMsg::SpecLetShadows { name });
+            }
+        }
     }
 
     pub(super) fn proof_stmt(&mut self, p: &ast::ProofStmt, span: Span) {
@@ -76,6 +92,7 @@ impl Walker<'_> {
                 self.block(by);
             }
             ProofStmt::SpecLet(l) => {
+                self.spec_let_shadow(l);
                 self.local(l, span);
             }
             ProofStmt::Reveal { fuel, .. } => {

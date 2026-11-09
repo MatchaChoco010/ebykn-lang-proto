@@ -589,6 +589,8 @@ pub struct ItemStatus {
     pub status: &'static str,
     /// `status` が `macro` のとき、付いているマクロ（#49）。
     pub via: Option<(ebykn_syntax::macros::MacroKind, String)>,
+    /// `status` が `unverified` のとき、届く本体のない補題（§9.1 の 3 の「補題に本体なし」）。
+    pub depends_on: Option<String>,
 }
 
 impl ItemStatus {
@@ -601,7 +603,13 @@ impl ItemStatus {
             Some((ebykn_syntax::macros::MacroKind::Attribute, p)) => {
                 format!("{} {p} on {}", self.status, self.item)
             }
-            None => format!("{} {}", self.status, self.item),
+            None => match &self.depends_on {
+                Some(d) => format!(
+                    "{} {} (depends on {d}, a lemma without a body)",
+                    self.status, self.item
+                ),
+                None => format!("{} {}", self.status, self.item),
+            },
         }
     }
 }
@@ -738,6 +746,7 @@ pub fn statuses(
                 item: item.clone(),
                 status: decide(facts),
                 via: None,
+                depends_on: None,
             });
         }
         // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（`verus!` の外の項目に
@@ -747,10 +756,31 @@ pub fn statuses(
                 item: m.item.clone(),
                 status: "macro",
                 via: Some((m.kind, m.path.clone())),
+                depends_on: None,
             });
         }
     }
+    unverify_dependents(&mut out, output);
     out
+}
+
+/// 本体のない補題（`admit`）に届く `verified` の項目を `unverified` にする（§9.1 の 3。#149 のレビューの
+/// B3）。辺は書き下しが記録した呼び出しと `use lemmas`（[`ebykn_lower::deps`]）。Verus は `admit()` を
+/// 前提として使うので、頼る側も Verus の上では通るが、証明は済んでいない。
+fn unverify_dependents(out: &mut [ItemStatus], output: &Output) {
+    let items: Vec<String> = out.iter().map(|s| s.item.clone()).collect();
+    for s in out.iter_mut().filter(|s| s.status == "verified") {
+        if let Some(a) = ebykn_lower::deps::reaches_admit(
+            &s.item,
+            &output.depends,
+            &output.module_depends,
+            &items,
+            &output.admitted,
+        ) {
+            s.status = "unverified";
+            s.depends_on = Some(a);
+        }
+    }
 }
 
 /// Verus の `func-details` の鍵での項目の名前（クレート名の `-` は `_`）。
@@ -916,7 +946,10 @@ fn item_json(i: &ItemStatus) -> serde_json::Value {
                 ebykn_syntax::macros::MacroKind::Attribute => "attribute",
             },
         }),
-        None => serde_json::json!({"item": i.item, "status": i.status}),
+        None => match &i.depends_on {
+            Some(d) => serde_json::json!({"item": i.item, "status": i.status, "depends_on": d}),
+            None => serde_json::json!({"item": i.item, "status": i.status}),
+        },
     }
 }
 
@@ -1317,6 +1350,7 @@ mod tests {
             item: item.into(),
             status,
             via: None,
+            depends_on: None,
         };
         let all = vec![
             st("g1::liar", "unchecked"),
@@ -1434,6 +1468,7 @@ mod tests {
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),
+            ..Default::default()
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()

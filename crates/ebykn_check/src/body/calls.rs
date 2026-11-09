@@ -259,6 +259,9 @@ impl Walker<'_> {
             if held != PermMode::Move {
                 self.facts.region_arg_refs.insert(u.span.into());
             }
+            if u.mode == PermMode::Move {
+                self.proof_op(v);
+            }
             if u.mode == PermMode::Move && !self.logic {
                 self.regions.remove(v);
                 self.moved_regions.insert(v.clone());

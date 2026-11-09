@@ -58,4 +58,11 @@ ensures r == double(x as int), {
     x + x
 }
 
+#[doc = " 本体のない補題に頼る。"] pub fn leans(x: u64) -> u64 {
+    proof {
+        unproven(x as int);
+    }
+    x
+}
+
 } // verus!
