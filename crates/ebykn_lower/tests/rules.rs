@@ -665,6 +665,26 @@ fn std_drop_gets_opens_invariants_none_and_no_unwind() {
             "pub fn f() {}\nmod m { pub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} } }",
             "mod の中",
         ),
+        (
+            "mod r { pub use std::ops::Drop; }\npub struct S { a: u64 }\nimpl r::Drop for S { fn drop(&mut self) {} }",
+            "pub use で再公開した std の Drop",
+        ),
+        (
+            "mod r { pub use std::ops::Drop; }\nmod m { pub struct S { a: u64 }\nimpl super::r::Drop for S { fn drop(&mut self) {} } }",
+            "super からの再公開",
+        ),
+        (
+            "mod r { pub use std::ops::Drop; }\nuse crate::r::Drop;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "crate からの再公開の use",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl std::prelude::rust_2024::Drop for S { fn drop(&mut self) {} }",
+            "std の prelude のパス",
+        ),
+        (
+            "use std::ops::*;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "std の glob",
+        ),
     ] {
         let got = lowered(src);
         assert!(
@@ -695,6 +715,26 @@ fn other_drops_are_not_marked() {
         (
             "mod t { pub trait Drop { fn drop(&mut self); } }\nuse t::*;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
             "glob の use で見えるクレートの Drop",
+        ),
+        (
+            "mod a { pub trait Drop { fn drop(&mut self); } }\nmod b { pub use super::a::*; }\nuse b::*;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "glob の use の鎖で見えるクレートの Drop",
+        ),
+        (
+            "mod a { pub trait Drop { fn drop(&mut self); } }\nmod b { pub use super::a::Drop; }\npub struct S { a: u64 }\nimpl b::Drop for S { fn drop(&mut self) {} }",
+            "再公開したクレートの Drop",
+        ),
+        (
+            "use other::Drop;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "外のクレートの Drop",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl other::Drop for S { fn drop(&mut self) {} }",
+            "外のクレートのパス",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl ::Drop for S { fn drop(&mut self) {} }",
+            "先頭の :: の Drop（外のクレート）",
         ),
         (
             "pub struct S { a: u64 }\nimpl S { pub fn drop(&mut self) {} }",

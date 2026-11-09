@@ -43,6 +43,19 @@ impl Drop for Overflow {
 
 }
 
+pub fn helper(x: u64) -> u64
+no_unwind { x }
+
+pub struct Calls { pub a: u64, }
+
+impl Drop for Calls {
+    fn drop(&mut self) opens_invariants none
+    no_unwind {
+        self.a = helper(self.a);
+    }
+
+}
+
 mod m {
     #[allow(unused_imports)]
     use vstd::prelude::{Seq, Set, Map, seq, set, map, View, int, nat, Tracked, Ghost, verus, SpecOrd as _, SpecNeg as _, SpecAdd as _, SpecSub as _, SpecMul as _, SpecEuclideanOrRealDiv as _, SpecEuclideanMod as _, SpecBitAnd as _, SpecBitOr as _, SpecBitXor as _, SpecShl as _, SpecShr as _};

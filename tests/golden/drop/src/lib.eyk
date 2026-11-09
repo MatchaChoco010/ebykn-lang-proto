@@ -32,6 +32,21 @@ impl Drop for Overflow {
     }
 }
 
+// `drop` からクレートの関数を呼ぶと失敗する（`opens_invariants none` の `drop` は、`opens_invariants` を
+// 書けない利用者の関数を呼べない）。Verus は主な span を呼ばれる側の署名に置くが、失敗したのは
+// `Calls::drop` で、`helper` ではない（PR #76 のレビューの B1）。
+pub fn helper(x: u64) -> u64 no_panic {
+    x
+}
+
+pub struct Calls { pub a: u64 }
+
+impl Drop for Calls {
+    fn drop(&mut self) {
+        self.a = helper(self.a);
+    }
+}
+
 mod m {
     // `use` の別名で書いた std の `Drop`。
     use std::ops::Drop as Finalize;

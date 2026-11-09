@@ -363,6 +363,10 @@ fn check_impl(
                         is_pub: true,
                     };
                     let exp = sig::expand(&scx, &f.sig, &mut probe);
+                    if f.contract.is_empty() && !exp.is_empty() && kind == ImplTrait::Drop {
+                        unimpl(diags, item.span, Unimpl::InvariantDrop);
+                        continue;
+                    }
                     if !f.contract.is_empty() || !exp.is_empty() {
                         unimpl(diags, item.span, Unimpl::ContractTrait);
                         continue;

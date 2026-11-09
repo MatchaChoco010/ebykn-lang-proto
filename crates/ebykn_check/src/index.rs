@@ -119,6 +119,18 @@ pub enum Import {
     Glob { path: Vec<String> },
 }
 
+/// std の `Drop` の判定でパスを引いた結果（[`Index::find_ext`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ext {
+    Module(ItemPath),
+    /// クレートの定義（モジュールでないもの）。
+    Crate,
+    /// 外のクレートか std の prelude のパス（`use` の別名をたどった後）。
+    External(Vec<String>),
+    /// モジュールの中に見つからない。
+    NotFound,
+}
+
 /// 一つのモジュールの名前。
 #[derive(Debug, Clone, Default)]
 pub struct ModuleScope {
@@ -586,8 +598,9 @@ impl Index {
         }
     }
 
-    /// トレイトのパスが std の `Drop` か。クレートの中に解決しないパスの `use` の別名をたどり、
-    /// `Drop`（std の prelude）、`std::ops::Drop`、`core::ops::Drop` のどれかになれば std の `Drop`。
+    /// トレイトのパスが std の `Drop` か。`use` の別名・glob の `use`・`pub use` の再公開をたどって外のパスに
+    /// なり、それが `Drop`（std の prelude）、`std::ops::Drop` / `core::ops::Drop`、
+    /// `std::prelude::<版>::Drop` のどれかなら std の `Drop`。
     fn is_std_drop(&self, module: &[String], t: &ast::Path) -> bool {
         if !t
             .segments
@@ -597,60 +610,99 @@ impl Index {
             return false;
         }
         let segs: Vec<String> = t.segments.iter().map(|s| s.ident.name.clone()).collect();
-        let Some(p) = self.external_path(module, t.leading_colon, segs, 0) else {
+        // `::a::b` は外のクレートのパス。
+        let found = if t.leading_colon {
+            Ext::External(segs)
+        } else {
+            self.find_ext(module, &segs, true, 0)
+        };
+        let Ext::External(p) = found else {
             return false;
         };
         let p: Vec<&str> = p.iter().map(String::as_str).collect();
         match p.as_slice() {
             ["std" | "core", "ops", "Drop"] => true,
+            [
+                "std" | "core",
+                "prelude",
+                "v1" | "rust_2015" | "rust_2018" | "rust_2021" | "rust_2024",
+                "Drop",
+            ] => true,
             // `::Drop` は外のクレートの名前で、prelude の `Drop` ではない。
             ["Drop"] => !t.leading_colon,
             _ => false,
         }
     }
 
-    /// クレートの中に解決しないパスを、先頭の名前の `use` の別名をたどって外のパスにする。
-    /// クレートの定義（このモジュールの名前、`crate` / `self` / `super` / `Self`、glob の `use`
-    /// で見える名前）に当たれば `None`。
-    fn external_path(
-        &self,
-        module: &[String],
-        leading_colon: bool,
-        segs: Vec<String>,
-        depth: usize,
-    ) -> Option<Vec<String>> {
-        if leading_colon {
-            return Some(segs);
+    /// パス `segs` をモジュール `m` から引く（std の `Drop` の判定に使う）。`use` の別名、glob の `use`
+    /// （その先の `use` も）、`crate` / `self` / `super` をたどる。`root` は、パスの先頭（どこにもなければ
+    /// 外のクレートか std の prelude の名前）か。モジュールの中をたどる途中なら、見つからないのは `NotFound`。
+    fn find_ext(&self, m: &[String], segs: &[String], root: bool, depth: usize) -> Ext {
+        let Some(first) = segs.first() else {
+            return Ext::Module(m.to_vec());
+        };
+        if depth > 32 {
+            return Ext::NotFound;
         }
-        let first = segs.first()?.as_str();
-        if depth > 16 || matches!(first, "crate" | "self" | "super" | "Self" | "ebykn_prelude") {
-            return None;
+        let rest = &segs[1..];
+        let into = |r: Ext| match r {
+            Ext::Module(p) if !rest.is_empty() => self.find_ext(&p, rest, false, depth + 1),
+            Ext::External(mut p) => {
+                p.extend(rest.iter().cloned());
+                Ext::External(p)
+            }
+            r => r,
+        };
+        match first.as_str() {
+            "crate" if root => return into(Ext::Module(Vec::new())),
+            "self" if root => return into(Ext::Module(m.to_vec())),
+            "super" => {
+                let mut parent = m.to_vec();
+                if parent.pop().is_none() {
+                    return Ext::NotFound;
+                }
+                let chain = rest.first().is_some_and(|s| s == "super");
+                return if rest.is_empty() {
+                    Ext::Module(parent)
+                } else {
+                    self.find_ext(&parent, rest, chain, depth + 1)
+                };
+            }
+            // `Self` と prelude（`ebykn_prelude`）は std の `Drop` ではない。
+            "Self" | "ebykn_prelude" => return Ext::Crate,
+            _ => {}
         }
-        let scope = self.modules.get(module)?;
-        if scope.items.contains_key(first) {
-            return None;
+        let Some(scope) = self.modules.get(m) else {
+            return Ext::NotFound;
+        };
+        if let Some(p) = scope.items.get(first) {
+            return into(match self.kinds.get(p) {
+                Some(DefKind::Module) => Ext::Module(p.clone()),
+                _ => Ext::Crate,
+            });
         }
         for imp in &scope.imports {
             if let Import::Name { alias, path } = imp
                 && alias == first
             {
-                let mut p = path.clone();
-                p.extend(segs[1..].iter().cloned());
-                return self.external_path(module, false, p, depth + 1);
+                return into(self.find_ext(m, path, true, depth + 1));
             }
         }
         for imp in &scope.imports {
             if let Import::Glob { path } = imp
-                && let Resolved::Module(m) = self.resolve_import(module, path, depth)
-                && self
-                    .modules
-                    .get(&m)
-                    .is_some_and(|s| s.items.contains_key(first))
+                && let Ext::Module(g) = self.find_ext(m, path, true, depth + 1)
             {
-                return None;
+                match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
+                    Ext::NotFound => {}
+                    r => return into(r),
+                }
             }
         }
-        Some(segs)
+        if root {
+            into(Ext::External(vec![first.clone()]))
+        } else {
+            Ext::NotFound
+        }
     }
 
     /// 型のパスを解決する（`Self` は `self_ty`）。型の別名はたどる。クレートの型でなければ `None`。

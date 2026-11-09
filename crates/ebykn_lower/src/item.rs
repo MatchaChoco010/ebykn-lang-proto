@@ -616,7 +616,12 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
     let v = vis(&item.vis);
     let sig = |c: &mut Cx| {
         let s = sig_text(c, &f.sig, &f.contract, &exp);
-        if drop_fn { drop_marks(s) } else { s }
+        // `Drop` の `fn drop` の契約（`no_panic` を含む）は検査が E0003 にするので、`s` は句を持たない。
+        if drop_fn {
+            format!("{s} opens_invariants none no_unwind")
+        } else {
+            s
+        }
     };
     match &f.body {
         None => format!("{a}{v}{};", sig(&mut c)),
@@ -649,13 +654,6 @@ fn rebind_owned_regions(contract: &ast::Contract, body: String) -> String {
         Some(rest) if !lets.is_empty() => format!("{{ {lets}{rest}"),
         _ => body,
     }
-}
-
-/// `Drop` の `fn drop` の署名に `opens_invariants none` と `no_unwind` を足す（現行仕様 §7.2）。
-/// `no_unwind` は契約の `no_panic` からも来るので重ねない。Verus の句の順で `opens_invariants` が前。
-fn drop_marks(sig: String) -> String {
-    let base = sig.strip_suffix(" no_unwind").unwrap_or(&sig);
-    format!("{base} opens_invariants none no_unwind")
 }
 
 /// 純粋関数 `fn f(..) -> T = e;`（§7.2）：`when_used_as_spec` の `fn` と `spec fn` の組。
