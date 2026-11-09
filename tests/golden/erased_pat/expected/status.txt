@@ -1,0 +1,14 @@
+verified erased_pat::by_match
+verified erased_pat::by_guard
+verified erased_pat::by_or
+verified erased_pat::by_if_let
+verified erased_pat::by_while_let
+verified erased_pat::by_for
+verified erased_pat::by_closure
+verified erased_pat::by_param
+verified erased_pat::hist_of
+verified erased_pat::has
+verified erased_pat::hist_len
+verified erased_pat::uses_spec
+verified erased_pat::count_of
+results 12 verified, 0 errors

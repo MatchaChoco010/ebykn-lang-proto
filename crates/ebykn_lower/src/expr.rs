@@ -11,6 +11,7 @@ use ebykn_syntax::ast::{
 };
 
 use crate::Cx;
+use crate::erased_pat::{prepend_block, prepend_expr};
 
 /// 権限の変数 `__eyk_perm_p` が何を持つか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,11 +190,18 @@ impl Cx<'_> {
         }
     }
 
+    /// パターン。消去フィールド `@x` は `__eyk_erased_x: Tracked(x)` / `Ghost(x)`。Verus がこの形を受けるのは
+    /// 実行文脈の `let` の文だけなので、ほかの位置は [`Cx::pat_fresh`] を使う（#152）。
     pub fn pat(&self, p: &ast::Pat) -> String {
-        crate::attrs(&p.attrs) + &self.pat_kind(p)
+        self.pat_m(p, false)
     }
 
-    fn pat_kind(&self, p: &ast::Pat) -> String {
+    /// `fresh` なら、消去フィールド `@x` を `__eyk_erased_x: __eyk_pat_x` にする（[`crate::erased_pat`]）。
+    pub(crate) fn pat_m(&self, p: &ast::Pat, fresh: bool) -> String {
+        crate::attrs(&p.attrs) + &self.pat_kind(p, fresh)
+    }
+
+    fn pat_kind(&self, p: &ast::Pat, fresh: bool) -> String {
         match &p.kind {
             PatKind::Ident {
                 by_ref,
@@ -206,7 +214,7 @@ impl Cx<'_> {
                 if *mutable { "mut " } else { "" },
                 ident(i),
                 sub.as_ref()
-                    .map(|s| format!(" @ {}", self.pat(s)))
+                    .map(|s| format!(" @ {}", self.pat_m(s, fresh)))
                     .unwrap_or_default()
             ),
             PatKind::Wild => "_".into(),
@@ -225,7 +233,7 @@ impl Cx<'_> {
             ),
             PatKind::Path { qself, path } => self.qpath(qself.as_ref(), path),
             PatKind::Tuple(ps) => {
-                let inner: Vec<String> = ps.iter().map(|q| self.pat(q)).collect();
+                let inner: Vec<String> = ps.iter().map(|q| self.pat_m(q, fresh)).collect();
                 if inner.len() == 1 && !matches!(ps[0].kind, PatKind::Rest) {
                     format!("({},)", inner[0])
                 } else {
@@ -237,7 +245,7 @@ impl Cx<'_> {
                 self.qpath(qself.as_ref(), path),
                 elems
                     .iter()
-                    .map(|q| self.pat(q))
+                    .map(|q| self.pat_m(q, fresh))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -260,11 +268,21 @@ impl Cx<'_> {
                         } => {
                             let a = crate::attrs(attrs);
                             if *shorthand {
-                                parts.push(format!("{a}{}", self.pat(pat)));
+                                parts.push(format!("{a}{}", self.pat_m(pat, fresh)));
                             } else {
-                                parts.push(format!("{a}{}: {}", member_str(member), self.pat(pat)));
+                                parts.push(format!(
+                                    "{a}{}: {}",
+                                    member_str(member),
+                                    self.pat_m(pat, fresh)
+                                ));
                             }
                         }
+                        FieldPat::Erased { attrs, ident: i } if fresh => parts.push(format!(
+                            "{}{}: {}",
+                            crate::attrs(attrs),
+                            erased_field(i),
+                            crate::erased_pat::fresh_name(i)
+                        )),
                         FieldPat::Erased { attrs, ident: i } => {
                             let wrap = match self.facts.erased.get(&SpanKey::from(i.span)) {
                                 Some(ErasedKind::Owns) => "Tracked",
@@ -293,23 +311,27 @@ impl Cx<'_> {
                 )
             }
             PatKind::Ref { mutable, pat } => {
-                format!("&{}{}", if *mutable { "mut " } else { "" }, self.pat(pat))
+                format!(
+                    "&{}{}",
+                    if *mutable { "mut " } else { "" },
+                    self.pat_m(pat, fresh)
+                )
             }
             PatKind::Or(ps) => ps
                 .iter()
-                .map(|q| self.pat(q))
+                .map(|q| self.pat_m(q, fresh))
                 .collect::<Vec<_>>()
                 .join(" | "),
             PatKind::Slice(ps) => format!(
                 "[{}]",
                 ps.iter()
-                    .map(|q| self.pat(q))
+                    .map(|q| self.pat_m(q, fresh))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            PatKind::Paren(q) => format!("({})", self.pat(q)),
+            PatKind::Paren(q) => format!("({})", self.pat_m(q, fresh)),
             PatKind::Macro(m) => self.clone().mac(m),
-            PatKind::Type { pat, ty } => format!("{}: {}", self.pat(pat), self.ty(ty)),
+            PatKind::Type { pat, ty } => format!("{}: {}", self.pat_m(pat, fresh), self.ty(ty)),
         }
     }
 
@@ -432,14 +454,19 @@ impl Cx<'_> {
                 format!("{}[{idx}]", self.expr(base))
             }
             ExprKind::If { cond, then, else_ } => {
-                let mut s = format!("if {} {}", self.expr(cond), self.block(then));
+                let rebind = self.cond_rebind(cond);
+                let then = prepend_block(self.block(then), &rebind);
+                let mut s = format!("if {} {then}", self.expr(cond));
                 if let Some(e) = else_ {
                     s.push_str(" else ");
                     s.push_str(&self.expr(e));
                 }
                 s
             }
-            ExprKind::Let { pat, expr } => format!("let {} = {}", self.pat(pat), self.expr(expr)),
+            // `@x` は `if` / `while` の本体の先頭で束縛し直す（[`Cx::cond_rebind`]）。
+            ExprKind::Let { pat, expr } => {
+                format!("let {} = {}", self.pat_fresh(pat), self.expr(expr))
+            }
             ExprKind::Loop(l) => self.loop_(l),
             ExprKind::Match { expr, arms } => {
                 let scrut = self.expr(expr);
@@ -452,12 +479,12 @@ impl Cx<'_> {
                                 .iter()
                                 .map(|x| crate::attr(x) + " ")
                                 .collect::<String>(),
-                            self.pat(&a.pat),
+                            self.pat_fresh(&a.pat),
                             a.guard
                                 .as_ref()
                                 .map(|g| format!(" if {}", self.expr(g)))
                                 .unwrap_or_default(),
-                            self.expr(&a.body)
+                            prepend_expr(self.expr(&a.body), &self.erased_rebind(&a.pat))
                         )
                     })
                     .collect();
@@ -738,7 +765,8 @@ impl Cx<'_> {
     }
 
     fn closure(&mut self, c: &ast::Closure) -> String {
-        let params: Vec<String> = c.params.iter().map(|p| self.pat(p)).collect();
+        let params: Vec<String> = c.params.iter().map(|p| self.pat_fresh(p)).collect();
+        let rebind: String = c.params.iter().map(|p| self.erased_rebind(p)).collect();
         let saved = self.rename.clone();
         for p in &c.params {
             if let Some(i) = ebykn_check::index::pat_ident(p) {
@@ -756,7 +784,7 @@ impl Cx<'_> {
         let contract = self.clauses_simple(&c.contract);
         // クロージャの中の `return` / `break` は外のブロックを抜けない。
         let exits = std::mem::take(&mut self.exits);
-        let body = self.expr(&c.body);
+        let body = prepend_expr(self.expr(&c.body), &rebind);
         self.exits = exits;
         let s = format!(
             "{}|{}|{ret}{contract} {body}",
@@ -787,10 +815,13 @@ impl Cx<'_> {
             .as_ref()
             .map(|x| format!("'{}: ", x.name))
             .unwrap_or_default();
-        let head = match &l.kind {
-            LoopKind::While(c) => format!("while {}", self.expr(c)),
-            LoopKind::For { pat, iter } => format!("for {} in {}", self.pat(pat), self.expr(iter)),
-            LoopKind::Loop => "loop".into(),
+        let (head, rebind) = match &l.kind {
+            LoopKind::While(c) => (format!("while {}", self.expr(c)), self.cond_rebind(c)),
+            LoopKind::For { pat, iter } => (
+                format!("for {} in {}", self.pat_fresh(pat), self.expr(iter)),
+                self.erased_rebind(pat),
+            ),
+            LoopKind::Loop => ("loop".into(), String::new()),
         };
         let mut clauses = String::new();
         for c in &l.clauses {
@@ -805,7 +836,7 @@ impl Cx<'_> {
             label: l.label.as_ref().map(|x| x.name.clone()),
             is_loop: true,
         });
-        let body = self.block(&l.body);
+        let body = prepend_block(self.block(&l.body), &rebind);
         self.exits.pop();
         format!("{label}{head}{clauses} {body}")
     }
@@ -1115,10 +1146,11 @@ impl Cx<'_> {
                 let region =
                     l.ty.as_ref()
                         .is_some_and(ebykn_check::index::is_region_type);
+                // 論理文脈の `let` は `Tracked(x)` のパターンを受けないので、`@x` を後で束縛し直す（#152）。
                 let mut out = format!(
                     "{attrs}let {}{}",
                     if region { "tracked " } else { "" },
-                    self.pat(&l.pat)
+                    self.pat_m(&l.pat, self.logic)
                 );
                 if let Some(t) = &l.ty {
                     out.push_str(&format!(": {}", self.ty(t)));
@@ -1130,6 +1162,10 @@ impl Cx<'_> {
                     out.push_str(&format!(" else {}", self.block(e)));
                 }
                 out.push(';');
+                if self.logic {
+                    out.push(' ');
+                    out.push_str(&self.erased_rebind(&l.pat));
+                }
                 out
             }
             StmtKind::Item(item) => self.nested_item(item),

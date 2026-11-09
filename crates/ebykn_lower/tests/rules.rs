@@ -339,6 +339,74 @@ fn erased_fields_are_lowered_under_reserved_names() {
     }
 }
 
+/// 実行文脈の `let` の文のほかの位置の `@x`（#152）：Verus は `Tracked(x)` / `Ghost(x)` のパターンを
+/// 受けないので、別の名前 `__eyk_pat_x` に束縛し、腕・本体の先頭で束縛し直す（実行文脈は
+/// `let Tracked(x) = ..;` / `let Ghost(x) = ..;`、論理文脈は `let x = ..@;`）。
+#[test]
+fn erased_patterns_outside_exec_let_are_rebound_in_the_body() {
+    const PAT: &str = "P { a, __eyk_erased_r: __eyk_pat_r, __eyk_erased_q: __eyk_pat_q }";
+    const EXEC: &str = "let Tracked(r) = __eyk_pat_r; let Ghost(q) = __eyk_pat_q;";
+    const LOGIC: &str = "let r = __eyk_pat_r@; let q = __eyk_pat_q@;";
+    const LIT: &str = "P { a, @r: r, @q: q }";
+    const OUT: &str = "P { a, __eyk_erased_r: Tracked(r), __eyk_erased_q: Ghost(q) }";
+    let cases = [
+        (
+            format!("pub fn f(x: P) -> P {{ match x {{ P {{ a, @r, @q }} => {LIT} }} }}"),
+            format!("match x {{ {PAT} => {{ {EXEC} {OUT} }}, }}"),
+        ),
+        (
+            format!(
+                "pub fn f(o: Option<P>) {{ if let Some(P {{ a, @r, @q }}) = o {{ let x = {LIT}; }} }}"
+            ),
+            format!("if let Some({PAT}) = o {{ {EXEC} let x = {OUT}; }}"),
+        ),
+        (
+            format!(
+                "pub fn f(v: Vec<P>) {{ let mut v = v; while let Some(P {{ a, @r, @q }}) = v.pop() decreases v.len(), {{ let x = {LIT}; }} }}"
+            ),
+            format!(
+                "while let Some({PAT}) = v.pop() decreases v.len(), {{ {EXEC} let x = {OUT}; }}"
+            ),
+        ),
+        (
+            format!("pub fn f(v: Vec<P>) {{ for P {{ a, @r, @q }} in v {{ let x = {LIT}; }} }}"),
+            format!("for {PAT} in v {{ {EXEC} let x = {OUT}; }}"),
+        ),
+        (
+            format!(
+                "pub fn f(x: P) -> P {{ let g = |P {{ a, @r, @q }}: P| -> P {{ {LIT} }}; g(x) }}"
+            ),
+            format!("|{PAT}: P| -> P {{ {EXEC} {{ {OUT} }} }}"),
+        ),
+        // 関数の引数（`owns` の種類は、検査が引数のパターンからも読む）。
+        (
+            format!("pub fn f(P {{ a, @r, @q }}: P) -> P {{ {LIT} }}"),
+            format!("fn f({PAT}: P) -> P {{ {EXEC} {OUT} }}"),
+        ),
+        // 論理文脈：`let` の文も別の名前に束縛する。
+        (
+            "spec fn h(x: P) -> Seq<u64> = { let P { a, @r, @q } = x; q };".to_string(),
+            format!("{{ let {PAT} = x; {LOGIC} q }}"),
+        ),
+        (
+            "spec fn h(P { a, @r, @q }: P) -> Seq<u64> = q;".to_string(),
+            format!("spec fn h({PAT}: P) -> Seq<u64> {{ {LOGIC} q }}"),
+        ),
+        // 純粋関数：引数のパターンを式として `spec fn` に渡し、実行と論理の両方の本体で束縛し直す。
+        (
+            "pub fn k(P { a, @r, @q }: P) -> u64 = a;".to_string(),
+            format!("ensures __eyk_r == __eyk_spec_k({PAT}), {{ {EXEC} a }}"),
+        ),
+        (
+            "pub fn k(P { a, @r, @q }: P) -> u64 = a;".to_string(),
+            format!("spec fn __eyk_spec_k({PAT}: P) -> u64 {{ {LOGIC} (a) as u64 }}"),
+        ),
+    ];
+    for (body, want) in cases {
+        has(&format!("{PRE}{body}"), &want);
+    }
+}
+
 #[test]
 fn erased_fields_of_other_values() {
     // #14 の既定：`x@field` を `self` 以外にも書き下す。

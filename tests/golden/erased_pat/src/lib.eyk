@@ -1,0 +1,116 @@
+// #152：構造体パターンの消去フィールド `@x` を、`let` の文のほかの位置にも書ける。Verus は
+// `Tracked(x)` / `Ghost(x)` のパターンを実行文脈の `let` の文でしか受けないので、書き下しはほかの位置の
+// `@x` を別の名前に束縛し、腕・本体の先頭で `x` に束縛し直す（`tests/verus-probes/erased_pat_*.rs`）。
+pub struct Node { pub val: u64 }
+
+pub struct Bag { pub n: u64 } owns { items: Region<Ptr<Node>> } spec { hist: Seq<u64> }
+
+// match の腕。
+fn by_match(b: Bag) -> (r: Bag)
+    ensures r.n == b.n, r@items == b@items, r@hist == b@hist,
+{
+    match b {
+        Bag { @items, n, @hist } => Bag { n, @items: items, @hist: hist },
+    }
+}
+
+// ガードは `@x` でない名前だけを使う。
+fn by_guard(b: Bag) -> (r: Bag)
+    ensures r@items == b@items,
+{
+    match b {
+        Bag { @items, n, @hist } if n > 0 => Bag { n: n - 1, @items: items, @hist: hist },
+        Bag { @items, n, @hist } => Bag { n, @items: items, @hist: hist },
+    }
+}
+
+// `|` の各選択肢が同じ `@x` を束縛する。
+fn by_or(o: Option<Bag>) -> (r: u64)
+    ensures matches!(o, None) ==> r == 0,
+{
+    match o {
+        Some(Bag { @items, n: 0, @hist }) | Some(Bag { @items, n: 1, @hist }) => {
+            let b = Bag { n: 7, @items: items, @hist: hist };
+            b.n
+        }
+        Some(Bag { @items, n, @hist }) => n,
+        None => 0,
+    }
+}
+
+// `if let`。
+fn by_if_let(o: Option<Bag>) -> (r: Option<Bag>)
+    ensures matches!(o, None) ==> matches!(r, None),
+{
+    if let Some(Bag { @items, n, @hist }) = o {
+        Some(Bag { n, @items: items, @hist: hist })
+    } else {
+        None
+    }
+}
+
+// `while let`。
+fn by_while_let(v: Vec<Bag>) -> (r: u64) {
+    let mut v = v;
+    let mut total: u64 = 0;
+    while let Some(Bag { @items, n, @hist }) = v.pop()
+        decreases v.len(),
+    {
+        let b = Bag { n, @items: items, @hist: hist };
+        if total < 1000 && b.n < 1000 {
+            total = total + b.n;
+        }
+    }
+    total
+}
+
+// `for` のパターン。
+fn by_for(v: Vec<Bag>) -> (r: u64) {
+    let mut count: u64 = 0;
+    for Bag { @items, n, @hist } in v {
+        let b = Bag { n, @items: items, @hist: hist };
+        if count < 1000 {
+            count = count + 1;
+        }
+    }
+    count
+}
+
+// クロージャの引数。
+fn by_closure(b: Bag) -> (r: u64) {
+    let f = |Bag { @items, n, @hist }: Bag| -> u64 {
+        let c = Bag { n, @items: items, @hist: hist };
+        c.n
+    };
+    f(b)
+}
+
+// 関数の引数。契約は `@x` でない名前だけを使う。
+fn by_param(Bag { @items, n, @hist }: Bag) -> (r: Bag)
+    requires n > 0,
+    ensures r.n == n,
+{
+    Bag { n, @items: items, @hist: hist }
+}
+
+// 論理文脈：`spec fn` の本体の `let` と match、引数のパターン。
+spec fn hist_of(b: Bag) -> Seq<u64> = {
+    let Bag { @hist, @.. } = b;
+    hist
+};
+
+spec fn has(o: Option<Bag>, p: Ptr<Node>) -> bool = match o {
+    Some(Bag { @items, @.. }) => items.contains(p),
+    None => false,
+};
+
+spec fn hist_len(Bag { @hist, @.. }: Bag) -> nat = hist.len();
+
+fn uses_spec(b: Bag, p: Ptr<Node>) -> (r: Bag)
+    ensures hist_of(r) == b@hist, has(Some(r), p) == b@items.contains(p), hist_len(r) == b@hist.len(),
+{
+    b
+}
+
+// 純粋関数の引数（実行と論理の両方に書き下す）。
+fn count_of(Bag { @items, n, @hist }: Bag) -> u64 = n;

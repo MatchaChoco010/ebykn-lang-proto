@@ -64,45 +64,6 @@ impl Walker<'_> {
         }
     }
 
-    /// fn の引数のパターンの中の `#[cfg]`（`fn f(S { #[cfg(..)] x, .. }: S)`）。引数そのものの属性
-    /// （`fn f(#[cfg(..)] x: u32)`）は受理するが、中のパターンの欄は [`Walker::bind`] と同じく E0003 にする
-    /// （fn の引数は `bind` を通らないので、ここでたどる）。
-    pub(super) fn param_pattern_cfg(&mut self, p: &ast::Pat) {
-        use ast::{FieldPat, PatKind};
-        self.no_cfg_pattern(&p.attrs, p.span);
-        match &p.kind {
-            PatKind::Ident { sub: Some(q), .. } => self.param_pattern_cfg(q),
-            PatKind::Tuple(ps) | PatKind::Or(ps) | PatKind::Slice(ps) => {
-                for q in ps {
-                    self.param_pattern_cfg(q);
-                }
-            }
-            PatKind::TupleStruct { elems, .. } => {
-                for q in elems {
-                    self.param_pattern_cfg(q);
-                }
-            }
-            PatKind::Ref { pat, .. } | PatKind::Paren(pat) | PatKind::Type { pat, .. } => {
-                self.param_pattern_cfg(pat)
-            }
-            PatKind::Struct { fields, .. } => {
-                for f in fields {
-                    match f {
-                        FieldPat::Field {
-                            attrs, pat, span, ..
-                        } => {
-                            self.no_cfg_pattern(attrs, *span);
-                            self.param_pattern_cfg(pat);
-                        }
-                        FieldPat::Erased { attrs, ident } => self.no_cfg_pattern(attrs, ident.span),
-                        FieldPat::ErasedRest { .. } => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// `expr` でたどらない部分木（`ident_of` / `deref_root` で名前だけを取る受け手・被演算子・左辺）の属性を
     /// 見る。`e` と、括弧・単項演算・`?`・欄・添字の土台・消去フィールドの土台をたどった先の式。
     pub(super) fn chain_attrs(&mut self, e: &Expr) {

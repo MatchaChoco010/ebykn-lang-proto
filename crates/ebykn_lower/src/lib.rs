@@ -5,6 +5,7 @@
 //! トークン列に読み直してから [`print`] で整形する（仕様 §12 はトークン列で組み立てるとする。
 //! 元の位置は M6 の source map で持たせる。`OPEN.md`）。
 
+mod erased_pat;
 mod expr;
 mod item;
 pub mod print;

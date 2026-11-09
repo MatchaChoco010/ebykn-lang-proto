@@ -15,6 +15,23 @@ pub struct Expr {
 }
 
 impl Expr {
+    /// `&&` で分けた項（左から）。`if` / `while` の条件の `let` の並び（let chain）を読む。
+    pub fn and_chain(&self) -> Vec<&Expr> {
+        match &self.kind {
+            ExprKind::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let mut v = lhs.and_chain();
+                v.extend(rhs.and_chain());
+                v
+            }
+            _ => vec![self],
+        }
+    }
+
     /// 文の先頭に書いた属性。構文解析器は、代入・二項演算・キャスト・フィールド・添字・メソッドの呼び出し・
     /// `x@f` の文の属性を、左端の式に付けることがあるので、属性のない節点は左端の子をたどる。
     pub fn leading_attrs(&self) -> &[Attr] {
@@ -455,6 +472,46 @@ pub struct Pat {
     pub attrs: Vec<Attr>,
     pub kind: PatKind,
     pub span: Span,
+}
+
+impl Pat {
+    /// パターンの中の消去フィールドの束縛 `@x`（書かれた順。`|` の各選択肢のものを含む）。
+    pub fn erased_idents(&self) -> Vec<&Ident> {
+        let mut out = Vec::new();
+        self.erased_idents_into(&mut out);
+        out
+    }
+
+    fn erased_idents_into<'p>(&'p self, out: &mut Vec<&'p Ident>) {
+        match &self.kind {
+            PatKind::Ident { sub: Some(q), .. } => q.erased_idents_into(out),
+            PatKind::Tuple(ps) | PatKind::Or(ps) | PatKind::Slice(ps) => {
+                ps.iter().for_each(|q| q.erased_idents_into(out))
+            }
+            PatKind::TupleStruct { elems, .. } => {
+                elems.iter().for_each(|q| q.erased_idents_into(out))
+            }
+            PatKind::Ref { pat, .. } | PatKind::Paren(pat) | PatKind::Type { pat, .. } => {
+                pat.erased_idents_into(out)
+            }
+            PatKind::Struct { fields, .. } => {
+                for f in fields {
+                    match f {
+                        FieldPat::Field { pat, .. } => pat.erased_idents_into(out),
+                        FieldPat::Erased { ident, .. } => out.push(ident),
+                        FieldPat::ErasedRest { .. } => {}
+                    }
+                }
+            }
+            PatKind::Ident { sub: None, .. }
+            | PatKind::Wild
+            | PatKind::Rest
+            | PatKind::Lit(_)
+            | PatKind::Range { .. }
+            | PatKind::Path { .. }
+            | PatKind::Macro(_) => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
