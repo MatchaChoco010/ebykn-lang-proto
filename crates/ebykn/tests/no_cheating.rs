@@ -108,4 +108,15 @@ fn smuggled_assumptions_fail_verify() {
         expected
     );
     assert!(!got.success(&got.all));
+    // 標準エラーに出す診断（紛れ込んだものだけ）は、許した前提（liar の external_body、helper の admit）を含まない。
+    let Cheating::Smuggled(found) = &got.cheating else {
+        unreachable!()
+    };
+    for e in found {
+        assert!(
+            !e.block.is_empty() && !e.block.contains("fn liar") && !e.block.contains("admit()"),
+            "{}",
+            e.block
+        );
+    }
 }

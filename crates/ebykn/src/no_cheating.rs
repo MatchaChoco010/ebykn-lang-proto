@@ -12,6 +12,10 @@
 //! `--no-cheating` でも拒否されないので、許す拒否はない。
 //!
 //! `--no-verify` でも `--no-cheating` の拒否は出る（固定した Verus で確かめた。`OPEN.md`）。
+//!
+//! 捕まえるのは、Verus が `--no-cheating` で拒否するもの（`assume` / `admit` / `external_body` /
+//! `assume_specification` など）だけ。`verus!` の外で依存クレートの derive や属性マクロが作る項目は、
+//! Verus が検証しないだけで拒否しないので、ここでは捕まえない（#49）。
 
 use ebykn_lower::Output;
 
@@ -42,7 +46,15 @@ pub enum Unreadable {
     /// Verus が失敗したのに、エラーの見出しを一つも読めなかった。
     NoErrors,
     /// cargo の数えたエラー（`due to N previous errors`）と、読み取った見出しの数が違う。
+    ///
+    /// cargo は、同じ位置の同じ文言のエラーを 1 つにまとめて出すが、件数はまとめる前の数のまま
+    /// （固定した Verus で、`assume` を 2 つ出すマクロを 1 回呼んで確かめた）。そのため、Ebykn が
+    /// 出した `admit()` と同じ位置・同じ文言の拒否が紛れ込むと、見出しは 1 つに見えるが、この件数の
+    /// 食い違いで照合できないことになる。
     CountMismatch { counted: usize, read: usize },
+    /// cargo がクレートを作り直した行（`Checking 名前 v..`）がなく、Verus がこのクレートを見たと
+    /// 言えない。
+    NotCompiled,
 }
 
 impl Cheating {
@@ -54,6 +66,16 @@ impl Cheating {
     /// 項目の verified を信用できないか（紛れ込んだ前提があるか、ないと言えない）。
     pub fn taints(&self) -> bool {
         matches!(self, Cheating::Smuggled(_) | Cheating::Unreadable(_))
+    }
+
+    /// `--json` の `no_cheating.state` の値。
+    pub fn state(&self) -> &'static str {
+        match self {
+            Cheating::Clean => "clean",
+            Cheating::Smuggled(_) => "smuggled",
+            Cheating::Unreadable(_) => "unreadable",
+            Cheating::NotRun => "not_run",
+        }
     }
 }
 
@@ -72,6 +94,12 @@ impl Unreadable {
             (Unreadable::CountMismatch { counted, read }, true) => format!(
                 "`verus --no-cheating` のエラーは {counted} 件ですが、読めたのは {read} 件です"
             ),
+            (Unreadable::NotCompiled, false) => {
+                "`verus --no-cheating` did not rebuild the crate".into()
+            }
+            (Unreadable::NotCompiled, true) => {
+                "`verus --no-cheating` がクレートを作り直していません".into()
+            }
         }
     }
 }
@@ -87,6 +115,9 @@ pub fn counted_errors(text: &str) -> Option<usize> {
 
 /// 2 回目の実行（[`crate::verus::Mode::NoCheating`]）の結果を、Ebykn が出した前提と照らし合わせる。
 pub fn judge(output: &Output, run: &Run) -> Cheating {
+    if !run.compiled {
+        return Cheating::Unreadable(Unreadable::NotCompiled);
+    }
     if !run.success && run.errors.is_empty() {
         return Cheating::Unreadable(Unreadable::NoErrors);
     }
@@ -136,12 +167,40 @@ pub fn judge(output: &Output, run: &Run) -> Cheating {
     }
 }
 
-/// 紛れ込んだ前提の位置の表示（生成コードなら `build/verus/` から）。
+/// 紛れ込んだ前提の位置の表示。生成コードなら、プロジェクトのルートからのパスを字句的に正規化する
+/// （`src/../../../x.in:1:2` は `build/verus/src/../../../x.in` で、`x.in:1:2` になる）。
 pub fn location(e: &VerusError) -> String {
     match &e.loc {
-        Some(l) if l.starts_with("src/") => format!("build/verus/{l}"),
+        Some(l) if l.starts_with("src/") => {
+            let (file, rest) = l.split_once(':').unwrap_or((l, ""));
+            let file = normalize(&format!("build/verus/{file}"));
+            if rest.is_empty() {
+                file
+            } else {
+                format!("{file}:{rest}")
+            }
+        }
         Some(l) => l.clone(),
         None => "(no location)".into(),
+    }
+}
+
+/// 相対パスの `.` と `..` を字句的に畳む（先頭を越える `..` は残す）。
+fn normalize(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for c in path.split('/') {
+        match c {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|p| *p != "..") => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
     }
 }
 
@@ -220,6 +279,7 @@ error: could not compile `smuggled` (lib) due to 5 previous errors
             results: None,
             errors,
             checked: None,
+            compiled: true,
         }
     }
 
@@ -233,10 +293,85 @@ error: could not compile `smuggled` (lib) due to 5 previous errors
             locs,
             [
                 "build/verus/src/lib.rs:19:19",
-                "build/verus/src/../../../src/evil.in:1:26",
+                "src/evil.in:1:26",
                 "build/verus/src/lib.rs:26:1",
             ]
         );
+        // 診断の全文はエラーごとに分かれ、許した前提の診断を含まない。
+        assert!(
+            found[0].block.contains("dep::sneaky_assume"),
+            "{}",
+            found[0].block
+        );
+        assert!(found.iter().all(|e| !e.block.contains("fn liar")));
+        assert!(!found[2].block.contains("could not compile"));
+    }
+
+    #[test]
+    fn locations_are_normalized() {
+        assert_eq!(normalize("build/verus/src/../../../x.in"), "x.in");
+        assert_eq!(normalize("build/verus/src/../../../../x.in"), "../x.in");
+        assert_eq!(
+            normalize("build/verus/./src/lib.rs"),
+            "build/verus/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn errors_without_a_generated_location_count_as_smuggled() {
+        // `-->` の行のないエラーと、生成コードの外（絶対パス）の位置のエラーは、項目に当たらない。
+        for raw in [
+            "error: `assume`/`admit` not allowed with `--no-cheating`\n\nerror: could not compile `k` (lib) due to 1 previous error\n",
+            "error: `assume`/`admit` not allowed with `--no-cheating`\n --> /abs/x.rs:13:1\n\nerror: could not compile `k` (lib) due to 1 previous error\n",
+        ] {
+            let r = run(raw, false);
+            assert_eq!(r.errors.len(), 1, "{raw}");
+            assert_eq!(r.errors[0].at, None, "{raw}");
+            let Cheating::Smuggled(v) = judge(&output(), &r) else {
+                panic!("通してしまった: {raw}");
+            };
+            assert_eq!(v.len(), 1);
+        }
+    }
+
+    #[test]
+    fn fails_when_cargo_merged_identical_errors() {
+        // cargo は同じ位置・同じ文言のエラーを 1 つにまとめるが、件数はまとめる前の数のまま。
+        // `assume` を 2 つ出すマクロ（`dep::twice!()`）を 19 行目で呼ぶと、見出しは 5 つで件数は 6 に
+        // なった。Ebykn の admit と同じ位置に紛れ込んだ assume も、この食い違いで照合できないことになる。
+        let merged = SMUGGLED
+            .replace("dep::sneaky_assume!();", "dep::twice!();")
+            .replace("due to 5 previous", "due to 6 previous");
+        assert!(merged.contains("dep::twice!()") && merged.contains("due to 6 previous"));
+        assert_eq!(
+            judge(&output(), &run(&merged, false)),
+            Cheating::Unreadable(Unreadable::CountMismatch {
+                counted: 6,
+                read: 5
+            })
+        );
+    }
+
+    #[test]
+    fn fails_when_the_crate_was_not_rebuilt() {
+        let mut r = run(&own_only(), false);
+        r.compiled = false;
+        assert_eq!(
+            judge(&output(), &r),
+            Cheating::Unreadable(Unreadable::NotCompiled)
+        );
+        assert!(crate::verus::compiled(
+            "    Checking smuggled v0.1.0 (/p)\n",
+            "smuggled"
+        ));
+        assert!(!crate::verus::compiled(
+            "    Checking smuggled2 v0.1.0 (/p)\n",
+            "smuggled"
+        ));
+        assert!(!crate::verus::compiled(
+            "    Finished `dev` profile\n",
+            "smuggled"
+        ));
     }
 
     /// Ebykn が自分で出した前提（`unchecked` の external_body と、本体のない補題の admit）だけなら通る。

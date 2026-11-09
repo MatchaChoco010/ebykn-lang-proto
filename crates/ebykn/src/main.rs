@@ -249,7 +249,10 @@ fn verify(
     }
     match &v.cheating {
         Cheating::Smuggled(found) => {
-            eprint!("{}", v.cheating_text);
+            // 紛れ込んだものの診断だけを出す（許した Ebykn の前提の拒否は出さない）。
+            for e in found {
+                eprint!("{}", e.block);
+            }
             let locs: Vec<String> = found.iter().map(ebykn::no_cheating::location).collect();
             say(
                 opts,
@@ -266,6 +269,12 @@ fn verify(
             );
         }
         Cheating::Unreadable(u) => {
+            // どれが許した前提か決められないので全文を出し、そう断る。
+            say(
+                opts,
+                "the output of `verus --no-cheating` follows; it also contains the rejections of the assumptions Ebykn itself lowers (unchecked, lemmas without a body)",
+                "以下は `verus --no-cheating` の出力です。Ebykn 自身が書き下した前提（unchecked、本体のない補題）への拒否も含みます",
+            );
             eprint!("{}", v.cheating_text);
             say(
                 opts,

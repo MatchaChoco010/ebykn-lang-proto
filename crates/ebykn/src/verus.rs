@@ -187,6 +187,9 @@ pub struct Run {
     pub errors: Vec<VerusError>,
     /// Verus が検証した関数（`--output-json` の `func-details` の鍵）。
     pub checked: Option<std::collections::BTreeSet<String>>,
+    /// cargo がこのクレートを作り直した（`Checking 名前 v..` か `Compiling 名前 v..` の行がある）。
+    /// ない実行は、Verus がこのクレートを見ていない。
+    pub compiled: bool,
 }
 
 /// Verus のエラーの一つ。
@@ -198,6 +201,8 @@ pub struct VerusError {
     pub at: Option<(String, usize)>,
     /// 主な位置の `-->` の後（`src/lib.rs:19:19`、生成コードの外の絶対パスなども）。
     pub loc: Option<String>,
+    /// このエラーの診断の全文（見出しから、次の見出しかまとめの行の前まで）。
+    pub block: String,
 }
 
 /// 検証の要約。
@@ -266,12 +271,21 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
     // `cargo verus focus` は `target/verus-partial` にも成果物を置く。
     let name = package_name(build).unwrap_or_default();
+    // 消せなければ、前の結果を今の結果と取り違えるおそれがあるので止める。
     for target in ["target", "target/verus-partial"] {
-        let _ = Command::new("cargo")
+        let status = Command::new("cargo")
             .current_dir(build)
             .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
             .args(["clean", "--quiet", "-p", &name, "--target-dir", target])
             .status();
+        match status {
+            Ok(s) if s.success() => {}
+            other => {
+                return Err(format!(
+                    "`cargo clean -p {name} --target-dir {target}` failed: {other:?}"
+                ));
+            }
+        }
     }
     let out = cmd
         .output()
@@ -284,13 +298,28 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         Some(j) => j.results,
         None => results_line(&format!("{stdout}{stderr}")),
     };
+    let compiled = compiled(&format!("{stdout}{stderr}"), &name);
     Ok(Run {
         success: out.status.success(),
         results,
         text,
         errors,
         checked: json.map(|j| j.checked),
+        compiled,
     })
+}
+
+/// cargo の出力に、クレート `name` を作り直した行（`Checking name v..` / `Compiling name v..`）があるか。
+pub fn compiled(text: &str, name: &str) -> bool {
+    !name.is_empty()
+        && text.lines().any(|l| {
+            let l = l.trim_start();
+            ["Checking ", "Compiling "].iter().any(|v| {
+                l.strip_prefix(v)
+                    .and_then(|r| r.strip_prefix(name))
+                    .is_some_and(|r| r.starts_with(" v"))
+            })
+        })
 }
 
 /// `--output-json` の出力。
@@ -326,6 +355,8 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
     let mut text = String::new();
     // 今のエラーの主な位置をまだ読んでいないか。
     let mut pending = false;
+    // 今読んでいる診断がエラーなら、その番号（`block` に行を足す）。
+    let mut current: Option<usize> = None;
     let mut depth = 0i64;
     for line in raw.lines() {
         if json {
@@ -349,11 +380,20 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
                     message,
                     at: None,
                     loc: None,
+                    block: String::new(),
                 });
                 pending = true;
+                current = Some(errors.len() - 1);
+            } else {
+                current = None;
             }
-        } else if top && (t.starts_with("warning") || t.starts_with("note")) {
+        } else if top
+            && (t.starts_with("warning")
+                || t.starts_with("note")
+                || t.starts_with("For more information"))
+        {
             pending = false;
+            current = None;
         }
         if let Some(loc) = t.strip_prefix("--> ") {
             let (file, rest) = loc.split_once(':').unwrap_or((loc, ""));
@@ -373,9 +413,17 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
             }
             if file.starts_with("src/") {
                 let indent = &line[..line.len() - t.len()];
-                text.push_str(&format!("{indent}--> build/verus/{loc}（生成コード）\n"));
+                let shown = format!("{indent}--> build/verus/{loc}（生成コード）\n");
+                if let Some(i) = current {
+                    errors[i].block.push_str(&shown);
+                }
+                text.push_str(&shown);
                 continue;
             }
+        }
+        if let Some(i) = current {
+            errors[i].block.push_str(line);
+            errors[i].block.push('\n');
         }
         text.push_str(line);
         text.push('\n');
@@ -614,20 +662,25 @@ pub fn status_json(
         }
         Summary::Stopped { errors } => serde_json::json!({"ran": false, "errors": errors}),
     };
-    let no_cheating = match cheating {
-        Cheating::Clean => serde_json::json!({"checked": true, "smuggled": []}),
-        Cheating::Smuggled(v) => serde_json::json!({
-            "checked": true,
-            "smuggled": v
+    // `state` は clean / smuggled / unreadable / not_run（`checked` は照合したか）。
+    let mut no_cheating = serde_json::json!({
+        "state": cheating.state(),
+        "checked": matches!(cheating, Cheating::Clean | Cheating::Smuggled(_)),
+    });
+    match cheating {
+        Cheating::Clean => no_cheating["smuggled"] = serde_json::json!([]),
+        Cheating::Smuggled(v) => {
+            no_cheating["smuggled"] = v
                 .iter()
                 .map(|e| serde_json::json!({"location": no_cheating::location(e), "message": e.message}))
-                .collect::<Vec<_>>(),
-        }),
-        Cheating::Unreadable(u) => serde_json::json!({"checked": false, "reason": u.text(false)}),
-        Cheating::NotRun => {
-            serde_json::json!({"checked": false, "reason": "Verus stopped before verification"})
+                .collect();
         }
-    };
+        Cheating::Unreadable(u) => no_cheating["reason"] = u.text(false).into(),
+        Cheating::NotRun => {
+            no_cheating["reason"] =
+                "Verus stopped before verification, so the check did not run".into()
+        }
+    }
     serde_json::json!({
         "$message_type": "ebykn-verify",
         "success": success,
@@ -1002,6 +1055,7 @@ mod tests {
             results: j.results,
             errors,
             checked: Some(j.checked),
+            compiled: true,
         }
     }
 
@@ -1030,6 +1084,7 @@ mod tests {
             message: no_cheating::ADMIT.into(),
             at: Some(("src/lib.rs".into(), 22)),
             loc: Some("src/lib.rs:22:19".into()),
+            block: String::new(),
         };
         let ran = Summary::Ran {
             verified: 1,
@@ -1047,9 +1102,18 @@ mod tests {
             "{json}"
         );
         assert!(json.contains("\"checked\":true"), "{json}");
+        assert!(json.contains("\"state\":\"smuggled\""), "{json}");
         let unread = Cheating::Unreadable(no_cheating::Unreadable::NoErrors);
         assert!(status_text(&[], ran, &unread).contains("smuggled unreadable: "));
-        assert!(status_json(&[], ran, &unread, false).contains("\"checked\":false"));
+        // 「読めない」と「走らせていない」は state で見分ける。
+        let unread_json = status_json(&[], ran, &unread, false);
+        assert!(unread_json.contains("\"checked\":false"), "{unread_json}");
+        assert!(
+            unread_json.contains("\"state\":\"unreadable\""),
+            "{unread_json}"
+        );
+        let not_run = status_json(&[], ran, &Cheating::NotRun, false);
+        assert!(not_run.contains("\"state\":\"not_run\""), "{not_run}");
         assert_eq!(
             status_text(&[], ran, &Cheating::Clean),
             "results 1 verified, 0 errors\n"

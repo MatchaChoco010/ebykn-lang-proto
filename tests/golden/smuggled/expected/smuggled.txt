@@ -6,6 +6,6 @@ unknown smuggled::a
 unknown smuggled::b
 unknown smuggled::c
 smuggled build/verus/src/lib.rs:22:19 `assume`/`admit` not allowed with `--no-cheating`
-smuggled build/verus/src/../../../smuggled.in:1:27 `assume`/`admit` not allowed with `--no-cheating`
+smuggled smuggled.in:1:27 `assume`/`admit` not allowed with `--no-cheating`
 smuggled build/verus/src/lib.rs:29:1 `assume`/`admit` not allowed with `--no-cheating`
 results 6 verified, 0 errors
