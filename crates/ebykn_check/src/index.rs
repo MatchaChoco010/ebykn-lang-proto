@@ -156,9 +156,11 @@ pub enum PreludeFn {
     Alloc { cell: bool },
 }
 
-/// 名前を通して権限に行き着けるか（#117）。[`perm_resolved`] に加え、`uses` / `gives` を持つメソッドの
-/// ある型（`WW::mkw()`）、prelude のクレートの根、そうした名前を持つモジュール（`mm::mk2()`。入れ子のモジュールと、モジュールの
-/// 中の `use`（glob を含む）をたどる）。可視性は見ず、安全側に倒す。
+/// 名前を通して権限に行き着けるか（#117）。「行き着かない」と言えるとき（肯定の事実）だけ `false` にする。
+/// [`perm_resolved`] に加え、行き先を引けない型の別名（`alias_unresolved`）、`uses` / `gives` を持つメソッド
+/// のある型（`WW::mkw()`）、prelude のクレートの根、そうした名前を持つモジュール（`mm::mk2()`。入れ子の
+/// モジュールと、モジュールの中の `use`（glob を含む）をたどる）。モジュールの中の名前と glob のパスを
+/// 解決できない（`Unknown`、深さの打ち切り）ときは、外の根と言えなければ行き着くとみなす。可視性は見ない。
 pub fn leads_to_perm(index: &Index, r: &Resolved) -> bool {
     leads_to_perm_in(index, r, &mut BTreeSet::new())
 }
@@ -170,35 +172,42 @@ fn leads_to_perm_in(index: &Index, r: &Resolved, seen: &mut BTreeSet<ItemPath>) 
     match r {
         // prelude のクレートの根は権限の型を持つ（`use ebykn_prelude as ep;`。#131）。
         Resolved::PreludeCrate => true,
-        Resolved::Type(p) => index
-            .methods
-            .get(p)
-            .is_some_and(|ms| ms.values().any(FnInfo::has_perms)),
+        Resolved::Type(p) => {
+            alias_unresolved(index, p, 0)
+                || index
+                    .methods
+                    .get(p)
+                    .is_some_and(|ms| ms.values().any(FnInfo::has_perms))
+        }
         Resolved::Module(m) => {
+            // たどり中のモジュール（循環）。一つの問い合わせの中で一度ずつたどるので、答えは変わらない。
             if !seen.insert(m.clone()) {
                 return false;
             }
             let Some(scope) = index.modules.get(m) else {
-                return false;
+                return true;
             };
-            let named = scope
+            // 解決できない名前とパスは、外の根と言えるときだけ行き着かないとする。
+            let via = |path: &[String], seen: &mut BTreeSet<ItemPath>| match index
+                .resolve(m, false, path, None)
+            {
+                Resolved::Unknown => !index.is_external_path(m, path),
+                r => leads_to_perm_in(index, &r, seen),
+            };
+            let named: Vec<String> = scope
                 .items
                 .keys()
                 .chain(scope.imports.iter().filter_map(|i| match i {
                     Import::Name { alias, .. } => Some(alias),
                     Import::Glob { .. } => None,
-                }));
-            let named: Vec<String> = named.cloned().collect();
-            named.iter().any(|n| {
-                let r = index.resolve(m, false, std::slice::from_ref(n), None);
-                leads_to_perm_in(index, &r, seen)
-            }) || scope.imports.iter().any(|i| match i {
-                Import::Glob { path } => {
-                    let r = index.resolve(m, false, path, None);
-                    leads_to_perm_in(index, &r, seen)
-                }
-                Import::Name { .. } => false,
-            })
+                }))
+                .cloned()
+                .collect();
+            named.iter().any(|n| via(std::slice::from_ref(n), seen))
+                || scope.imports.iter().any(|i| match i {
+                    Import::Glob { path } => via(path, seen),
+                    Import::Name { .. } => false,
+                })
         }
         _ => false,
     }

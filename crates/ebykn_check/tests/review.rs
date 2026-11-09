@@ -1268,7 +1268,24 @@ fn positive_facts_do_not_leak() {
     }
     // 権限に行き着かない別名と glob は今のまま。
     accepts(&format!(
-        "{PRELUDE}{M}pub fn f() -> u64 {{ use crate::m as mm; use crate::m::*; mm::id(1) + id(2) }}\n"
+        "{PRELUDE}{M}pub mod m6 {{ pub fn id6(v: u64) -> u64 {{ v }} }}\npub fn f() -> u64 {{ use crate::m6 as mm; use crate::m6::*; mm::id6(1) + id6(2) }}\n"
+    ));
+    // #127 の 6 回目の再確認の blocker 4：行き先を引けない別名を持つモジュールへの本体の `use` は、権限に
+    // 行き着くかもしれないので拒む。
+    // 解決できない名前を持つモジュールも、外と言えなければ同じ（外への `use` だけなら通す）。
+    const MU: &str = "pub mod mu { pub use crate::nowhere::f; pub fn id(v: u64) -> u64 { v } }\npub mod me { pub use std::cmp::max; pub fn id(v: u64) -> u64 { v } }\n";
+    for body in [
+        "use crate::m as mm; mm::id(1)",
+        "use crate::m::*; id(2)",
+        "use crate::mu as mm; mm::id(1)",
+    ] {
+        rejects_any(
+            format!("{PRELUDE}{M}{MU}pub fn f() -> u64 {{ {body} }}\n"),
+            &["items inside a function body that lead to permissions"],
+        );
+    }
+    accepts(&format!(
+        "{PRELUDE}{M}{MU}pub fn f() -> u64 {{ use crate::me as mm; mm::id(1) + mm::max(1, 2) }}\n"
     ));
     // should-fix：`<Node as Mk2>::make()`（トレイトの後ろが一つの名前）はトレイトのメソッドなので通す。
     accepts(&format!(
