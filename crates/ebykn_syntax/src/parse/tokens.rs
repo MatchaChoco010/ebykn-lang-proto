@@ -69,8 +69,10 @@ fn refers_to_crate(tts: &[TokenTree], i: usize, name: &str) -> bool {
     let prev_path = i >= 2 && colon(i - 1) && colon(i - 2);
     let prev_path_mid = prev_path && i >= 3 && matches!(tts.get(i - 3), Some(TokenTree::Ident(_)));
     let after_kw = kw(i.checked_sub(1), "use") || kw(i.checked_sub(1), "crate");
+    // `a.builtin::<u8>()` はメソッドの呼び出し。
+    let after_dot = matches!(i.checked_sub(1).and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.');
     if name == "builtin" {
-        next_path && !prev_path_mid || after_kw
+        next_path && !prev_path_mid && !after_dot || after_kw
     } else {
         next_path || prev_path || after_kw
     }

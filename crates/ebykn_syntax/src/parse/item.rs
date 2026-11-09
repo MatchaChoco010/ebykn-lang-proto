@@ -269,6 +269,20 @@ fn check_use(tree: &syn::UseTree, prefix: &mut Vec<String>) {
             push(sp(orig.span()), Message::Unread { written });
         }
     };
+    // 木の先頭の名前（`use {vstd as v}` のグループの中を含む）が参照しないクレートなら拒否する。
+    // トークンの検査は `vstd` が `::` の隣か `use` の直後にあるときしか見ないので、ここで補う。
+    let root = match tree {
+        syn::UseTree::Path(p) => Some(&p.ident),
+        syn::UseTree::Name(n) => Some(&n.ident),
+        syn::UseTree::Rename(r) => Some(&r.ident),
+        _ => None,
+    };
+    if prefix.is_empty()
+        && let Some(i) = root
+        && super::tokens::FORBIDDEN_CRATES.contains(&unraw(i).as_str())
+    {
+        push(sp(i.span()), Message::VstdDirect { name: unraw(i) });
+    }
     match tree {
         syn::UseTree::Path(p) => {
             prefix.push(unraw(&p.ident));

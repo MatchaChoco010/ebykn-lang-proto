@@ -551,7 +551,7 @@ fn raw_identifier_proof_calls_are_rejected() {
 // ---------------------------------------------------------------------------
 // 3 回目のレビュー（#16 の既定を広げたもの）
 
-const DIRECT: &str = "directly; use the names that `ebykn_prelude` re-exports";
+const DIRECT: &str = "directly; write the bare names instead";
 
 /// 規則 1（F1）：vstd・verus_builtin・verus_builtin_macros・builtin は、use、extern crate、
 /// パス、属性、マクロの引数のどこでも参照しない。
@@ -603,12 +603,12 @@ fn forbidden_crates_are_never_referred_to() {
     assert_eq!(
         j,
         [
-            "src/lib.eyk:1:5: E0001: 構文エラー: `.eyk` はクレート `vstd` を直接参照できません。全 `.eyk` が暗黙に使う `ebykn_prelude` の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!`、`View` など）を使います"
+            "src/lib.eyk:1:5: E0001: 構文エラー: `.eyk` はクレート `vstd` を直接参照できません。`vstd::` を書かずに、裸の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!` など）を使います"
         ]
     );
     // `builtin` はよくある語なので、パスの途中と変数はよい。名前の `vstd` も変数ならよい。
     ok(
-        "mod builtin { pub fn f() {} }\nfn g() { crate::builtin::f(); let builtin = 1; let vstd = builtin; }",
+        "mod builtin { pub fn f() {} }\nfn g() { crate::builtin::f(); let builtin = 1; let vstd = builtin; a.builtin::<u8>(); }",
     );
 }
 
@@ -689,4 +689,35 @@ fn macros_in_attribute_values_are_checked() {
         &format!("macro `evil!` {NOT_ALLOWED}"),
     );
     ok("#[doc = \"text\"] #[doc = concat!(\"a\", \"b\")] fn f() {}");
+}
+
+/// 4 回目のレビュー：`use` の `{ }` のグループの中の改名も、参照しないクレートとして拒否する。
+#[test]
+fn forbidden_crates_in_use_groups_are_rejected() {
+    for (src, krate) in [
+        ("use {vstd as v};\nfn f() { v::prelude::admit(); }", "vstd"),
+        ("use {self::m, vstd as v};", "vstd"),
+        (
+            "use {builtin as b};\nfn f() { b::assume_(false); }",
+            "builtin",
+        ),
+        (
+            "use {verus_builtin as vb, verus_builtin_macros as vm};",
+            "verus_builtin",
+        ),
+        (
+            "use {verus_builtin as vb, verus_builtin_macros as vm};",
+            "verus_builtin_macros",
+        ),
+        ("use {vstd};", "vstd"),
+    ] {
+        rejects(
+            src,
+            &format!("cannot refer to the crate `{krate}` {DIRECT}"),
+        );
+    }
+    // 同じ位置の同じ診断は一つにまとめる。
+    assert_eq!(diags("use vstd as v;").len(), 1);
+    // グループの中の自分のモジュールはよい。
+    ok("use {self::m, crate::n as k};");
 }

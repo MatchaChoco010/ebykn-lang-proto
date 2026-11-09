@@ -250,10 +250,10 @@ impl Message {
                 "構文エラー: `{written}` は `.eyk` に書けません。Ebykn が読まないコードを取り込むためです"
             ),
             (Message::VstdDirect { name }, En) => format!(
-                "syntax error: `.eyk` cannot refer to the crate `{name}` directly; use the names that `ebykn_prelude` re-exports (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, `View`, ..), which every `.eyk` uses implicitly"
+                "syntax error: `.eyk` cannot refer to the crate `{name}` directly; write the bare names instead (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, ..) without `{name}::`"
             ),
             (Message::VstdDirect { name }, Ja) => format!(
-                "構文エラー: `.eyk` はクレート `{name}` を直接参照できません。全 `.eyk` が暗黙に使う `ebykn_prelude` の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!`、`View` など）を使います"
+                "構文エラー: `.eyk` はクレート `{name}` を直接参照できません。`{name}::` を書かずに、裸の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!` など）を使います"
             ),
             (Message::ReservedRename { written }, En) => format!(
                 "syntax error: `{written}` cannot be written in `.eyk`; the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to something else"
