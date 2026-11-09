@@ -128,7 +128,7 @@ fn whitespace_comments_attribute_order_and_trailing_commas_are_ignored() {
 #[inline]
 pub fn f(
     x: u8,
-    y: u8,
+    y: u8
 ) -> u8
     requires x < 10,
     ensures x == x,
@@ -487,16 +487,19 @@ fn negation_after_a_clause_keyword_is_not_a_macro() {
     );
 }
 
-/// 呼び出しと引数の並びの末尾のカンマは捨てる。タプルの `(a,)` は残す。
+/// 丸括弧の中の末尾のカンマは、呼び出しと引数の並びでも書いたとおりに比べる（タプルと見分けるには
+/// 構文が要るので、トークンから推し量らない）。角括弧と波括弧の閉じの前のカンマは捨てる。
 #[test]
-fn trailing_commas_in_calls_and_parameters_are_ignored() {
+fn trailing_commas_in_parentheses_are_compared_as_written() {
     let src = "fn h(x: u64) {}\nfn g(x: u64) { h(1); }\n";
-    matches(src, "fn h(x: u64,) {}\nfn g(x: u64,) { h(1,); }\n");
-    let d = run(
-        "fn g() -> (u64,) { return (1,); }\n",
-        "fn g() -> (u64,) { return (1); }\n",
+    let d = run(src, "fn h(x: u64) {}\nfn g(x: u64) { h(1,); }\n");
+    assert!(d.iter().any(|l| l.contains("E0304")), "{d:?}");
+    let d = run(src, "fn h(x: u64,) {}\nfn g(x: u64) { h(1); }\n");
+    assert!(d.iter().any(|l| l.contains("E0304")), "{d:?}");
+    matches(
+        "struct S { a: u64 }\nfn g() -> [u64; 2] { let s = S { a: 1 }; [s.a, 2] }\n",
+        "struct S { a: u64, }\nfn g() -> [u64; 2] { let s = S { a: 1, }; [s.a, 2,] }\n",
     );
-    assert_eq!(d.len(), 1, "{d:?}");
 }
 
 /// 属性の並びの順は、組み込みの属性だけの並びなら無視し、属性マクロを含む並びは書いた順に比べる
@@ -539,6 +542,35 @@ fn one_element_tuples_keep_their_comma_after_any_token() {
             "fn g(b: u64) -> (u64,) { #[allow(unused_parens)] (b,) }\n",
             "fn g(b: u64) -> (u64,) { #[allow(unused_parens)] (b) }\n",
         ),
+        (
+            "pub struct S<'a>(pub(crate) (u64,), &'a (u64,));\n",
+            "pub struct S<'a>(pub(crate) (u64,), &'a (u64));\n",
+        ),
+        (
+            "pub struct S(pub(crate) (u64,));\n",
+            "pub struct S(pub(crate) (u64));\n",
+        ),
+        (
+            "pub struct S(pub(super) (u64,));\n",
+            "pub struct S(pub(super) (u64));\n",
+        ),
+        (
+            "pub struct S(pub(self) (u64,));\n",
+            "pub struct S(pub(self) (u64));\n",
+        ),
+        (
+            "mod m { pub struct S(pub(in crate::m) (u64,)); }\n",
+            "mod m { pub struct S(pub(in crate::m) (u64)); }\n",
+        ),
+        ("fn g(x: &'_ (u64,)) {}\n", "fn g(x: &'_ (u64)) {}\n"),
+        (
+            "fn g<'a>(x: &'a (u64,)) -> &'a (u64,) { x }\n",
+            "fn g<'a>(x: &'a (u64,)) -> &'a (u64) { x }\n",
+        ),
+        (
+            "fn g(x: u64) -> (u64,) { 'l: loop { break 'l (x,); } }\n",
+            "fn g(x: u64) -> (u64,) { 'l: loop { break 'l (x); } }\n",
+        ),
     ] {
         let d = run(src, proof);
         assert!(d.iter().any(|l| l.contains("E0304")), "{proof}: {d:?}");
@@ -559,6 +591,13 @@ fn a_symbol_run_stops_before_an_attribute() {
 #[test]
 fn every_prelude_export_is_a_taken_name() {
     let lib = include_str!("../../ebykn_prelude/src/lib.rs");
+    // 根の公開は 1 行の `pub use` だけ（ほかの形で公開を足したら、この検査を広げる）。
+    for line in lib.lines().filter(|l| l.starts_with("pub")) {
+        assert!(
+            line.starts_with("pub use ") && line.ends_with(';'),
+            "1 行の `pub use` でない公開: {line}"
+        );
+    }
     let mut leaves = Vec::new();
     for line in lib.lines().filter(|l| l.starts_with("pub use ")) {
         let body = line["pub use ".len()..].trim_end_matches(';');

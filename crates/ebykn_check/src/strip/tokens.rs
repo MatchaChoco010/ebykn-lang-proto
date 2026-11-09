@@ -5,9 +5,10 @@
 //!   記号を rustc と同じく複数文字の演算子（`&&`、`::`、`->` など）にまとめてから比べる。
 //! - 続けて書いた属性（`#[..]` の並び、`#![..]` の並び）は、並びがすべて Rust の組み込みの属性なら
 //!   並べ替えて比べる。属性マクロを含む並びは、展開の順が意味を持つので書いた順に比べる（#144 の既定）。
-//! - 末尾のカンマ（閉じ括弧の前、`;` の前、契約とループの句の前）は捨てる。`{` の前のカンマは、本体を
-//!   開く `{` の前（丸括弧と角括弧の中でないところ）でだけ捨てる。要素が一つの丸括弧の `(a,)` は、
-//!   カンマがあるとタプルなので残す（呼び出しと引数の並び `f(a,)` は捨てる）。
+//! - 末尾のカンマは、項目と波括弧の階層（契約の後の `{`・`;`・句のキーワードの前、閉じ括弧の前）と、
+//!   角括弧の閉じの前でだけ捨てる。丸括弧の中のカンマは、書いたとおりに比べる。`(a,)` は 1 要素の
+//!   タプルで、`(a)` とは別のもの。呼び出しの末尾のカンマ（`f(a,)`）と見分けるには構文が要るので、
+//!   トークンから推し量らない。
 //! - マクロの引数と属性の引数の中は、何も正規化しない（中の意味を Ebykn が知らないため）。
 //!
 //! 取り除く範囲（[`Cut`]）に収まるトークンは出さない。
@@ -58,7 +59,7 @@ pub fn flatten(text: &str, cuts: &[Cut], proof: bool) -> Vec<Tok> {
     let cx = Cx { text, cuts, proof };
     let trees: Vec<TokenTree> = ts.into_iter().collect();
     let mut out = Vec::new();
-    for piece in cx.level(&trees, None, false, false) {
+    for piece in cx.level(&trees, None, false) {
         out.extend(piece.toks);
     }
     out
@@ -144,15 +145,8 @@ impl Cx<'_> {
             .is_some_and(|s| s.starts_with("//") || s.starts_with("/*"))
     }
 
-    /// `opaque` は、マクロの引数か属性の引数の中か（正規化しない）。`args` は、この階層が呼び出しや
-    /// 引数の並びの丸括弧か（`(a,)` のカンマがタプルを作らない）。
-    fn level(
-        &self,
-        trees: &[TokenTree],
-        delim: Option<Delimiter>,
-        opaque: bool,
-        args: bool,
-    ) -> Vec<Piece> {
+    /// `opaque` は、マクロの引数か属性の引数の中か（正規化しない）。
+    fn level(&self, trees: &[TokenTree], delim: Option<Delimiter>, opaque: bool) -> Vec<Piece> {
         let mut pieces: Vec<Piece> = Vec::new();
         let mut i = 0;
         while i < trees.len() {
@@ -190,9 +184,9 @@ impl Cx<'_> {
                     }
                     let mut toks = Vec::new();
                     for x in &trees[i..gi] {
-                        toks.extend(self.tree(x, true, false));
+                        toks.extend(self.tree(x, true));
                     }
-                    toks.extend(self.tree(&trees[gi], true, false));
+                    toks.extend(self.tree(&trees[gi], true));
                     pieces.push(Piece {
                         toks,
                         attr: Some(inner),
@@ -228,7 +222,7 @@ impl Cx<'_> {
             // マクロの引数（`m!(..)`、`macro_rules! m { .. }`）の中は正規化しない。
             let macro_args = matches!(t, TokenTree::Group(_)) && is_macro_args(trees, i);
             pieces.push(Piece {
-                toks: self.tree(t, opaque || macro_args, is_arg_list(trees, i)),
+                toks: self.tree(t, opaque || macro_args),
                 attr: None,
             });
             i += 1;
@@ -237,10 +231,10 @@ impl Cx<'_> {
             return pieces;
         }
         sort_attrs(&mut pieces);
-        drop_trailing_commas(pieces, delim, args)
+        drop_trailing_commas(pieces, delim)
     }
 
-    fn tree(&self, t: &TokenTree, opaque: bool, args: bool) -> Vec<Tok> {
+    fn tree(&self, t: &TokenTree, opaque: bool) -> Vec<Tok> {
         let (lo, hi) = range(t);
         match t {
             TokenTree::Group(g) => {
@@ -251,7 +245,7 @@ impl Cx<'_> {
                     lo,
                     hi: g.span_open().byte_range().end,
                 }];
-                for p in self.level(&inner, Some(g.delimiter()), opaque, args) {
+                for p in self.level(&inner, Some(g.delimiter()), opaque) {
                     toks.extend(p.toks);
                 }
                 toks.push(Tok {
@@ -308,24 +302,6 @@ fn puncts(run: &[TokenTree]) -> Vec<Tok> {
         k += n;
     }
     out
-}
-
-/// `i` のグループが、呼び出しか引数の並びの丸括弧か：前が名前（`f(..)`、`fn g(..)`、`S(..)`）か
-/// 丸括弧（`f(a)(..)`）。キーワードの後（`return (a,)`、`pub (u64,)`）はタプル。`>` の後（`-> (u64,)`、
-/// `a > (b,)`、`f::<T>(..)`）と角括弧の後（`#[a] (b,)`、`x[0](..)`）は決められないので、タプルとして
-/// カンマを残す（書いたとおりに比べる側に倒す）。
-fn is_arg_list(trees: &[TokenTree], i: usize) -> bool {
-    let Some(TokenTree::Group(g)) = trees.get(i) else {
-        return false;
-    };
-    if g.delimiter() != Delimiter::Parenthesis {
-        return false;
-    }
-    match i.checked_sub(1).and_then(|k| trees.get(k)) {
-        Some(TokenTree::Ident(id)) => !is_keyword(&id.to_string()),
-        Some(TokenTree::Group(g)) => g.delimiter() == Delimiter::Parenthesis,
-        _ => false,
-    }
 }
 
 /// `i` のグループがマクロの引数か：`m!(..)`（`!` の前が名前）か、`macro_rules! m { .. }`。`!(a, b)`
@@ -430,11 +406,12 @@ fn sort_attrs(pieces: &mut [Piece]) {
     }
 }
 
-/// 末尾のカンマを捨てる。`args` は、この階層が呼び出しか引数の並びの丸括弧か。
-fn drop_trailing_commas(pieces: Vec<Piece>, delim: Option<Delimiter>, args: bool) -> Vec<Piece> {
-    let commas = pieces.iter().filter(|p| p.is(",")).count();
-    // 本体を開く `{` の前のカンマを捨てるのは、丸括弧と角括弧の中でないときだけ（`(S, {})` は
-    // `(S {})` と別の式）。
+/// 末尾のカンマを捨てる。丸括弧の中は捨てない（`(a,)` と `(a)` は別のもの）。`{` の前と句の
+/// キーワードの前は、項目と波括弧の階層でだけ捨てる（`[S, {}]` は `[S {}]` と別の式）。
+fn drop_trailing_commas(pieces: Vec<Piece>, delim: Option<Delimiter>) -> Vec<Piece> {
+    if delim == Some(Delimiter::Parenthesis) {
+        return pieces;
+    }
     let body_level = matches!(delim, None | Some(Delimiter::Brace));
     let n = pieces.len();
     let mut keep = vec![true; n];
@@ -443,14 +420,13 @@ fn drop_trailing_commas(pieces: Vec<Piece>, delim: Option<Delimiter>, args: bool
             continue;
         }
         let drop = match pieces.get(k + 1) {
-            // 閉じ括弧の前。`(a,)` はタプルなので残す（呼び出しと引数の並びは除く）。
-            None => {
-                delim.is_some() && !(delim == Some(Delimiter::Parenthesis) && commas == 1 && !args)
-            }
+            // 波括弧と角括弧の閉じの前。
+            None => delim.is_some(),
             Some(next) => {
-                next.attr.is_none()
+                body_level
+                    && next.attr.is_none()
                     && (next.is(";")
-                        || body_level && next.first() == Some("{")
+                        || next.first() == Some("{")
                         || next.toks.len() == 1
                             && CLAUSE_KEYWORDS.contains(&next.toks[0].text.as_str()))
             }
