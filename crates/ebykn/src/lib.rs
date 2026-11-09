@@ -58,6 +58,23 @@ pub fn check_project(root: &Path) -> CheckReport {
     }
 }
 
+/// 証明ファイル（`.eykp`）があるときの `verify` / `build` は E0003。書き下しはまだ `.eyk` だけを読むので、
+/// `.eykp` に書いた証明を黙って捨てることになる（`.eykp` の書き下しは #67）。`check` は止めない。
+pub fn proofs_not_lowered(report: &CheckReport) -> Vec<Diagnostic> {
+    use ebykn_syntax::diag::{CheckMsg, Message, Unimpl};
+    report
+        .project
+        .proofs
+        .iter()
+        .map(|p| {
+            Diagnostic::new(
+                report.project.file(p.file).span(0, 0),
+                Message::Check(CheckMsg::Unimplemented(Unimpl::EykpLowering)),
+            )
+        })
+        .collect()
+}
+
 /// `Ebykn.toml` の `[verus]` が、この `ebykn` の固定した Verus と違えば E0002（仕様 §1.3）。
 fn pin_mismatches(project: &Project) -> Vec<Diagnostic> {
     use ebykn_syntax::diag::{CheckMsg, Message};

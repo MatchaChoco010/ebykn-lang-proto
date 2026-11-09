@@ -34,21 +34,27 @@ pub fn message(kind: ReservedKind, name: &str, written: &str, in_proof: bool) ->
 }
 
 /// 全ファイルの任された名前を検査する。
+/// 証明ファイル（`.eykp`）の名前は、対応するモジュールの中の名前として解決する（索引は `.eyk` から作る）。
 pub fn check(project: &Project, index: &Index, diags: &mut Diags) {
-    for m in &project.modules {
-        let Some(ast) = project.ast(m.file) else {
+    let files = project
+        .modules
+        .iter()
+        .map(|m| (m.file, &m.module))
+        .chain(project.proofs.iter().map(|p| (p.file, &p.module)));
+    for (file, base) in files {
+        let Some(ast) = project.ast(file) else {
             continue;
         };
         let mut mods = Vec::new();
-        inline_mods(&ast.items, &m.module, &mut mods);
-        for (span, name) in &project.deferred[m.file.0 as usize] {
+        inline_mods(&ast.items, base, &mut mods);
+        for (span, name) in &project.deferred[file.0 as usize] {
             let module = mods
                 .iter()
                 .filter(|(s, _)| s.lo <= span.lo && span.hi <= s.hi)
                 .max_by_key(|(_, p)| p.len())
                 .map(|(_, p)| p.clone())
-                .unwrap_or_else(|| m.module.clone());
-            let in_proof = project.file(m.file).path.ends_with(".eykp");
+                .unwrap_or_else(|| base.clone());
+            let in_proof = project.file(file).path.ends_with(".eykp");
             check_one(index, &module, *span, name, in_proof, diags);
         }
     }

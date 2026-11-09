@@ -163,6 +163,20 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
+    if step != Step::Check {
+        let blocked = ebykn::proofs_not_lowered(&report);
+        if !blocked.is_empty() {
+            for d in &blocked {
+                let file = report.project.file(d.span.file);
+                if opts.json {
+                    println!("{}", d.to_json(file, opts.lang));
+                } else {
+                    eprintln!("{}", d.render(file, opts.lang));
+                }
+            }
+            return ExitCode::from(1);
+        }
+    }
     let output = match ebykn::lower_report(&report) {
         Some(Ok(o)) => o,
         Some(Err(e)) => {
