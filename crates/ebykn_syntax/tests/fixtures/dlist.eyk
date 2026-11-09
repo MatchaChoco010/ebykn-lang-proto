@@ -1,0 +1,73 @@
+pub struct Node<T> { pub val: T, prev: Option<Ptr<Node<T>>>, next: Option<Ptr<Node<T>>> }
+
+pub struct DList<T> {
+    head: Option<Ptr<Node<T>>>,
+    tail: Option<Ptr<Node<T>>>,
+} owns {
+    nodes: Region<Ptr<Node<T>>>,
+} spec {
+    order: Seq<Ptr<Node<T>>>,
+}
+
+impl<T> View for DList<T> {
+    type V = Seq<T>;
+    closed spec fn view(&self) -> Seq<T> = self@order.map(|p| self@nodes[p].val);
+}
+
+impl<T> Invariant for DList<T> {
+    closed spec fn invariant(&self) -> bool = and {
+        self@order.no_duplicates(),
+        forall p in self@order, self@nodes.contains(p),
+        self.head == self@order.first(),
+        self.tail == self@order.last(),
+        forall i in 0..self@order.len(), and {
+            self@nodes[self@order[i]].prev == self@order.get(i - 1),
+            self@nodes[self@order[i]].next == self@order.get(i + 1),
+        },
+    };
+}
+
+impl<T> DList<T> {
+    pub closed spec fn has(&self, h: Ptr<Node<T>>) -> bool = self@order.contains(h);
+
+    pub fn new() -> Self {
+        DList { head: None, tail: None, @nodes: Region::empty(), @order: Seq::empty() }
+    }
+
+    pub fn push_back(&mut self, v: T) -> (h: Ptr<Node<T>>)
+        ensures self.view() == old(self).view().push(v), self.has(h)
+    {
+        let n = Ptr::new(Node { val: v, prev: self.tail, next: None });
+        match self.tail {
+            Some(t) => borrow mut self@nodes[t] { (*t).next = Some(n); },
+            None    => self.head = Some(n),
+        }
+        self.tail = Some(n);
+        put self@nodes[n];
+        self@order = self@order.push(n);
+        n
+    }
+
+    pub fn peek_front(&self) -> Option<&T> {
+        let h = self.head?;
+        borrow self@nodes[h] { Some(&(*h).val) }
+    }
+
+    pub fn remove(&mut self, h: Ptr<Node<T>>) -> (v: T)
+        requires self.has(h)
+        ensures  self.view() == old(self).view().remove(old(self)@order.index_of(h))
+    {
+        take self@nodes[h];
+        let node = h.free();
+        match node.prev {
+            Some(p) => borrow mut self@nodes[p] { (*p).next = node.next; },
+            None    => self.head = node.next,
+        }
+        match node.next {
+            Some(q) => borrow mut self@nodes[q] { (*q).prev = node.prev; },
+            None    => self.tail = node.prev,
+        }
+        self@order = self@order.remove(self@order.index_of(h));
+        node.val
+    }
+}
