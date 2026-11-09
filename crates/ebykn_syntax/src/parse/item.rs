@@ -8,12 +8,14 @@ use verus_syn::parse::discouraged::Speculative as _;
 use verus_syn::parse::{Parse as _, ParseStream};
 
 use super::contract::{self, peek_eq, tokens_between};
-use super::convert::{self, attrs, block, expr, fields, generics, ident, ty, vis};
+use super::convert::{
+    self, attrs, block, expr, fields, generics, ident, raw_checked_name, ty, variant_fields, vis,
+};
 use super::{
     err, is_ident, is_punct, parse_kw, peek_kw, peek_tts, push, push_error, sp, span_between,
 };
 use crate::ast;
-use crate::diag::{Expected, Message, TypeKind};
+use crate::diag::{Expected, Message, RawNameKind, TypeKind};
 
 /// 項目の置かれた場所。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -515,7 +517,7 @@ fn item_kind(
         return use_item(input, begin);
     }
     if is_ident(a, "const") {
-        return const_item(input);
+        return const_item(input, ctx);
     }
     if is_ident(a, "static") {
         return static_item(input);
@@ -556,13 +558,18 @@ fn qualifiers(input: ParseStream) -> syn::Result<ast::FnQualifiers> {
 fn signature(input: ParseStream, q: ast::FnQualifiers) -> syn::Result<ast::Signature> {
     input.parse::<Token![fn]>()?;
     let name: syn::Ident = input.parse()?;
+    let name = if q.constness.is_some() {
+        raw_checked_name(&name, RawNameKind::ConstFn)
+    } else {
+        ident(&name)
+    };
     let g: syn::Generics = input.parse()?;
     let params = contract::params(input)?;
     let ret = contract::ret(input)?;
     let where_clause = contract::where_clause(input)?;
     Ok(ast::Signature {
         qualifiers: q,
-        ident: ident(&name),
+        ident: name,
         generics: generics(&g),
         params,
         ret,
@@ -600,7 +607,9 @@ fn fn_item(
         Some(ast::FnBody::Pure(e))
     } else if input.peek(Token![;]) {
         let semi: Token![;] = input.parse()?;
-        if ctx != Ctx::Trait {
+        if ctx == Ctx::Trait {
+            raw_trait_fn_without_body(&sig.ident);
+        } else {
             push(
                 sp(semi.span),
                 Message::Expected {
@@ -617,12 +626,40 @@ fn fn_item(
             },
         ));
     };
+    if ctx == Ctx::Trait && body.is_some() {
+        raw_keyword_trait_member(&sig.ident, RawNameKind::TraitFnWithBody);
+    }
     Ok(ast::ItemKind::Fn(ast::Fn {
         unchecked,
         sig,
         contract,
         body,
     }))
+}
+
+/// 本体のない trait の関数の名前の raw の綴りは E0104（#147）。固定した Verus は、その名前から作る
+/// `VERUS_SPEC__r#foo` で proc macro が panic する（`tests/verus-probes/raw_name_proc_macro.rs`）。
+/// 本体のある trait の関数は、予約語の名前だけを拒否する（[`raw_keyword_trait_member`]）。
+fn raw_trait_fn_without_body(name: &ast::Ident) {
+    if name.raw {
+        push(
+            name.span,
+            Message::raw_item_name(name.name.clone(), RawNameKind::TraitFnWithoutBody),
+        );
+    }
+}
+
+/// trait の関連型・関連定数・本体のある関数の名前の、Rust の予約語の raw の綴りは E0104（#147）。
+/// 固定した Verus は、関連型なら trait に関数があるか `X::r#type` と使うと（AIR の内部エラーか
+/// `Verus does not recognize associated type`）、関連定数なら impl で与えると（`function for external
+/// trait must have mode exec`）、本体のある関数なら impl で上書きして呼ぶと（AIR の内部エラー）落ちる
+/// （`tests/verus-probes/raw_name_assoc_type.rs`、`raw_name_assoc_const.rs`、`raw_name_trait_fn.rs`）。
+/// 予約語でない名前（`r#foo`）は通る。版で予約語になった名前は、検査が `Ebykn.toml` の `edition` で
+/// 診断を捨てる（E0103 と同じ）。impl の側は trait の宣言に従うので見ない。
+fn raw_keyword_trait_member(id: &ast::Ident, kind: RawNameKind) {
+    if id.raw && crate::reserved::raw_keyword_since(&id.name).is_some() {
+        push(id.span, Message::raw_item_name(id.name.clone(), kind));
+    }
 }
 
 fn spec_fn(
@@ -663,7 +700,9 @@ fn spec_fn(
         Some(e)
     } else if input.peek(Token![;]) {
         let semi: Token![;] = input.parse()?;
-        if ctx != Ctx::Trait {
+        if ctx == Ctx::Trait {
+            raw_trait_fn_without_body(&sig.ident);
+        } else {
             push(
                 sp(semi.span),
                 Message::Expected {
@@ -684,6 +723,9 @@ fn spec_fn(
             },
         ));
     };
+    if ctx == Ctx::Trait && body.is_some() {
+        raw_keyword_trait_member(&sig.ident, RawNameKind::TraitFnWithBody);
+    }
     Ok(ast::ItemKind::SpecFn(ast::SpecFn {
         closed,
         sig,
@@ -770,6 +812,10 @@ fn lemma_fn(
 ) -> syn::Result<ast::ItemKind> {
     parse_kw(input, "lemma")?;
     let sig = signature(input, ast::FnQualifiers::default())?;
+    // trait の `lemma fn` は本体を持たない（本体は impl が与える。§5.1）。
+    if in_trait {
+        raw_trait_fn_without_body(&sig.ident);
+    }
     let mut contract = contract::contract(input)?;
     lemma_by(&mut contract);
     let mut body = None;
@@ -929,8 +975,8 @@ fn enum_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
             let span = super::span_of(&v);
             ast::Variant {
                 attrs: attrs(&v.attrs),
-                ident: ident(&v.ident),
-                fields: fields(&v.fields),
+                ident: raw_checked_name(&v.ident, RawNameKind::Variant),
+                fields: variant_fields(&v.fields),
                 discriminant: v.discriminant.map(|(_, e)| expr(e)),
                 span,
             }
@@ -1003,6 +1049,15 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
         || matches!(t.first(), Some(TokenTree::Ident(_))) && is_punct(t.get(1), '!');
     if rust {
         let ti: syn::TraitItem = input.parse()?;
+        match &ti {
+            syn::TraitItem::Type(t) => {
+                raw_keyword_trait_member(&ident(&t.ident), RawNameKind::AssocType)
+            }
+            syn::TraitItem::Const(c) => {
+                raw_keyword_trait_member(&ident(&c.ident), RawNameKind::AssocConst)
+            }
+            _ => {}
+        }
         match &ti {
             syn::TraitItem::Macro(m) => {
                 convert::mac(&m.mac);
@@ -1248,7 +1303,7 @@ fn use_item(input: ParseStream, begin: &syn::parse::ParseBuffer) -> syn::Result<
     }))
 }
 
-fn const_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
+fn const_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::ItemKind> {
     input.parse::<Token![const]>()?;
     let name: proc_macro2::Ident = if input.peek(Token![_]) {
         let u: Token![_] = input.parse()?;
@@ -1266,8 +1321,16 @@ fn const_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
         None
     };
     input.parse::<Token![;]>()?;
+    // trait の impl の関連定数は、trait の宣言に従う（宣言の側は、予約語の名前だけを拒否する。
+    // [`raw_keyword_trait_member`]）。モジュール・inherent な impl・ブロックの `const` は、予約語で
+    // なくても proc macro が panic する（`tests/verus-probes/raw_name_proc_macro.rs`）。
+    let ident = if ctx == (Ctx::Impl { inherent: false }) {
+        ident(&name)
+    } else {
+        raw_checked_name(&name, RawNameKind::Const)
+    };
     Ok(ast::ItemKind::Const(ast::Const {
-        ident: ident(&name),
+        ident,
         generics: generics(&g),
         ty: ty(&t),
         expr: e,
@@ -1285,7 +1348,7 @@ fn static_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
     input.parse::<Token![;]>()?;
     Ok(ast::ItemKind::Static(ast::Static {
         mutable,
-        ident: ident(&name),
+        ident: raw_checked_name(&name, RawNameKind::Static),
         ty: ty(&t),
         expr: e,
     }))

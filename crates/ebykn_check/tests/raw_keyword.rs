@@ -7,10 +7,6 @@
 
 mod support;
 
-use std::path::PathBuf;
-
-use ebykn_check::project::load;
-use ebykn_syntax::diag::Lang;
 use ebykn_syntax::reserved::RAW_KEYWORDS;
 use support::*;
 
@@ -167,48 +163,19 @@ fn says_what_to_write() {
     );
 }
 
-struct Tmp(PathBuf);
-
-impl Drop for Tmp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// `edition` の `Ebykn.toml` と `src/lib.eyk` のプロジェクトの診断。
-fn diags_in_edition(name: &str, edition: Option<&str>, src: &str) -> Vec<String> {
-    let dir = std::env::temp_dir().join(format!("ebykn-raw-kw-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let t = Tmp(dir);
-    std::fs::create_dir_all(t.0.join("src")).unwrap();
-    let edition = edition.map_or(String::new(), |e| format!("edition = \"{e}\"\n"));
-    std::fs::write(
-        t.0.join("Ebykn.toml"),
-        format!(
-            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n{edition}\n[verus]\nrelease = \"release/x\"\ncommit = \"abc\"\n"
-        ),
-    )
-    .unwrap();
-    std::fs::write(t.0.join("src/lib.eyk"), src).unwrap();
-    let (p, d) = load(&t.0);
-    d.iter()
-        .map(|d| d.render(p.file(d.span.file), Lang::En))
-        .collect()
-}
-
 /// 版で予約語になった名前（`gen` は 2024）は、その版より前では E0103 にしない（rustc が `r#` を外す）。
 #[test]
 fn follows_the_edition() {
     let src = "pub fn f() -> u64 { let r#gen = 2u64; r#gen + 1 }\n";
     let e0103 = |d: &[String]| d.iter().any(|l| l.contains(": E0103: "));
-    assert!(e0103(&diags_in_edition("gen2024", Some("2024"), src)));
-    assert!(e0103(&diags_in_edition("gendefault", None, src)));
-    assert!(e0103(&diags_in_edition("genbad", Some("next"), src)));
-    let d = diags_in_edition("gen2021", Some("2021"), src);
+    assert!(e0103(&diags_in_edition("kw-gen2024", Some("2024"), src)));
+    assert!(e0103(&diags_in_edition("kw-gendefault", None, src)));
+    assert!(e0103(&diags_in_edition("kw-genbad", Some("next"), src)));
+    let d = diags_in_edition("kw-gen2021", Some("2021"), src);
     assert!(d.is_empty(), "{d:?}");
     // どの版でも予約語の名前は、2021 でも E0103。
     let d = diags_in_edition(
-        "type2021",
+        "kw-type2021",
         Some("2021"),
         "pub fn f() -> u64 { let r#type = 2u64; r#type + 1 }\n",
     );

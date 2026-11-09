@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use ebykn_syntax::ast::{self, ItemKind};
-use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
+use ebykn_syntax::diag::{BindingForm, CheckMsg, Diagnostic, Message, RawNameKind, Unimpl};
 use ebykn_syntax::reserved::{DeferredName, edition_reserves, raw_keyword_since};
 use ebykn_syntax::reserved::{RESERVED_CRATE_NAMES, RESERVED_DEPENDENCY_NAMES};
 use ebykn_syntax::span::{FileId, SourceFile, Span};
@@ -156,7 +156,8 @@ pub const MANIFEST: &str = "Ebykn.toml";
 pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
     let manifest = SourceFile::new(FileId(0), MANIFEST, "");
     let file = SourceFile::new(FileId(1), "src/lib.eyk", text);
-    let parsed = parse_eyk(&file);
+    let mut parsed = parse_eyk(&file);
+    drop_shorthand_over_variant_field(&mut parsed.diags);
     let p = Project {
         root: PathBuf::from("."),
         manifest: Manifest {
@@ -317,6 +318,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
     // クレートルートを先頭に、あとはパスの順に並べる（出力を決定的にする）。
     p.modules.sort_by(|x, y| x.module.cmp(&y.module));
     load_proofs(&mut p, &found, &mut diags);
+    drop_shorthand_over_variant_field(&mut diags);
     (p, diags)
 }
 
@@ -431,7 +433,7 @@ fn parse_file(
     let kept: Vec<Diagnostic> = parsed
         .diags
         .into_iter()
-        .filter(|d| keeps_edition_keyword(d, &edition))
+        .filter_map(|d| fit_edition(d, &edition))
         .collect();
     p.parsed_ok.push(kept.is_empty());
     diags.extend(kept);
@@ -442,17 +444,57 @@ fn parse_file(
     Some(id)
 }
 
-/// 版の予約語の診断を、`Ebykn.toml` の `edition` がその版より前なら捨てる。ほかの診断はそのまま
-/// 残す。`gen` を `r#` なしで書いた診断（#104）と、版で予約語になった名前の raw の綴りの局所の名前
-/// （#119。2021 の `r#gen` は、rustc が `r#` を外して Verus に渡すので通る）。
-fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
-    match &d.message {
-        Message::EditionKeyword { since, .. } => edition_reserves(edition, *since),
-        Message::RawKeywordBinding { word, .. } => {
-            raw_keyword_since(word).is_none_or(|since| edition_reserves(edition, since))
+/// 版の予約語の診断を、`Ebykn.toml` の `edition` に合わせる。その版より前なら、`gen` を `r#` なしで
+/// 書いた診断（#104）と、版で予約語になった名前の raw の綴りの局所の名前（#119）と、予約語だけを
+/// 拒否する項目の名前（trait の関連型など。#147）の診断を捨てる。2021 の `r#gen` は、rustc が `r#` を
+/// 外して Verus に渡すので通る。予約語でなくても拒否する項目の名前（`const r#gen`）は残し、`gen` と
+/// 書けば同じ名前なので、`r#` を外すよう案内する（#147）。ほかの診断はそのまま残す。
+fn fit_edition(mut d: Diagnostic, edition: &str) -> Option<Diagnostic> {
+    let reserved =
+        |word: &str| raw_keyword_since(word).is_none_or(|since| edition_reserves(edition, since));
+    match &mut d.message {
+        Message::EditionKeyword { since, .. } if !edition_reserves(edition, *since) => return None,
+        Message::RawKeywordBinding { word, .. } if !reserved(word) => return None,
+        Message::RawItemName {
+            word,
+            kind,
+            other_name,
+        } if !reserved(word) => {
+            if kind.keyword_only() {
+                return None;
+            }
+            *other_name = false;
         }
-        _ => true,
+        _ => {}
     }
+    Some(d)
+}
+
+/// 列挙子のフィールドの名前に E0104 が出た語について、構造体のパターンの省略形（`E::A { r#type }`）
+/// の E0103 を捨てる（#147）。E0103 は `r#type: type_` と書くよう案内するが、そのフィールドの名前は
+/// E0104 で使えないので、案内がぶつかる。E0104 は残るので、黙って通ることはない。名前を変えた後、
+/// 同じ名前のフィールドを持つ構造体の省略形が残っていれば、そのとき E0103 が出る。
+fn drop_shorthand_over_variant_field(diags: &mut Vec<Diagnostic>) {
+    let fields: std::collections::BTreeSet<String> = diags
+        .iter()
+        .filter_map(|d| match &d.message {
+            Message::RawItemName {
+                word,
+                kind: RawNameKind::VariantField,
+                ..
+            } => Some(word.clone()),
+            _ => None,
+        })
+        .collect();
+    diags.retain(|d| {
+        !matches!(
+            &d.message,
+            Message::RawKeywordBinding {
+                word,
+                form: BindingForm::Shorthand { .. },
+            } if fields.contains(word)
+        )
+    });
 }
 
 /// まだ読めないファイル（`props/` の下の性質ファイル）を探し、`E0003` にする。
