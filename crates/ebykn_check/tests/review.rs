@@ -628,6 +628,75 @@ fn cfg_inside_functions_is_e0003() {
     accepts("pub fn f() { #[cfg_attr(test, inline)] let y = 1; }");
 }
 
+/// #95：クロージャの引数とパターンの欄の `#[cfg]`、raw の `#[r#cfg]`、ジェネリクスの引数の `#[cfg]`。
+/// 書き下しが属性を落としていたので、`.eyk` で消える引数や欄が検証するコードに残った。
+#[test]
+fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
+    for src in [
+        "pub fn g() -> u32 { let c = |#[cfg(any())] a: u32, b: u32| b; c(1) }",
+        "pub fn g() -> u32 { let c = |#[r#cfg(any())] a: u32, b: u32| b; c(1) }",
+        "pub fn g() -> u32 { let c = |#[cfg_attr(all(), r#cfg(any()))] a: u32, b: u32| b; c(1) }",
+        "pub struct S { pub x: u32 }\npub fn p4(s: S) -> (r: u32) ensures s.x != 0 ==> r == 2, { match s { S { #[r#cfg(any())] x: 0, .. } => 1, _ => 2 } }",
+        "pub struct S { pub x: u32 }\npub fn p(s: S) -> u32 { let S { #[cfg_attr(all(), r#cfg(any()))] x } = s; x }",
+        "pub fn n(#[r#cfg(test)] x: u32) {}",
+        "pub fn o() { #[r#cfg(test)] let y = 1; }",
+        "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> B { let B { #[cfg(test)] @items } = b; B { @items: items } }",
+    ] {
+        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
+    // `..` と `@..` の前の属性は、rustc と同じく E0001（PR #129 のレビュー。書き下しは `..` に属性を
+    // 付けられないので、cfg でない属性も落ちていた）。
+    for (src, rest) in [
+        (
+            "pub struct S { pub x: u32, pub y: u32 }\npub fn p(s: S) -> u32 { let S { x, #[allow(unused)] .. } = s; x }",
+            "..",
+        ),
+        (
+            "pub struct S { pub x: u32, pub y: u32 }\npub fn p(s: S) -> u32 { match s { S { x, #[r#cfg(any())] .. } => x } }",
+            "..",
+        ),
+        (
+            "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> u32 { let B { #[cfg(test)] @.. } = b; 0 }",
+            "@..",
+        ),
+        (
+            "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> u32 { let B { #[allow(unused)] @.. } = b; 0 }",
+            "@..",
+        ),
+    ] {
+        rejects(
+            src,
+            "E0001",
+            &format!("an attribute cannot be written on `{rest}` in a struct pattern"),
+        );
+    }
+    for src in [
+        "pub fn f<#[cfg(any())] T>(a: u32) -> u32 { a }",
+        "pub fn f<#[r#cfg(any())] 'a>(a: u32) -> u32 { a }",
+        "pub struct T<#[cfg_attr(all(), cfg(any()))] A> { a: u32 }",
+        "pub struct T { a: u32 }\nimpl T { pub fn m<#[cfg(test)] const N: usize>(&self) {} }",
+        "pub fn o() { fn inner<#[cfg(test)] T>() {} }",
+    ] {
+        rejects(src, "E0003", "`#[cfg(..)]` on a generic parameter");
+    }
+    // 診断は cfg の属性を指す（前に cfg でない属性があっても）。
+    let (_, lines) = run("pub fn f<#[allow(unused)] #[cfg(any())] T>(a: u32) -> u32 { a }");
+    assert!(
+        lines.iter().any(|l| l.contains(":1:27: E0003")),
+        "{lines:?}"
+    );
+    // Ebykn が中を読まずに Rust のまま渡す項目（`union`、trait の `type`）のジェネリクスの引数は、
+    // rustc が verify と素のビルドで同じに評価するので通す（現行仕様 §5「マクロ」）。
+    accepts("pub union U<#[cfg(any())] T> { a: u32 }");
+    accepts("pub trait Tr { type A<#[cfg(any())] T>; }");
+    // cfg でない属性は通す（書き下しに残す。`crates/ebykn_lower/tests/rules.rs`）。
+    accepts("pub fn f<#[allow(unused)] T>(a: u32) -> u32 { a }");
+    accepts("pub fn g() -> u32 { let c = |#[allow(unused)] a: u32| a; c(1) }");
+    accepts(
+        "pub struct S { pub x: u32 }\npub fn h(s: S) -> u32 { let S { #[allow(unused)] x } = s; x }",
+    );
+}
+
 /// std のマクロの引数はトークンのまま持つので、その中の属性はどれも E0003（PR #26 の 3 回目の確認、#28）。
 #[test]
 fn attributes_inside_std_macro_arguments_are_e0003() {

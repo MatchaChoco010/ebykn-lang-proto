@@ -430,9 +430,10 @@ pub struct Local {
     pub else_: Option<Block>,
 }
 
-/// パターン。
+/// パターン。`attrs` はパターンに付いた外部属性（クロージャの引数 `|#[..] a| ..` など）。
 #[derive(Debug, Clone)]
 pub struct Pat {
+    pub attrs: Vec<Attr>,
     pub kind: PatKind,
     pub span: Span,
 }

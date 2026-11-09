@@ -302,8 +302,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
         .params
         .iter()
         .map(|p| match p {
-            GenericParam::Lifetime { lifetime, bounds } => format!(
-                "'{}{}",
+            GenericParam::Lifetime {
+                attrs,
+                lifetime,
+                bounds,
+            } => format!(
+                "{}'{}{}",
+                crate::attrs(attrs),
                 lifetime.name,
                 bounds
                     .as_ref()
@@ -311,11 +316,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
                     .unwrap_or_default()
             ),
             GenericParam::Type {
+                attrs,
                 ident: i,
                 bounds,
                 default,
             } => format!(
-                "{}{}{}",
+                "{}{}{}{}",
+                crate::attrs(attrs),
                 ident(i),
                 bounds
                     .as_ref()
@@ -327,11 +334,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
                     .unwrap_or_default()
             ),
             GenericParam::Const {
+                attrs,
                 ident: i,
                 ty,
                 default,
             } => format!(
-                "const {}: {}{}",
+                "{}const {}: {}{}",
+                crate::attrs(attrs),
                 ident(i),
                 cx.ty(ty),
                 default
