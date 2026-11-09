@@ -109,16 +109,13 @@ pub open spec fn post(out: Out, r: Res, c: Ctx, st: St, fr: Frame) -> bool {
     match out {
         Out::Bad(_) => false,
         Out::Normal(s2) => res_fall(r) is Some && inv(res_fall(r).unwrap(), s2, fr) && ext(st, s2, fr),
-        Out::Brk(s2) => c.lp is NoLoop || (!c.crossed && (c.lp is Loop ==> res_brk(r) is Some) && inv(
-            brk_target(c, r),
-            s2,
-            fr,
-        ) && ext(st, s2, fr)),
-        Out::Cont(s2) => c.lp is NoLoop || (!c.crossed && inv(entry_of(c.lp), s2, fr) && ext(
+        Out::Brk(s2) => !(c.lp is NoLoop) && !c.crossed && (c.lp is Loop ==> res_brk(r) is Some)
+            && inv(brk_target(c, r), s2, fr) && ext(st, s2, fr),
+        Out::Cont(s2) => !(c.lp is NoLoop) && !c.crossed && inv(entry_of(c.lp), s2, fr) && ext(
             st,
             s2,
             fr,
-        )),
+        ),
         Out::Ret(s2) => ext(st, s2, fr) && exit_sem(s2, fr),
         Out::Halt => true,
     }
@@ -731,7 +728,7 @@ pub open spec fn pre(s_wf: bool, r: Res, e: Env, c: Ctx, st: St, fr: Frame) -> b
 
 proof fn lemma_atom(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
         !(s.op is Branch || s.op is While || s.op is Loop || s.op is Borrow || s.op is Closure),
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
@@ -757,7 +754,7 @@ proof fn lemma_atom(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame
 
 proof fn lemma_branch(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
         s.op is Branch,
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
@@ -780,7 +777,7 @@ proof fn lemma_branch(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Fra
 
 proof fn lemma_while(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
         s.op is While || s.op is Loop,
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
@@ -831,7 +828,7 @@ proof fn lemma_iter(
     exits: bool,
 )
     requires
-        wf_block(body, st.bind.len()),
+        wf_block(body, st.bind.len(), true),
         chk_block(body, e, None, c) is Ok,
         res_fall(chk_block(body, e, None, c)) matches Some(f) ==> f == e,
         inv(e, st, fr),
@@ -889,7 +886,7 @@ proof fn lemma_iter(
 
 proof fn lemma_borrow(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
         s.op is Borrow,
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
@@ -924,7 +921,7 @@ proof fn lemma_borrow(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Fra
 
 proof fn lemma_closure(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
         s.op is Closure,
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
@@ -942,7 +939,7 @@ pub open spec fn closure_ctx() -> Ctx {
 /// クロージャを `k` 回呼ぶ。外の Γ と不変条件は変わらない。
 proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat)
     requires
-        wf_block(body, st.bind.len()),
+        wf_block(body, st.bind.len(), false),
         chk_block(body, capture(e), None, closure_ctx()) is Ok,
         res_fall(chk_block(body, capture(e), None, closure_ctx())) matches Some(f) ==> exit_ok(
             f,
@@ -995,7 +992,7 @@ proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat
 
 pub proof fn lemma_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_stmt(s, st.bind.len()), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
     ensures
         post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
     decreases s, 1nat,
@@ -1012,7 +1009,7 @@ pub proof fn lemma_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: F
 
 pub proof fn lemma_block(b: Block, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
     requires
-        pre(wf_block(b, st.bind.len()), chk_block(b, e, brk, c), e, c, st, fr),
+        pre(wf_block(b, st.bind.len(), !(c.lp is NoLoop)), chk_block(b, e, brk, c), e, c, st, fr),
     ensures
         post(run_block(b, st, fr, o).0, chk_block(b, e, brk, c), c, st, fr),
     decreases b, 0nat,
@@ -1031,12 +1028,8 @@ pub proof fn lemma_block(b: Block, e: Env, brk: Option<Env>, c: Ctx, st: St, fr:
                     lemma_block(*r, e2, b2, c, s2, fr, o2);
                     match run_block(*r, s2, fr, o2).0 {
                         Out::Normal(s3) => lemma_ext_trans(st, s2, s3, fr),
-                        Out::Brk(s3) => if !(c.lp is NoLoop) {
-                            lemma_ext_trans(st, s2, s3, fr)
-                        },
-                        Out::Cont(s3) => if !(c.lp is NoLoop) {
-                            lemma_ext_trans(st, s2, s3, fr)
-                        },
+                        Out::Brk(s3) => lemma_ext_trans(st, s2, s3, fr),
+                        Out::Cont(s3) => lemma_ext_trans(st, s2, s3, fr),
                         Out::Ret(s3) => lemma_ext_trans(st, s2, s3, fr),
                         _ => {},
                     }

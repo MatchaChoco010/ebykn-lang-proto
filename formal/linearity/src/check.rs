@@ -137,6 +137,8 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
             err(Code::E0505, at)
         },
         Op::Diverge => div(brk),
+        // ループの外の `break` / `continue` は Rust が拒む形で、整形式（`sem::wf`）に入らない。
+        // 検査は止まる文として扱うだけで、定理はこの形について何も述べない。
         Op::Break => match c.lp {
             LoopCtx::NoLoop => div(brk),
             LoopCtx::While(entry) => if c.crossed || e != entry {

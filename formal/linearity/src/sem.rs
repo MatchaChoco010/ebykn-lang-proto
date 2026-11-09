@@ -307,6 +307,7 @@ pub open spec fn frame0(p: Program) -> Frame {
 }
 
 /// 関数を選択の列 `o` に沿って実行する。本体の末尾で普通に終われば、末尾の規則を見る。
+/// 本体から `break` / `continue` が出てくるのは整形式でないときだけ（`theorem_soundness` の証明が示す）。
 pub open spec fn run_fn(p: Program, o: Seq<nat>) -> Out {
     let (out, _) = run_block(p.body, init(p), frame0(p), o);
     match out {
@@ -317,13 +318,14 @@ pub open spec fn run_fn(p: Program, o: Seq<nat>) -> Out {
     }
 }
 
-// ---- 整形式：変数の添字が範囲にあり、引数の欄が `uses` から作れる形 ----
+// ---- 整形式：変数の添字が範囲にあり、`break` / `continue` はループの中（クロージャの境界を越えない）、
+// 引数の欄が `uses` から作れる形。Rust が拒む形は定理の外に置く ----
 
 pub open spec fn var_ok(x: usize, n: nat) -> bool {
     (x as nat) < n
 }
 
-pub open spec fn wf_stmt(s: Stmt, n: nat) -> bool
+pub open spec fn wf_stmt(s: Stmt, n: nat, in_loop: bool) -> bool
     decreases s,
 {
     match s.op {
@@ -334,21 +336,23 @@ pub open spec fn wf_stmt(s: Stmt, n: nat) -> bool
         Op::Write { x } => var_ok(x, n),
         Op::Assign { x } => var_ok(x, n),
         Op::Let { x } => var_ok(x, n),
-        Op::Branch { a, b, .. } => wf_block(*a, n) && wf_block(*b, n),
-        Op::While { body } => wf_block(*body, n),
-        Op::Loop { body } => wf_block(*body, n),
-        Op::Borrow { x, body, .. } => var_ok(x, n) && wf_block(*body, n),
-        Op::Closure { body } => wf_block(*body, n),
+        Op::Break => in_loop,
+        Op::Continue => in_loop,
+        Op::Branch { a, b, .. } => wf_block(*a, n, in_loop) && wf_block(*b, n, in_loop),
+        Op::While { body } => wf_block(*body, n, true),
+        Op::Loop { body } => wf_block(*body, n, true),
+        Op::Borrow { x, body, .. } => var_ok(x, n) && wf_block(*body, n, in_loop),
+        Op::Closure { body } => wf_block(*body, n, false),
         _ => true,
     }
 }
 
-pub open spec fn wf_block(b: Block, n: nat) -> bool
+pub open spec fn wf_block(b: Block, n: nat, in_loop: bool) -> bool
     decreases b,
 {
     match b {
         Block::Nil => true,
-        Block::Cons(s, r) => wf_stmt(*s, n) && wf_block(*r, n),
+        Block::Cons(s, r) => wf_stmt(*s, n, in_loop) && wf_block(*r, n, in_loop),
     }
 }
 
@@ -358,7 +362,7 @@ pub open spec fn param_slot(s: Slot) -> bool {
 
 pub open spec fn wf(p: Program) -> bool {
     &&& forall|i: nat| i < len(p.params) ==> #[trigger] param_slot(get(p.params, i))
-    &&& wf_block(p.body, len(p.params))
+    &&& wf_block(p.body, len(p.params), false)
     &&& match p.gives {
         Some(g) => var_ok(g, len(p.params)),
         None => true,

@@ -313,15 +313,127 @@ fn package_name(dir: &Path) -> Result<String, String> {
     Err("Cargo.toml の [package] に name がありません".to_string())
 }
 
-/// `cargo verus` の結果を判定する。結果の行があり、0 errors で、1 件以上を検証し、終了コードが 0 のときだけ通す。
-pub fn judge(results: Option<(u64, u64)>, success: bool) -> Result<u64, String> {
-    match results {
-        Some((n, 0)) if success && n > 0 => Ok(n),
-        Some((0, 0)) => Err("何も検証していません（0 verified）".to_string()),
-        Some((_, 0)) => Err("0 errors なのに終了コードが 0 ではありません".to_string()),
-        Some((n, e)) => Err(format!("{n} verified, {e} errors")),
-        None => Err("結果の行（verification results::）がありません".to_string()),
+/// 検証されたことを名前で確かめる関数。クレートごとに、定理を消したり `#[verifier::external]` で
+/// 外したりすると `verus-verify` が落ちるようにする（件数だけでは、減っても 1 件以上なら通る）。
+pub const REQUIRED: &[(&str, &[&str])] = &[(
+    "formal/linearity",
+    &[
+        "ebykn_formal_linearity::sound::theorem_soundness",
+        "ebykn_formal_linearity::sound::theorem_consumed_at_most_once",
+        "ebykn_formal_linearity::sound::theorem_no_use_after_consume",
+        "ebykn_formal_linearity::sound::theorem_borrowed_not_consumed",
+        "ebykn_formal_linearity::sound::theorem_no_write_to_shared",
+        "ebykn_formal_linearity::sound::theorem_only_gives_left",
+    ],
+)];
+
+pub fn required(krate: &str) -> &'static [&'static str] {
+    REQUIRED
+        .iter()
+        .find(|(k, _)| *k == krate)
+        .map(|(_, names)| *names)
+        .unwrap_or(&[])
+}
+
+/// `--output-json` の出力（標準出力）から読んだ検証の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonResults {
+    pub verified: u64,
+    pub errors: u64,
+    pub success: bool,
+    /// `func-details` の鍵。Verus が検証した関数（失敗した関数も含む。M0 の実測）の名前。
+    pub funcs: Vec<String>,
+}
+
+/// `--output-json` の出力を読む。`verification-results` と `func-details` が一つずつなければ失敗にする。
+pub fn read_json(text: &str) -> Result<JsonResults, String> {
+    const RESULTS: &str = "\"verification-results\": {";
+    const FUNCS: &str = "\"func-details\": {";
+    if text.matches(RESULTS).count() != 1 || text.matches(FUNCS).count() != 1 {
+        return Err(
+            "--output-json の出力に verification-results と func-details が一つずつありません"
+                .to_string(),
+        );
     }
+    let section = &text[text.find(RESULTS).unwrap()..];
+    let section = &section[..section
+        .find('}')
+        .ok_or("verification-results が閉じていません")?];
+    let field = |name: &str| -> Result<String, String> {
+        let key = format!("\"{name}\": ");
+        let at = section
+            .find(&key)
+            .ok_or_else(|| format!("verification-results に {name} がありません"))?;
+        Ok(section[at + key.len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect())
+    };
+    let num = |name: &str| -> Result<u64, String> {
+        let v = field(name)?;
+        v.parse()
+            .map_err(|_| format!("verification-results の {name} を読めません: {v}"))
+    };
+    let success = match field("success")?.as_str() {
+        "true" => true,
+        "false" => false,
+        v => return Err(format!("verification-results の success を読めません: {v}")),
+    };
+    let mut funcs = Vec::new();
+    let mut closed = false;
+    for line in text[text.find(FUNCS).unwrap()..].lines().skip(1) {
+        // 中身は 4 字以上の字下げ。それより浅い最初の行が閉じ括弧でなければ読めない。
+        if !line.starts_with("    ") {
+            closed = line.trim_start().starts_with('}');
+            break;
+        }
+        if let Some(name) = line
+            .strip_prefix("    \"")
+            .and_then(|l| l.strip_suffix("\": {"))
+        {
+            funcs.push(name.to_string());
+        }
+    }
+    if !closed {
+        return Err("func-details が閉じていません".to_string());
+    }
+    Ok(JsonResults {
+        verified: num("verified")?,
+        errors: num("errors")?,
+        success,
+        funcs,
+    })
+}
+
+/// `cargo verus` の結果を判定する。JSON の結果があり、0 errors で、1 件以上を検証し、終了コードが 0 で、
+/// `required` の関数がすべて検証されたときだけ通す。
+pub fn judge(
+    results: Result<JsonResults, String>,
+    exit_ok: bool,
+    required: &[&str],
+) -> Result<u64, String> {
+    let r = results?;
+    if r.errors > 0 || !r.success {
+        return Err(format!("{} verified, {} errors", r.verified, r.errors));
+    }
+    if r.verified == 0 {
+        return Err("何も検証していません（0 verified）".to_string());
+    }
+    if !exit_ok {
+        return Err("0 errors なのに終了コードが 0 ではありません".to_string());
+    }
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|n| !r.funcs.iter().any(|f| f == *n))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "検証された関数に {} がありません（消したか、検証の対象から外した）",
+            missing.join(", ")
+        ));
+    }
+    Ok(r.verified)
 }
 
 /// `verification results:: N verified, M errors` の N と M。
@@ -341,7 +453,7 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 /// `verus-verify` が一つのクレートについて順に呼ぶ cargo。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
-    /// 前回の成果物が残っていると cargo が Verus を呼ばず、結果の行が出ない。対象のクレートだけ消す。
+    /// 前回の成果物が残っていると cargo が Verus を呼ばず、結果が出ない。対象のクレートだけ消す。
     Clean,
     /// 固定した Verus で検証する。
     Verify,
@@ -381,7 +493,13 @@ fn verify_steps(root: &Path, name: &str) -> Vec<(Step, Vec<OsString>)> {
             with(
                 os(&["verus", "focus", "--locked", "--target-dir"]),
                 root.join("target/verus"),
-                &["--", "--no-cheating", "--triggers-mode", "silent"],
+                &[
+                    "--",
+                    "--no-cheating",
+                    "--triggers-mode",
+                    "silent",
+                    "--output-json",
+                ],
             ),
         ),
         (
@@ -450,14 +568,19 @@ pub fn verify(root: &Path) -> bool {
                             return false;
                         }
                     };
-                    let text = format!(
-                        "{}{}",
-                        String::from_utf8_lossy(&out.stdout),
-                        String::from_utf8_lossy(&out.stderr)
-                    );
-                    eprint!("{text}");
-                    match judge(results_line(&text), out.status.success()) {
-                        Ok(n) => eprintln!("ok: verus-verify: {krate}: {n} verified, 0 errors"),
+                    // 標準出力は JSON（関数の一覧が長い）なので出さない。診断は標準エラーに出る。
+                    eprint!("{}", String::from_utf8_lossy(&out.stderr));
+                    let json = read_json(&String::from_utf8_lossy(&out.stdout));
+                    let need = required(krate);
+                    match judge(json, out.status.success(), need) {
+                        Ok(n) => eprintln!(
+                            "ok: verus-verify: {krate}: {n} verified, 0 errors{}",
+                            if need.is_empty() {
+                                String::new()
+                            } else {
+                                format!("（定理 {} 個を名前で確認）", need.len())
+                            }
+                        ),
                         Err(e) => {
                             eprintln!(
                                 "error: verus-verify: {krate}: 検証が通りません（{e}、終了 {}）",
@@ -558,6 +681,23 @@ mod tests {
         );
     }
 
+    /// `--output-json` の出力と同じ形（M0 の実測、`json_output.rs` のプローブ）。
+    fn json(verified: u64, errors: u64, success: bool, funcs: &[&str]) -> String {
+        let mut t = String::from("{\n  \"func-details\": {\n");
+        for (i, f) in funcs.iter().enumerate() {
+            let comma = if i + 1 < funcs.len() { "," } else { "" };
+            t.push_str(&format!(
+                "    \"{f}\": {{\n      \"obligation_proof_notes\": [],\n      \"failed_proof_notes\": []\n    }}{comma}\n"
+            ));
+        }
+        t.push_str(&format!(
+            "  }},\n  \"verification-results\": {{\n    \"encountered-error\": false,\n    \"success\": {success},\n    \"verified\": {verified},\n    \"errors\": {errors},\n    \"is-verifying-entire-crate\": true\n  }}\n}}\n"
+        ));
+        t
+    }
+
+    const THM: &[&str] = &["k::thm_a", "k::thm_b"];
+
     #[test]
     fn fails_when_the_fetched_asset_is_not_the_pinned_one() {
         let pin = read_pin(&real("Cargo.toml")).unwrap();
@@ -617,28 +757,63 @@ mod tests {
 
     #[test]
     fn passes_a_verified_crate() {
-        assert_eq!(judge(Some((5, 0)), true), Ok(5));
+        let j = json(5, 0, true, &["k::f", "k::thm_a", "k::thm_b"]);
+        assert_eq!(judge(read_json(&j), true, THM), Ok(5));
+        assert_eq!(judge(read_json(&j), true, &[]), Ok(5));
+    }
+
+    #[test]
+    fn fails_when_a_required_theorem_is_not_verified() {
+        let j = json(5, 0, true, &["k::f", "k::thm_a", "k::thm_b"]);
+        let broken = mutate(&j, "\"k::thm_b\"", "\"k::other\"");
+        assert!(
+            judge(read_json(&broken), true, THM)
+                .unwrap_err()
+                .contains("k::thm_b")
+        );
     }
 
     #[test]
     fn fails_when_verification_has_errors() {
+        let j = json(4, 1, false, THM);
         assert!(
-            judge(Some((4, 1)), false)
+            judge(read_json(&j), false, THM)
                 .unwrap_err()
                 .contains("4 verified, 1 errors")
         );
-        assert!(judge(Some((4, 1)), true).is_err());
+        assert!(judge(read_json(&json(4, 1, true, THM)), true, THM).is_err());
+        assert!(judge(read_json(&json(4, 0, false, THM)), true, THM).is_err());
     }
 
     #[test]
-    fn fails_when_there_is_no_results_line() {
-        assert!(judge(None, true).unwrap_err().contains("結果の行"));
+    fn fails_when_there_is_no_json() {
+        let text = "verification results:: 5 verified, 0 errors\n";
+        assert!(
+            judge(read_json(text), true, &[])
+                .unwrap_err()
+                .contains("一つずつ")
+        );
+    }
+
+    #[test]
+    fn fails_when_the_json_is_unreadable() {
+        let j = json(5, 0, true, THM);
+        let twice = format!("{j}{j}");
+        assert!(read_json(&twice).unwrap_err().contains("一つずつ"));
+        let bad = mutate(&j, "\"verified\": 5", "\"verified\": many");
+        assert!(read_json(&bad).unwrap_err().contains("verified"));
+        let open = mutate(
+            &j,
+            "  },\n  \"verification-results\"",
+            "\n  \"verification-results\"",
+        );
+        assert!(read_json(&open).unwrap_err().contains("閉じて"));
     }
 
     #[test]
     fn fails_when_the_exit_code_is_not_zero() {
         assert!(
-            judge(Some((5, 0)), false)
+            judge(read_json(&json(5, 0, true, THM)), false, THM)
                 .unwrap_err()
                 .contains("終了コード")
         );
@@ -647,10 +822,35 @@ mod tests {
     #[test]
     fn fails_when_nothing_is_verified() {
         assert!(
-            judge(Some((0, 0)), true)
+            judge(read_json(&json(0, 0, true, &[])), true, &[])
                 .unwrap_err()
                 .contains("0 verified")
         );
+    }
+
+    /// 名前で確かめる定理は、検証の対象のクレートにあり、その定義がソースにある。
+    #[test]
+    fn required_theorems_exist_in_the_source() {
+        for (krate, names) in REQUIRED {
+            assert!(CRATES.contains(krate), "{krate} が CRATES にない");
+            let src: String = std::fs::read_dir(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .join(krate)
+                    .join("src"),
+            )
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap_or_default())
+            .collect();
+            for n in *names {
+                let short = n.rsplit("::").next().unwrap();
+                assert!(
+                    src.contains(&format!("pub proof fn {short}(")),
+                    "{n} の定義がない"
+                );
+            }
+        }
     }
 
     fn version_output(pin: &Pin) -> String {

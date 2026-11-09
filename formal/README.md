@@ -15,9 +15,11 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 
 ## 証明したこと
 
-`cargo xtask verus-verify` が固定した Verus で `--no-cheating` のまま検証する（`verification results:: 78 verified, 0 errors`）。`admit` / `assume` / `external_body` は使っていない。
+`cargo xtask verus-verify` が固定した Verus で `--no-cheating` のまま検証する（78 verified, 0 errors）。下の 6 つの定理が検証されたことは、`--output-json` の関数の一覧で名前を確かめる（定理を消すか検証の対象から外すと落ちる）。`admit` / `assume` / `external_body` は使っていない。
 
-- `theorem_soundness`：整形式で `unchecked` でない関数を `check` が受理すれば、分岐の選択・ループの回数・`?` で戻るか・クロージャを呼ぶ回数をどう選んでも、実行は違反を起こさない。系として、次の 5 つを違反の種類ごとに述べる。
+再帰を含む型（`syntax.rs` の `Op`、`Stmt`、`Block`、`Env`、`Program`、`check.rs` の `LoopCtx`、`Ctx`、`Res`）には `#[verifier::external_derive]` を付けた。これがないと、Verus は derive した `Clone` などを循環した定義として拒む。付けると derive した `Clone` / `PartialEq` / `Eq` / `Debug` / `Hash` は検証の外に置かれ、仕様は持たない。証明と検証する関数はこれらを使わない。spec の等しさは構造の等しさで、実行できる版は自前の `ex_copy` / `ex_eq` を使う。derive した実装を使うのは、検証しない表の生成器（`enumerate.rs`、`oracle.rs`）だけである。
+
+- `theorem_soundness`：整形式（変数の添字が範囲にあり、`break` / `continue` がループの中にある）で `unchecked` でない関数を `check` が受理すれば、分岐の選択・ループの回数・`?` で戻るか・クロージャを呼ぶ回数をどう選んでも、実行は違反を起こさない。系として、次の 5 つを違反の種類ごとに述べる。
   - `theorem_consumed_at_most_once`：各権限は高々一度だけ消費される。
   - `theorem_no_use_after_consume`：消費した権限を借用の引数に渡さない。権限に束縛されていない変数で、権限が要る操作をしない。
   - `theorem_borrowed_not_consumed`：借用の権限（`borrow` ブロックの `p` と、`uses &p@` / `uses &mut p@`）は消費されない。

@@ -118,14 +118,16 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | `cargo xtask ci` | `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、全ゲート。PR の前に通す |
 | `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-book` / `check-gate-tests` / `check-verus-pin` |
 | `cargo xtask verus-install` | 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）を `~/.cache/ebykn/verus/<版>/` に入れ、sha256 を確かめ、Verus が要求する toolchain を rustup で入れる |
-| `cargo xtask verus-verify` | `ebykn_prelude` と手書きの stack（`tests/golden/stack/expected/verus/`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする |
+| `cargo xtask verus-verify` | `ebykn_prelude`、手書きの stack（`tests/golden/stack/expected/verus/`）、§6.2 の参照モデル（`formal/linearity`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする。参照モデルは、定理（`xtask/src/verus.rs` の `REQUIRED`）が検証されたことを名前で確かめる |
 | `cargo xtask verus-probes` | 設計ノート §7.2 の前提を確かめるプローブ（`tests/verus-probes/`）を走らせ、各ファイルの先頭の期待と比べる |
+| `cargo xtask formal-oracle` | 参照モデルから判定の表を作り直し、コミットされた表（`formal/oracle/`）と比べる |
+| `cargo xtask formal-oracle-write` | 参照モデルから判定の表を作り直し、`formal/oracle/` に書く。モデルを変えたら作り直してコミットする |
 | `cargo test --workspace` | テスト |
 | `mdbook build book` | Ebykn Book を `book/book/` に作る（mdBook 0.5.4） |
 
 - pre-commit フックは `git config core.hooksPath .githooks` で有効にする。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
 - toolchain は `rust-toolchain.toml`（1.96.0）。Verus は自分の toolchain（固定値の `toolchain`）で動き、`verus-*` のコマンドがそれを指定する。Verus のクレートはルートの Cargo ワークスペースから `exclude` してある。
-- Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` を見直す。
+- Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes`・`formal-oracle` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` を見直す。
 - CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と `main` への `push` だけにする。
 
 ## ゲートの規則
@@ -176,7 +178,7 @@ M2（stack が verified になる）以降、機能追加とバグ修正がマ�
 
 ## 形式モデル
 
-Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証し、実装との差分テストのオラクルにする（#1 の F）。対象は §6.2 の線形性、§6.1 の剥がし一致、§8.2 の合成、§9.1 の状態の伝播だけ。トランスパイル先の健全性は Verus が受け持つ。置き場（`formal/`）は着手時に作る。
+Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証し、実装との差分テストのオラクルにする（#1 の F）。対象は §6.2 の線形性、§6.1 の剥がし一致、§8.2 の合成、§9.1 の状態の伝播だけ。トランスパイル先の健全性は Verus が受け持つ。置き場は `formal/` で、今あるのは §6.2 のモデル（`formal/linearity`）と判定の表（`formal/oracle/`）。何を証明し何を証明していないかは [formal/README.md](formal/README.md) に書く。
 
 ## 文書の方針
 
