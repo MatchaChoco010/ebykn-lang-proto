@@ -237,12 +237,17 @@ fn nested_items_parse_in_linear_time() {
     assert!(d[0].contains("E0101"));
 }
 
-/// パターンの `@name` / `@..` に付いた属性は残す。
+/// パターンの `@name` に付いた属性は残す。`@..` の前の属性は、rustc が `..` の前の属性を拒否するので
+/// E0001（#95）。
 #[test]
 fn attributes_on_erased_field_patterns_are_kept() {
     assert_eq!(
-        e("let S { a, #[cfg(x)] @r, #[cfg(y)] @.. } = s;"),
-        "(let S { a, #[cfg] @r, #[cfg] @.. } s)"
+        e("let S { a, #[cfg(x)] @r, @.. } = s;"),
+        "(let S { a, #[cfg] @r, @.. } s)"
+    );
+    rejects(
+        "fn f() { let S { a, #[cfg(y)] @.. } = s; }",
+        "an attribute cannot be written on `@..` in a struct pattern",
     );
 }
 

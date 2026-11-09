@@ -166,6 +166,9 @@ pub enum Message {
     ReservedRename { written: String },
     /// その位置には書けないもの（文法にない組み合わせ）。
     NotAllowedHere { written: String },
+    /// 構造体のパターンの `..` / `@..` に付けた属性（#95）。rustc は `..` の前の属性を拒否する
+    /// （「expected identifier, found `..`」）。`rest` は書いた形。
+    AttrOnRest { rest: &'static str },
     /// 予約語（`uses`。#19 の既定 P1）を名前に使った。
     ReservedWord { word: String },
     /// Rust の版で予約語になった名前（`gen`。[`crate::reserved::EDITION_KEYWORDS`]）を `r#` なしで
@@ -462,6 +465,12 @@ impl Message {
             ),
             (Message::ErasedRegion { kw, base, field }, Ja) => format!(
                 "構文エラー: `{kw}` の領域に `{base}@{field}` は書けません。`take` / `put` / `borrow` の領域は `self@フィールド` か領域変数だけです。`{base}` が参照（`&mut` / `&`）なら、その型のメソッドに書き、`self@{field}` を使います。`{base}` を所有しているなら、すべてのフィールドを束縛するパターンで分解し（`let S {{ @{field}, a, b }} = {base};`）、`{kw} {field}[..]` と書いてから、構造体のリテラルに `@{field}: {field}` を書いて作り直します。新しい値を作るときだけ、空の領域から始め（`let mut {field}: Region<..> = Region::empty();`）、構造体のリテラルに `@{field}: {field}` を書いて渡します"
+            ),
+            (Message::AttrOnRest { rest }, En) => format!(
+                "syntax error: an attribute cannot be written on `{rest}` in a struct pattern; Rust does not accept attributes before `..`"
+            ),
+            (Message::AttrOnRest { rest }, Ja) => format!(
+                "構文エラー: 構造体のパターンの `{rest}` に属性は付けられません。Rust は `..` の前の属性を受け付けません"
             ),
             (Message::NotAllowedHere { written }, En) => {
                 format!("syntax error: `{written}` cannot be written here")
