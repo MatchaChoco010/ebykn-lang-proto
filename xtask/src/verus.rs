@@ -328,7 +328,6 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
     last
 }
 
-/// 各クレートを固定した Verus で検証し（`--no-cheating`）、Verus なしの cargo でもビルドする（OPEN-11）。
 /// `verus-verify` が一つのクレートについて順に呼ぶ cargo。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
