@@ -92,6 +92,36 @@ pub fn with_region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
     put r[p];
 }
 
+// 参照で持つ `Cell` / `Ptr`（`c: &Cell<T>`）も領域の添字にできる（#83。prelude の `LocArg`）。
+// `Cell` は `Copy` でないので、共有すると参照で持つほかない。論理文脈の添字は `*c` と書く。
+pub struct Acct { pub bal: u64 }
+
+pub struct Bank { n: u64 } owns { accts: Region<Cell<Acct>> }
+
+impl Bank {
+    fn balance(&self, c: &Cell<Acct>) -> (b: u64)
+        requires self@accts.contains(*c),
+        ensures b == self@accts[*c].bal,
+    {
+        borrow self@accts[c] { (*c).bal }
+    }
+
+    fn deposit(&mut self, c: &Cell<Acct>)
+        requires old(self)@accts.contains(*c), old(self)@accts[*c].bal < 100,
+        ensures final(self)@accts.contains(*c), final(self)@accts[*c].bal == old(self)@accts[*c].bal + 1,
+    {
+        borrow mut self@accts[c] { (*c).bal = (*c).bal + 1; }
+    }
+}
+
+pub fn ref_key(p: &Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires old(r).contains(*p),
+    ensures final(r).contains(*p), final(r)[*p] == old(r)[*p],
+{
+    take r[p];
+    put r[p];
+}
+
 pub fn bump(x: &mut u64) -> u64
     requires *old(x) < 100,
     returns *old(x)

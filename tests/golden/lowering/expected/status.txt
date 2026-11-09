@@ -12,6 +12,9 @@ verified lowering::Pool::add
 verified lowering::Pool::bump
 verified lowering::Pool::peek
 verified lowering::with_region
+verified lowering::Bank::balance
+verified lowering::Bank::deposit
+verified lowering::ref_key
 verified lowering::bump
 verified lowering::same
 verified lowering::set3

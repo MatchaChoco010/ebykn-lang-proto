@@ -88,6 +88,38 @@ impl<T> Loc for Cell<T> {
     }
 }
 
+/// `take` / `put` / `borrow` の領域添字 `r[p]` の `p` に渡せる型：`Ptr<T>` / `Cell<T>` と、その参照
+/// （`p: &Ptr<T>`、`c: &Cell<T>` の引数。`Cell<T>` は `Copy` でないので、`Rc<Cell<T>>` で共有すると
+/// 参照で持つほかない）。書き下しは添字の型を見ずにそのまま渡す（#83）。
+pub trait LocArg<L> {
+    /// 指す添字。
+    spec fn loc(&self) -> L;
+}
+
+impl<T> LocArg<Ptr<T>> for Ptr<T> {
+    open spec fn loc(&self) -> Ptr<T> {
+        *self
+    }
+}
+
+impl<'a, T> LocArg<Ptr<T>> for &'a Ptr<T> {
+    open spec fn loc(&self) -> Ptr<T> {
+        **self
+    }
+}
+
+impl<T> LocArg<Cell<T>> for Cell<T> {
+    open spec fn loc(&self) -> Cell<T> {
+        *self
+    }
+}
+
+impl<'a, T> LocArg<Cell<T>> for &'a Cell<T> {
+    open spec fn loc(&self) -> Cell<T> {
+        **self
+    }
+}
+
 /// 権限の集合。各権限は自分の鍵の位置にあり、初期化済み。
 pub tracked struct Region<L: Loc> {
     tracked map: Map<L::Key, L::Perm>,
@@ -150,30 +182,30 @@ impl<L: Loc> Region<L> {
     }
 
     /// 権限を取り出す（`take r[p];`）。
-    pub proof fn remove(tracked &mut self, loc: L) -> (tracked perm: L::Perm)
+    pub proof fn remove<K: LocArg<L>>(tracked &mut self, loc: K) -> (tracked perm: L::Perm)
         requires
-            old(self).contains(loc),
+            old(self).contains(loc.loc()),
         ensures
-            perm == old(self).perms()[loc.key()],
-            L::perm_key(perm) == loc.key(),
+            perm == old(self).perms()[loc.loc().key()],
+            L::perm_key(perm) == loc.loc().key(),
             L::perm_init(perm),
-            final(self).perms() == old(self).perms().remove(loc.key()),
+            final(self).perms() == old(self).perms().remove(loc.loc().key()),
     {
         use_type_invariant(&*self);
-        self.map.tracked_remove(loc.key())
+        self.map.tracked_remove(loc.loc().key())
     }
 
     /// 権限を共有参照で借りる（`borrow r[p] { }`）。
-    pub proof fn borrow(tracked &self, loc: L) -> (tracked perm: &L::Perm)
+    pub proof fn borrow<K: LocArg<L>>(tracked &self, loc: K) -> (tracked perm: &L::Perm)
         requires
-            self.contains(loc),
+            self.contains(loc.loc()),
         ensures
-            *perm == self.perms()[loc.key()],
-            L::perm_key(*perm) == loc.key(),
+            *perm == self.perms()[loc.loc().key()],
+            L::perm_key(*perm) == loc.loc().key(),
             L::perm_init(*perm),
     {
         use_type_invariant(self);
-        self.map.tracked_borrow(loc.key())
+        self.map.tracked_borrow(loc.loc().key())
     }
 }
 
