@@ -186,7 +186,7 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         }
     };
     if step == Step::Verify {
-        return verify(opts, &verus, &build, &output, items);
+        return verify(opts, &verus, &build, &output, &report, items);
     }
     let mode = match step {
         Step::Check => ebykn::verus::Mode::NoVerify,
@@ -235,16 +235,30 @@ fn verify(
     verus: &ebykn::verus::Verus,
     build: &Path,
     output: &ebykn_lower::Output,
+    report: &ebykn::CheckReport,
     items: &[&str],
 ) -> ExitCode {
     use ebykn::no_cheating::Cheating;
-    let v = match ebykn::verify::verify_build(verus, build, output) {
+    let mut v = match ebykn::verify::verify_build(verus, build, output) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("ebykn: error: {e}");
             return ExitCode::from(1);
         }
     };
+    // 依存クレートがコードで使われる名前（`[lib] name` など）を `cargo metadata` で確定し、手続きマクロの
+    // 前提の一覧を決め直す（#49）。読めなければ、書き下しの既定（名前が分からなければ前提として出す側）
+    // のまま。
+    if let Some(json) = ebykn::verus::cargo_metadata(verus, build) {
+        match ebykn::lower_report_from_metadata(report, &json) {
+            Some(Ok(o)) => v.restatus(&o),
+            Some(Err(e)) => {
+                eprintln!("ebykn: error: {e}");
+                return ExitCode::from(1);
+            }
+            None => {}
+        }
+    }
     if !v.run.success {
         eprint!("{}", v.run.text);
     }
@@ -327,20 +341,26 @@ fn verify(
         say(
             opts,
             &format!(
-                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): {}",
+                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): {}",
                 unproven.len(),
                 unproven
                     .iter()
-                    .map(|s| format!("{} ({})", s.item, s.status))
+                    .map(|s| match &s.via {
+                        Some((_, p)) => format!("{} ({} {p})", s.item, s.status),
+                        None => format!("{} ({})", s.item, s.status),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             &format!(
-                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]）: {}",
+                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]、macro：依存クレートの derive や属性マクロが作り、Verus が検証しない項目）: {}",
                 unproven.len(),
                 unproven
                     .iter()
-                    .map(|s| format!("{}（{}）", s.item, s.status))
+                    .map(|s| match &s.via {
+                        Some((_, p)) => format!("{}（{} {p}）", s.item, s.status),
+                        None => format!("{}（{}）", s.item, s.status),
+                    })
                     .collect::<Vec<_>>()
                     .join("、")
             ),

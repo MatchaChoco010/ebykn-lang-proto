@@ -76,19 +76,24 @@ PR ごとに、本文、閉じた Issue、差分（`git show --stat`、要所の
 範囲の PR のうち、トランスパイラ（`crates/`、`vendor/` のフォーク、prelude）を変えたものは、実際に動かした結果を載せます。それ以外の PR も、動かして見せられるもの（ゲートの失敗、テスト、ログ）があれば載せます。
 
 ```bash
-S=<scratchpad>
-git worktree add --detach $S/wt/<PR>-before <マージコミット>^1
-git worktree add --detach $S/wt/<PR>-after  <マージコミット>
-(cd $S/wt/<PR>-after && cargo build -p ebykn)
+S=$HOME/.cache/ebykn/scratch/release-$ID   # 回ごとに一意。/tmp（tmpfs）には作らない
+mkdir -p "$S/wt"
+git worktree add --detach "$S/wt/<PR>-before" <マージコミット>^1
+git worktree add --detach "$S/wt/<PR>-after"  <マージコミット>
+(cd "$S/wt/<PR>-before" && ebykn-limited cargo build -p ebykn)
+(cd "$S/wt/<PR>-after" && ebykn-limited cargo build -p ebykn)
 ```
 
 - 修正前は PR の直前のコミット（マージコミットの first parent）、修正後は PR のコミット。どちらも `ebykn` をビルドして、同じ入力に同じコマンドをかける。
+- ワークツリーとビルドは `$S`（`~/.cache/ebykn/scratch/` の下）に作る。scratchpad は `/tmp` の下にあり、このマシンの `/tmp` は tmpfs（メモリの上）なので、ビルドが消すまで RAM を使う。修正前と修正後でビルドが 2 つになるので、なおさら置かない。
+- 重い処理（cargo、`ebykn check` / `verify` / `build`、verus、typst）は `ebykn-limited` を前に付け、1 つずつ走らせる。並べて同時に走らせない。
+- ビルドはワークツリーごとに、それぞれの `target/` で行う。`CARGO_TARGET_DIR` を共有しない。共有すると、別のコミットのクレート（`ebykn_check` など）が混ざった `ebykn` ができることがある（最初のリリースで起きた）。`ebykn` は、環境変数 `EBYKN_PRELUDE` を設定していなければ、ビルドしたワークツリーの prelude を使う。`EBYKN_PRELUDE` は設定せず、バイナリだけを別の場所に写して使わない。
 - 入力の `.eyk` は、PR の golden やテストの入力から、違いが 1 枚に収まる大きさのものを選ぶか、小さく書く。入力も実行したものをそのまま載せる。
-- `ebykn verify` は固定した Verus で動かす（そのコミットで `cargo xtask verus-install`）。
+- `ebykn verify` は固定した Verus で動かす（そのコミットで `ebykn-limited cargo xtask verus-install`）。
 - 修正前のコミットにそのコマンドがなければ、その出力（「不明な引数です」など）を載せて、そう書く。
-- コマンドがまだなく、ライブラリにだけ機能があるときは、その関数を呼ぶ使い捨てのプログラムを scratchpad に書いて動かし、そう書く。
+- コマンドがまだなく、ライブラリにだけ機能があるときは、その関数を呼ぶ使い捨てのプログラムを `$S` に書いて動かし、そう書く。
 - レビューで塞いだ穴（黙って誤る、黙って verified になる）は、PR の途中のコミット（`gh pr view --json commits`）で再現できれば、修正前として載せる。
-- 終わったら worktree を消す（`git worktree remove --force <パス>`）。
+- 終わったら worktree を、`target/` と `build/` ごと消す（`git -C <release を切っているワークツリー> worktree remove --force "$S/wt/<PR>-before"`。今のディレクトリに頼らない）。消すのは、自分が作ったパスを 1 つずつ名前で指定したものだけにする。`git worktree list` をパターン（`scratch` を含むパスなど）で絞って消さない。同じリポジトリには、ほかのセッションのワークツリーもあり、最初のリリースではそれを消してしまった。
 
 ## 5. 原稿を書き、yomiyasu で推敲する
 
@@ -123,17 +128,18 @@ jq -r '.result.worktrees[] | select((.branch // "") == "refs/heads/release") | .
 # 空ならワークスペースはまだない（スライドには名前だけを書く）
 ```
 
-スライドに載せる出力は、今回のコミット（`$HEAD`）の一時のワークツリーで走らせて取ります。手順 3 の時点では、release のワークスペースは前のリリースのままで、`playground/` には作者が書き換えたファイルがあるかもしれないので、そこでは走らせません。
+スライドに載せる出力は、今回のコミット（`$HEAD`）の一時のワークツリーで走らせて取ります。`ebykn-release` の手順 3 の時点では、release のワークスペースは前のリリースのままで、`playground/` には作者が書き換えたファイルがあるかもしれないので、そこでは走らせません。
 
 ```bash
-S=<scratchpad>
-git worktree add --detach "$S/wt/try" "$HEAD"
-cd "$S/wt/try"
-cargo xtask verus-install
-cargo xtask playground
+S=$HOME/.cache/ebykn/scratch/release-$ID   # 手順 4 と同じ。/tmp（tmpfs）には作らない
+REPO=<release を切っているワークツリー>
+mkdir -p "$S/wt"
+git -C "$REPO" worktree add --detach "$S/wt/try" "$HEAD"
+(cd "$S/wt/try" && ebykn-limited cargo xtask verus-install && ebykn-limited cargo xtask playground)
 export PATH="$S/wt/try/target/debug:$PATH"
-# playground/<例> でコマンドを打ち、出力を写す。出力の中の一時のワークツリーのパスは「…/」と省く
-cd - && git worktree remove --force "$S/wt/try"   # 終わったら消す
+# "$S/wt/try/playground/<例>" でコマンドを打ち、出力を写す。ebykn のコマンドにも ebykn-limited を付け、1 つずつ走らせる
+# 出力の中の一時のワークツリーのパスは「…/」と省く
+git -C "$REPO" worktree remove --force "$S/wt/try"   # 終わったら、作ったパスを名前で指定して消す
 ```
 
 どのコマンドも、こうして今回のコミットで実際に走らせ、その出力の例を載せます（長い出力は要点の行に絞り、省いたことを書く）。

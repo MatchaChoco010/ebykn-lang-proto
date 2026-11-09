@@ -7,6 +7,7 @@
 
 pub mod ast;
 pub mod diag;
+pub mod macros;
 mod parse;
 pub mod reserved;
 pub mod span;

@@ -43,6 +43,9 @@ const CALL_REJECTED: &[&str] = &[
     // cfg で消えうる定義は、クレートの定義として数えない（3 回目のレビュー）。
     "#[cfg(any())]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
     "#[cfg(test)]\nfn NAME(x: bool) {}\npub fn f(x: bool) { self::NAME(x); }",
+    // raw の綴りの `cfg` も同じ名前（#122）。
+    "#[r#cfg(test)]\nfn NAME(x: bool) {}\npub fn f(x: bool) { self::NAME(x); }",
+    "#[r#cfg_attr(any(), cfg(test))]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
     "#[cfg_attr(any(), cfg(test))]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
     "#[cfg(test)]\nmod m { pub fn NAME(x: bool) {} }\npub fn f(x: bool) { m::NAME(x); }",
     "mod m { #![cfg(test)] pub fn NAME(x: bool) {} }\npub fn f(x: bool) { m::NAME(x); }",

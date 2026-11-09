@@ -135,3 +135,21 @@ impl Bag {
 pub fn wrap(n: u64) -> Bag uses items: Region<Ptr<Node>> {
     Bag { @items: items }
 }
+
+// 移動で受けた権限も持っているので、指す値に書き込める（#102）。本体の先頭で `mut` に束縛し直す。
+fn set_owned(p: Ptr<Node>) -> (v: u64) uses p@
+    requires p@.is_init(),
+    ensures v == 1,
+{
+    (*p).val = 1;
+    let n = p.free();
+    n.val
+}
+
+fn set_and_put(p: Ptr<Node>) uses p@, r: &mut Region<Ptr<Node>>
+    requires p@.is_init(), p@.pptr() == p,
+    ensures final(r).contains(p), final(r)[p].val == 2,
+{
+    (*p).val = 2;
+    put r[p];
+}

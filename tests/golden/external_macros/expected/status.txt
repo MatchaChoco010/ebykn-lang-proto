@@ -1,0 +1,6 @@
+verified external_macros::get
+verified external_macros::s_one
+verified external_macros::one
+macro ext_macros::One derive on external_macros::S
+macro ext_macros::zero on external_macros::one
+results 4 verified, 0 errors

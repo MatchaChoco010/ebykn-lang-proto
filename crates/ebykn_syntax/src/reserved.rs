@@ -13,6 +13,14 @@
 //! 名前で判定する検査を足すときは、この表に足す。綴りの総当たりのテスト
 //! （`crates/ebykn_check/tests/reserved.rs`）が、表のすべての名前に自動で効く。
 
+/// 改名して付けられない名前（`.eyk` の `use .. as` / `extern crate .. as`。#16 の既定）。依存クレートの
+/// 鍵にも使えない（`Ebykn.toml` の `[dependencies]`。#49）。
+pub const RESERVED_CRATE_NAMES: &[&str] = &["std", "core", "alloc", "vstd", "ebykn_prelude"];
+
+/// 依存クレートの鍵に使えない名前のうち、[`RESERVED_CRATE_NAMES`] のほかのもの（Verus が自分で
+/// 使うクレート）。
+pub const RESERVED_DEPENDENCY_NAMES: &[&str] = &["verus_builtin", "verus_builtin_macros"];
+
 /// 表の名前の種類。種類ごとに、どの位置の名前を見るかと、診断の文言が決まる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReservedKind {
