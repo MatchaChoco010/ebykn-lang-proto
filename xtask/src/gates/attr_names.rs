@@ -10,13 +10,19 @@
 //! もので、表を読めなければ失敗にする。
 //!
 //! - `.is("名前")`
-//! - トークンの識別子と `"名前"` の `==` / `!=`（左右どちらでも）。トークンの識別子は、同じ行の `Ident(x)`
-//!   で束縛した `x`（`TokenTree::Ident(i) => i == "repr"`）か、`.to_string()`（`.as_str()` 付きも）で
-//!   終わる式（`i.to_string() == "cfg"`）。
+//! - 1 行の中の、トークンの識別子と `"名前"` の `==` / `!=`（左右どちらでも）。トークンの識別子は、
+//!   同じ行の `Ident(x)` で束縛した `x`（`TokenTree::Ident(i) => i == "repr"`）か、`.to_string()`
+//!   （`.as_str()` 付きも）で終わる式（`i.to_string() == "cfg"`）。
 //!
-//! 字句で見分けられない形は捕まえない。名前を変数で渡す `.is(name)`（`Attr::is_builtin` の本体を
-//! 戻す形）や、名前を変数に入れてから比べる形がそれに当たる。比べる関数の本体は、raw の綴りの
-//! テスト（`crates/ebykn_check/tests/review.rs` などの `r#cfg`）が守る。
+//! 次の形は捕まえない（今のコードにはない）。
+//!
+//! - 名前を変数で渡す `.is(name)`（`Attr::is_builtin` の本体を戻す形）と、名前を変数に入れてから比べる形
+//! - `matches!(i.to_string().as_str(), "cfg" | ..)`、`match` の腕の `"cfg" =>`、`.eq("cfg")`
+//! - 括弧で包んだ `"cfg" == (i.to_string())`
+//! - 前の行で束縛した `Ident(i)` の `i == "cfg"` と、rustfmt が改行した `==`
+//!
+//! これらの形は、raw の綴りのテスト（`crates/ebykn_check/tests/review.rs` などの `r#cfg`）が落ちることで
+//! 見つける。
 
 use super::{Repo, Report};
 
