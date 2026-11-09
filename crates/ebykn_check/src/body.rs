@@ -14,7 +14,7 @@ use ebykn_syntax::diag::{CheckMsg, LoopPoint, Message, Mismatch, Op, PermState, 
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
-use crate::facts::{ExtraArg, Facts, RegionRef};
+use crate::facts::{ExtraArg, Facts, RegionRef, SpanKey};
 use crate::index::{
     ErasedKind, FnInfo, Index, ItemPath, PreludeFn, Resolved, StructInfo, UseInfo, is_region_type,
     pat_ident,
@@ -82,6 +82,10 @@ pub struct Walker<'a> {
     closure_outer: Option<(Env, BTreeSet<String>)>,
     /// 論理文脈（契約・`spec fn` の本体・`seq!` の引数など）か。
     logic: bool,
+    /// 開いている `borrow` ブロックの名前と、開いたときの枠の数（#21 の既定）。
+    borrows: Vec<(String, usize)>,
+    /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
+    bound_source: Option<SpanKey>,
 }
 
 impl<'a> Walker<'a> {
@@ -97,6 +101,8 @@ impl<'a> Walker<'a> {
             frames: Vec::new(),
             closure_outer: None,
             logic: false,
+            borrows: Vec::new(),
+            bound_source: None,
         }
     }
 
@@ -311,6 +317,16 @@ impl<'a> Walker<'a> {
 
     /// 権限を導入する（`take`、`Ptr::new`、`gives`）。既にあれば E0503。
     fn introduce(&mut self, name: &str, state: PermState, block: bool, span: Span) -> bool {
+        // クロージャの中では権限を導入することもできない（§5.6、E0512）。
+        if self.closure_outer.is_some() {
+            self.push(
+                span,
+                CheckMsg::PermInClosure {
+                    name: name.to_string(),
+                },
+            );
+            return false;
+        }
         if self.env.contains_key(name) {
             self.push(
                 span,
@@ -416,18 +432,15 @@ impl<'a> Walker<'a> {
 
     /// ブロック。発散するなら `true`。
     fn block(&mut self, b: &Block) -> bool {
-        let saved = (
-            self.regions.clone(),
-            self.known.clone(),
-            self.var_types.clone(),
-        );
+        // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで戻さない。
+        let saved = (self.regions.clone(), self.var_types.clone());
         let mut diverges = false;
         for s in &b.stmts {
             if self.stmt(s) {
                 diverges = true;
             }
         }
-        (self.regions, self.known, self.var_types) = saved;
+        (self.regions, self.var_types) = saved;
         diverges
     }
 
@@ -435,7 +448,7 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
-                crate::check_items(
+                crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
                     std::slice::from_ref(&**item),
@@ -524,7 +537,12 @@ impl<'a> Walker<'a> {
     fn local(&mut self, l: &ast::Local, span: Span) -> bool {
         let mut diverges = false;
         if let Some(init) = &l.init {
+            let prev = self.bound_source.take();
+            if pat_ident(&l.pat).is_some() && self.perm_source(init).is_some() {
+                self.bound_source = Some(init.span.into());
+            }
             diverges = self.expr(init);
+            self.bound_source = prev;
         }
         if let Some(else_) = &l.else_ {
             // `let-else` の `else` は発散する（Rust の規則）。その Γ は比べない。
@@ -558,8 +576,33 @@ impl<'a> Walker<'a> {
         diverges
     }
 
+    /// 権限を返す式が `let X = ..;` で受けられていなければ、権限が捨てられる（E0505）。
+    fn check_discarded(&mut self, e: &Expr) {
+        if self.logic || self.perm_source(e).is_none() {
+            return;
+        }
+        if self.bound_source == Some(e.span.into()) {
+            return;
+        }
+        self.push(e.span, CheckMsg::PermDiscarded);
+    }
+
     /// 権限を返す呼び出し（`Ptr::new(..)` や `gives` を持つ関数）か。
     fn perm_source(&self, e: &Expr) -> Option<()> {
+        if let ExprKind::MethodCall {
+            receiver, method, ..
+        } = &e.kind
+        {
+            // `self.f(..)` で `f` が `gives` を持つ（§6.5 の `impl T` の索引）。
+            return (is_self(receiver)
+                && self
+                    .cx
+                    .self_ty
+                    .and_then(|t| self.cx.index.methods.get(t))
+                    .and_then(|ms| ms.get(&method.name))
+                    .is_some_and(|f| !f.gives.is_empty()))
+            .then_some(());
+        }
         let ExprKind::Call { func, .. } = &e.kind else {
             return None;
         };
@@ -735,6 +778,14 @@ impl<'a> Walker<'a> {
                 }
                 self.expr(expr)
             }
+            ExprKind::Ref {
+                mutable: true,
+                expr,
+            } if deref_root(expr).is_some() => {
+                // `&mut (*X).f`：書き込みと同じ（共有の借用なら E0508）。
+                self.place(expr, false);
+                false
+            }
             ExprKind::Ref { expr, .. } | ExprKind::Paren(expr) | ExprKind::Cast { expr, .. } => {
                 self.expr(expr)
             }
@@ -877,6 +928,19 @@ impl<'a> Walker<'a> {
             ExprKind::Erased { .. } => {
                 self.spec_assign(lhs);
             }
+            // 分解代入（`(p, x) = ..`、`[a, b] = ..`、`S { f: p, .. } = ..`）。
+            ExprKind::Tuple(es) | ExprKind::Array(es) => {
+                for x in es {
+                    self.place(x, assign);
+                }
+            }
+            ExprKind::Paren(x) if deref_root(lhs).is_none() => self.place(x, assign),
+            ExprKind::Struct(lit) => {
+                for f in &lit.fields {
+                    self.place(&f.expr, assign);
+                }
+            }
+            ExprKind::Infer | ExprKind::Range { .. } => {}
             _ => {
                 // `*X = e`、`(*X).f = e`、`(*X).f.g[i] = e`。
                 if let Some((x, deref_span)) = deref_root(lhs) {
@@ -971,9 +1035,7 @@ impl<'a> Walker<'a> {
             };
             self.apply_uses(e.span, &info, args);
         }
-        if let Some(Resolved::Prelude(_)) = resolved {
-            // `Ptr::new` などは `let` で受ける（[`Self::local`]）。
-        }
+        self.check_discarded(e);
         d
     }
 
@@ -995,6 +1057,7 @@ impl<'a> Walker<'a> {
             {
                 let info = info.clone();
                 self.apply_uses(e.span, &info, args);
+                self.check_discarded(e);
                 return d;
             }
         } else if let Some(x) = ident_of(receiver) {
@@ -1083,15 +1146,19 @@ impl<'a> Walker<'a> {
             }
             None => (self.env.clone(), self.regions.clone()),
         };
-        let saved_env = std::mem::take(&mut self.env);
-        let saved_regions = std::mem::take(&mut self.regions);
-        let saved_frames = std::mem::take(&mut self.frames);
         let saved_known = self.known.clone();
         let saved_types = self.var_types.clone();
-        self.closure_outer = Some(outer);
+        let saved_regions_all = self.regions.clone();
+        // 引数は外の Γ と比べる（Γ にある名前を束縛し直せば E0507）。
         for p in &c.params {
             self.bind(p);
         }
+        self.regions = saved_regions_all;
+        let saved_env = std::mem::take(&mut self.env);
+        let saved_regions = std::mem::take(&mut self.regions);
+        let saved_frames = std::mem::take(&mut self.frames);
+        let saved_borrows = std::mem::take(&mut self.borrows);
+        self.closure_outer = Some(outer);
         let prev = std::mem::replace(&mut self.logic, true);
         self.contract(&c.contract);
         self.logic = prev;
@@ -1099,6 +1166,7 @@ impl<'a> Walker<'a> {
         self.env = saved_env;
         self.regions = saved_regions;
         self.frames = saved_frames;
+        self.borrows = saved_borrows;
         self.known = saved_known;
         self.var_types = saved_types;
         self.closure_outer = prev_outer;
@@ -1122,8 +1190,12 @@ impl<'a> Walker<'a> {
             }
             None => false,
         };
+        if introduced && let Some(x) = &x {
+            self.borrows.push((x.clone(), self.frames.len()));
+        }
         let d = self.block(body);
         if introduced && let Some(x) = x {
+            self.borrows.pop();
             self.env.remove(&x);
         }
         d
@@ -1292,16 +1364,30 @@ impl<'a> Walker<'a> {
 
     /// `break` / `continue`：Γ を対象の枠に記録する。
     fn jump(&mut self, label: Option<&str>, is_continue: bool, span: Span) {
-        let env = self.env.clone();
-        let frame = match label {
+        let mut env = self.env.clone();
+        let target = match label {
             Some(l) => self
                 .frames
-                .iter_mut()
-                .rev()
-                .find(|f| f.label.as_deref() == Some(l)),
-            None => self.frames.iter_mut().rev().find(|f| f.is_loop),
+                .iter()
+                .rposition(|f| f.label.as_deref() == Some(l)),
+            None => self.frames.iter().rposition(|f| f.is_loop),
         };
-        if let Some(f) = frame {
+        let Some(target) = target else {
+            return;
+        };
+        // `borrow` ブロックを `break` / `continue` で抜けるのは E0511（#21 の既定 A。`loop` と
+        // ラベル付きのブロックも同じ）。抜けた先の Γ には、借りた権限を残さない。
+        let crossed: Vec<String> = self
+            .borrows
+            .iter()
+            .filter(|(_, depth)| *depth > target)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for name in crossed {
+            env.remove(&name);
+            self.push(span, CheckMsg::JumpOutOfBorrow { name, is_continue });
+        }
+        if let Some(f) = self.frames.get_mut(target) {
             if is_continue {
                 f.continues.push((env, span));
             } else {
@@ -1325,13 +1411,71 @@ impl<'a> Walker<'a> {
                 }
                 self.logic = prev;
             }
-            ast::MacroArgs::Tokens => {}
+            ast::MacroArgs::Tokens => self.macro_tokens(m),
         }
         // 発散するマクロ（Rust と同じ）。
         matches!(
             m.path.segments.last().map(|s| s.ident.name.as_str()),
             Some("panic" | "unreachable" | "todo" | "unimplemented")
         )
+    }
+
+    /// 中を読まないマクロの引数（std のマクロ）の中の権限の操作を探す。見つけたら E0003。
+    fn macro_tokens(&mut self, m: &ast::Macro) {
+        use proc_macro2::TokenTree;
+        fn flat(ts: proc_macro2::TokenStream, out: &mut Vec<TokenTree>) {
+            for t in ts {
+                match t {
+                    TokenTree::Group(g) => flat(g.stream(), out),
+                    t => out.push(t),
+                }
+            }
+        }
+        let mut tts = Vec::new();
+        flat(m.tokens.clone(), &mut tts);
+        let id = |t: Option<&TokenTree>| match t {
+            Some(TokenTree::Ident(i)) => Some(i.to_string()),
+            _ => None,
+        };
+        let pc = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
+        let held = |n: &str| {
+            self.env.contains_key(n)
+                || self.regions.contains(n)
+                || self.known.contains(n)
+                || self
+                    .closure_outer
+                    .as_ref()
+                    .is_some_and(|(e, r)| e.contains_key(n) || r.contains(n))
+        };
+        let perm_fns: BTreeSet<&str> = self
+            .cx
+            .index
+            .fns
+            .values()
+            .filter(|f| f.has_perms())
+            .map(|f| f.name.as_str())
+            .chain(self.cx.index.perm_method_names.iter().map(String::as_str))
+            .collect();
+        let found = (0..tts.len()).any(|i| {
+            let Some(n) = id(tts.get(i)) else {
+                return false;
+            };
+            let next = tts.get(i + 1);
+            (held(&n)
+                && (pc(next, '@')
+                    || (i > 0 && pc(tts.get(i - 1), '*'))
+                    || (pc(next, '.') && id(tts.get(i + 2)).as_deref() == Some("free"))))
+                || (n == "self" && pc(next, '@'))
+                || (["take", "put", "borrow", "leak"].contains(&n.as_str())
+                    && matches!(next, Some(TokenTree::Ident(_))))
+                || (perm_fns.contains(n.as_str()) && i + 1 < tts.len())
+        });
+        if found {
+            self.diags.push(
+                m.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::PermInMacro)),
+            );
+        }
     }
 
     fn struct_lit(&mut self, e: &Expr, lit: &ast::StructLit) -> bool {

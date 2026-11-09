@@ -32,7 +32,7 @@ fn e0501_uses_and_gives_targets() {
         "Region",
     );
     rejects(
-        &in_pool("pub fn f() -> Ptr<Node> gives q@ { Ptr::empty() }"),
+        &in_pool("pub fn f() -> Ptr<Node> gives q@ { unimplemented!() }"),
         "E0501",
         "named return value",
     );

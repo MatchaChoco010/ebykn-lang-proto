@@ -1,0 +1,290 @@
+//! PR #20 のレビューで見つかった、黙って通っていた入力（B1〜B3、S1〜S5 と細かい指摘）。
+//! 各テストは指摘の入力そのものを使う。
+
+mod support;
+use ebykn_check::sig::{Subject, Wrap};
+use support::*;
+
+const S: &str = "pub struct S { a: u64 }\n";
+const INV: &str = "{ closed spec fn invariant(&self) -> bool = self.a > 0; }\n";
+
+/// 関数名の順の、足した `requires` の対象。
+fn requires_of(src: &str) -> Vec<String> {
+    let (c, lines) = run(src);
+    assert!(
+        lines.iter().all(|l| l.contains("W0601")),
+        "{}",
+        lines.join("\n")
+    );
+    c.facts
+        .expansions
+        .values()
+        .flat_map(|e| e.requires.iter())
+        .map(|r| match (&r.subject, r.wrap) {
+            (Subject::Var(x), Wrap::None) => format!("{}:{x}", r.ty.join("::")),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+// ---- B1：トレイトと型の別名を索引で解決する ----
+
+#[test]
+fn b1_invariant_impl_through_a_prelude_path() {
+    let src = format!("{S}impl ebykn_prelude::Invariant for S {INV}pub fn f(x: S) {{}}\n");
+    assert_eq!(requires_of(&src), ["S:x"]);
+}
+
+#[test]
+fn b1_invariant_impl_through_a_renamed_import() {
+    let src = format!(
+        "{S}use ebykn_prelude::Invariant as Inv;\nimpl Inv for S {INV}pub fn f(x: S) {{}}\n"
+    );
+    assert_eq!(requires_of(&src), ["S:x"]);
+}
+
+#[test]
+fn b1_type_aliases_are_resolved() {
+    let src = format!("{S}impl Invariant for S {INV}type A = S;\npub fn f(x: A) {{}}\n");
+    assert_eq!(requires_of(&src), ["S:x"]);
+    let src = format!("{S}type A = S;\nimpl Invariant for A {INV}pub fn f(x: S) {{}}\n");
+    assert_eq!(requires_of(&src), ["S:x"]);
+    // 展開しない位置の別名は W0601。
+    let src = format!("{S}impl Invariant for S {INV}type A = S;\npub fn f(v: Vec<A>) {{}}\n");
+    assert_eq!(codes(&src), ["W0601"]);
+}
+
+#[test]
+fn b1_invariant_impls_that_cannot_be_tied_to_a_crate_type_are_rejected() {
+    // 関数の本体の中の impl は索引に入らない。
+    rejects(
+        &format!("{S}pub fn f() {{ impl Invariant for S {INV} }}\n"),
+        "E0003",
+        "inside a function body",
+    );
+    // クレートの外の型（性質ファイル、M5）。
+    rejects(
+        &format!("impl Invariant for u64 {{ spec fn invariant(&self) -> bool = true; }}\n"),
+        "E0003",
+        "outside this crate",
+    );
+    // 利用者が定義した同じ名前のトレイトは Rust のトレイト。
+    let src = format!(
+        "{S}pub trait Invariant {{ fn ok(&self) -> bool; }}\nimpl Invariant for S {{ fn ok(&self) -> bool {{ true }} }}\npub fn f(x: S) {{}}\n"
+    );
+    assert!(requires_of(&src).is_empty());
+}
+
+// ---- B2：impl の中の部分集合型と impl spec ----
+
+#[test]
+fn b2_subset_types_inside_impls_are_rejected() {
+    rejects(
+        "pub trait Tr { type T; }\nimpl Tr for u64 { type T = u64 where self > 0; }\n",
+        "E0003",
+        "subset types",
+    );
+}
+
+// ---- S1：権限を返す式を変数に束縛しない ----
+
+const MK: &str = "pub struct Node { pub val: u64 }\npub fn mk() -> (r: Ptr<Node>) gives r@ { let r = Ptr::new(Node { val: 1 }); r }\npub fn g(p: Ptr<Node>) {}\n";
+
+#[test]
+fn s1_permissions_returned_by_self_methods_are_introduced() {
+    let src = format!(
+        "{MK}pub struct H {{ a: u64 }}\nimpl H {{\n    pub fn mk(&self) -> (r: Ptr<Node>) gives r@ {{ let r = Ptr::new(Node {{ val: 1 }}); r }}\n    pub fn f(&self) {{ let q = self.mk(); }}\n}}\n"
+    );
+    rejects(&src, "E0505", "`q@`");
+    let src = format!(
+        "{MK}pub struct H {{ a: u64 }}\nimpl H {{\n    pub fn mk(&self) -> (r: Ptr<Node>) gives r@ {{ let r = Ptr::new(Node {{ val: 1 }}); r }}\n    pub fn f(&self) {{ let q = self.mk(); leak q@; }}\n}}\n"
+    );
+    accepts(&src);
+}
+
+#[test]
+fn s1_permissions_not_bound_to_a_variable_are_e0505() {
+    for body in [
+        "mk();",
+        "g(mk());",
+        "Ptr::new(Node { val: 1 });",
+        "let _ = Ptr::new(Node { val: 1 });",
+        "let (a, b) = (Ptr::new(Node { val: 1 }), 1);",
+    ] {
+        rejects(
+            &format!("{MK}pub fn f() {{ {body} }}\n"),
+            "E0505",
+            "is discarded",
+        );
+    }
+}
+
+// ---- S2：クロージャの中で導入した権限 ----
+
+#[test]
+fn s2_permissions_introduced_in_closures_are_e0512() {
+    rejects(
+        &in_pool("pub fn f(n: u64) { let g = || { let p = Ptr::new(Node { val: n }); }; }"),
+        "E0512",
+        "`p`",
+    );
+}
+
+// ---- S3：分解代入 ----
+
+#[test]
+fn s3_destructuring_assignment_is_e0506() {
+    rejects(
+        &in_pool(
+            "pub fn f(q: Ptr<Node>) { let mut p = Ptr::new(Node { val: 1 }); let mut x = 0u64; (p, x) = (q, 1); leak p@; }",
+        ),
+        "E0506",
+        "assign to `p`",
+    );
+}
+
+// ---- S4：borrow ブロックを break / continue で抜ける（#21 の既定 A） ----
+
+#[test]
+fn s4_break_or_continue_out_of_borrow_is_e0511() {
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { borrow self@nodes[p] { break; } i = i + 1; } }",
+        ),
+        "E0511",
+        "cannot `break` out of the `borrow` block of `p`",
+    );
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, n: u64) { let mut i = 0; while i < n { i = i + 1; borrow mut self@nodes[p] { continue; } } }",
+        ),
+        "E0511",
+        "`continue`",
+    );
+    // `loop` を抜けた後に借用中の状態を残さない（後の take / put は通る）。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>) { loop { borrow mut self@nodes[p] { break; } } take self@nodes[p]; put self@nodes[p]; }",
+        ),
+        "E0511",
+        "`break`",
+    );
+    // ラベル付きのブロックも同じ。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>) { 'a: { borrow self@nodes[p] { break 'a; } } take self@nodes[p]; put self@nodes[p]; }",
+        ),
+        "E0511",
+        "`break`",
+    );
+    // ブロックの中で閉じたループの break は通る。return も通る（#21 の既定 A）。
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>) { borrow self@nodes[p] { loop { break; } } }",
+    ));
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>) { borrow self@nodes[p] { return; } }",
+    ));
+}
+
+// ---- S5：外してもどのテストも落ちなかったチェック ----
+
+#[test]
+fn s5_rebinding_with_a_new_permission_while_held_is_e0507() {
+    rejects(
+        &in_pool(
+            "pub fn f() { let p = Ptr::new(Node { val: 1 }); let p = Ptr::new(Node { val: 2 }); leak p@; }",
+        ),
+        "E0507",
+        "bind `p` again",
+    );
+}
+
+#[test]
+fn s5_breaks_of_labeled_blocks_are_merged() {
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>, c: bool) { take self@nodes[p]; 'a: { if c { break 'a; } put self@nodes[p]; } }",
+        ),
+        "E0510",
+        "`p@`",
+    );
+    accepts(&in_pool(
+        "pub fn f(&mut self, p: Ptr<Node>, c: bool) { take self@nodes[p]; 'a: { if c { put self@nodes[p]; break 'a; } put self@nodes[p]; } }",
+    ));
+}
+
+#[test]
+fn s5_trait_impl_methods_with_contracts_or_expansions_are_e0003() {
+    rejects(
+        &format!(
+            "{S}pub trait Tr {{ fn g(&self) -> u64; }}\nimpl Tr for S {{ fn g(&self) -> (r: u64) ensures r > 0 {{ 1 }} }}\n"
+        ),
+        "E0003",
+        "traits with contracts",
+    );
+    rejects(
+        &format!(
+            "{S}impl Invariant for S {INV}pub trait Tr {{ fn g(&self); }}\nimpl Tr for S {{ fn g(&self) {{ }} }}\n"
+        ),
+        "E0003",
+        "traits with contracts",
+    );
+}
+
+#[test]
+fn s5_impl_spec_is_e0003() {
+    rejects(
+        "impl spec core::clone::Clone for u64 { spec fn f(&self) -> bool = true; }\n",
+        "E0003",
+        "`impl spec`",
+    );
+}
+
+// ---- 細かい指摘 ----
+
+#[test]
+fn double_free_across_blocks_is_e0504() {
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>) { { take self@nodes[p]; let n = p.free(); } let m = p.free(); }",
+        ),
+        "E0504",
+        "not held",
+    );
+}
+
+#[test]
+fn mutable_borrow_through_a_shared_permission_is_e0508() {
+    rejects(
+        &format!(
+            "{PRELUDE}fn set(v: &mut u64) {{ *v = 1; }}\nfn f(p: Ptr<Node>) uses &p@ {{ set(&mut (*p).val); }}\n"
+        ),
+        "E0508",
+        "`p`",
+    );
+}
+
+#[test]
+fn closure_parameters_are_e0507() {
+    rejects(
+        &in_pool(
+            "pub fn f() { let p = Ptr::new(Node { val: 1 }); let g = |p: u64| p + 1; leak p@; }",
+        ),
+        "E0507",
+        "bind `p` again",
+    );
+}
+
+#[test]
+fn permissions_in_unread_macro_arguments_are_e0003() {
+    rejects(
+        &format!(
+            "{PRELUDE}fn eat(p: Ptr<Node>) uses p@ {{ leak p@; }}\nfn f() {{ let p = Ptr::new(Node {{ val: 1 }}); assert!({{ eat(p); true }}); leak p@; }}\n"
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
+    accepts(&in_pool(
+        "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); assert!(x > 0); println!(\"{}\", p.addr()); leak p@; }",
+    ));
+}

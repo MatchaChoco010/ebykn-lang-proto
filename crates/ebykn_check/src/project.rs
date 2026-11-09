@@ -203,7 +203,18 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         if let Some(ast) = p.ast(id) {
             collect_mods(&ast.items, &module, &dir, &mut found);
         }
+        let mut seen = std::collections::BTreeSet::new();
         for (child, child_dir, span) in found {
+            // 同じモジュールを二度宣言すると、同じファイルを二度読むことになる。
+            if !seen.insert(child.clone()) {
+                diags.push(Diagnostic::new(
+                    span,
+                    Message::Check(CheckMsg::ModuleDuplicate {
+                        name: child.join("::"),
+                    }),
+                ));
+                continue;
+            }
             let name = child.last().cloned().unwrap_or_default();
             let a = format!("{child_dir}.eyk");
             let b = format!("{child_dir}/mod.eyk");

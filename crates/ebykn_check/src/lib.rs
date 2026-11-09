@@ -17,7 +17,7 @@ use ebykn_syntax::span::Span;
 
 use body::{FnCx, Walker};
 use facts::Facts;
-use index::{Index, ItemPath};
+use index::{ImplTrait, Index, ItemPath};
 use project::Project;
 use sig::SigCx;
 
@@ -100,7 +100,44 @@ pub fn check_items(
                 }
             }
             ItemKind::Static(s) => plain_expr(index, module, &s.expr, diags, facts),
-            _ => {}
+            // Ebykn の検査のない Rust の項目。インラインの `mod` の中は
+            // [`project::Project::for_each_module`] がたどる。
+            ItemKind::Struct(_)
+            | ItemKind::Enum(_)
+            | ItemKind::TypeAlias(_)
+            | ItemKind::Mod(_)
+            | ItemKind::Use(_)
+            | ItemKind::Rust(_) => {}
+        }
+    }
+}
+
+/// 関数の本体の中の項目。索引に入らないので、Ebykn の項目（`impl Invariant` / `impl View`、
+/// `owns` / `spec` を持つ構造体、インラインの `mod`）は `E0003` にする。
+pub fn check_nested_items(
+    index: &Index,
+    module: &[String],
+    items: &[ast::Item],
+    diags: &mut Diags,
+    facts: &mut Facts,
+) {
+    for item in items {
+        let ebykn = match &item.kind {
+            ItemKind::Impl(imp) => !matches!(
+                index.impl_trait(module, imp),
+                ImplTrait::Inherent | ImplTrait::Other
+            ),
+            ItemKind::Struct(s) => s.owns.is_some() || s.spec.is_some(),
+            ItemKind::Mod(_) => true,
+            _ => false,
+        };
+        if ebykn {
+            diags.push(
+                item.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::NestedItem)),
+            );
+        } else {
+            check_items(index, module, std::slice::from_ref(item), diags, facts);
         }
     }
 }
@@ -234,30 +271,36 @@ fn check_impl(
 ) {
     let self_ty = index.type_path(module, &imp.self_ty, None);
     let self_ty = self_ty.as_ref();
-    let trait_name = imp
-        .trait_
-        .as_ref()
-        .and_then(|t| t.as_ident())
-        .map(|i| i.name.as_str());
-    match trait_name {
-        Some("Invariant") => {
+    let unimpl = |diags: &mut Diags, span: Span, u: Unimpl| {
+        diags.push(span, Message::Check(CheckMsg::Unimplemented(u)));
+    };
+    let kind = index.impl_trait(module, imp);
+    match kind {
+        ImplTrait::Invariant | ImplTrait::View if self_ty.is_none() => {
+            // クレートの外の型への `impl Invariant` / `impl View` は性質ファイル（M5）。
+            unimpl(diags, span, Unimpl::ExternalTypeSpec);
+            return;
+        }
+        ImplTrait::Invariant => {
             match invariant_fn(imp) {
                 Some(f) => check_spec_fn(index, module, self_ty, f, diags, facts),
                 None => diags.push(span, Message::Check(CheckMsg::InvariantImplShape)),
             }
             return;
         }
-        Some("View") => {
+        ImplTrait::View => {
             for item in &imp.items {
-                if let ItemKind::SpecFn(f) = &item.kind {
-                    check_spec_fn(index, module, self_ty, f, diags, facts);
+                match &item.kind {
+                    ItemKind::SpecFn(f) => check_spec_fn(index, module, self_ty, f, diags, facts),
+                    ItemKind::TypeAlias(_) => {}
+                    _ => diags.push(item.span, Message::Check(CheckMsg::ViewImplShape)),
                 }
             }
             return;
         }
-        _ => {}
+        ImplTrait::Inherent | ImplTrait::Other => {}
     }
-    let own_impl = imp.trait_.is_none();
+    let own_impl = kind == ImplTrait::Inherent;
     for item in &imp.items {
         match &item.kind {
             ItemKind::Fn(f) => {
@@ -273,10 +316,7 @@ fn check_impl(
                     };
                     let exp = sig::expand(&scx, &f.sig, &mut probe);
                     if !f.contract.is_empty() || !exp.is_empty() {
-                        diags.push(
-                            item.span,
-                            Message::Check(CheckMsg::Unimplemented(Unimpl::ContractTrait)),
-                        );
+                        unimpl(diags, item.span, Unimpl::ContractTrait);
                         continue;
                     }
                 }
@@ -289,7 +329,23 @@ fn check_impl(
                     plain_expr(index, module, e, diags, facts);
                 }
             }
-            _ => {}
+            ItemKind::Subset(_) => unimpl(diags, item.span, Unimpl::SubsetType),
+            ItemKind::ImplSpec(_) => unimpl(diags, item.span, Unimpl::ImplSpec),
+            // 関連型と、項目の位置のマクロなど Rust の項目。
+            ItemKind::TypeAlias(_) | ItemKind::Rust(_) => {}
+            // impl の中に書けない項目（構文解析器は作らないが、来たら黙って通さない）。
+            ItemKind::Struct(_)
+            | ItemKind::Enum(_)
+            | ItemKind::Trait(_)
+            | ItemKind::Impl(_)
+            | ItemKind::Mod(_)
+            | ItemKind::Static(_)
+            | ItemKind::Use(_) => diags.push(
+                item.span,
+                Message::NotAllowedHere {
+                    written: "this item in `impl`".into(),
+                },
+            ),
         }
     }
 }

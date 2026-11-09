@@ -115,3 +115,23 @@ fn fails_when_a_case_has_no_expected_file() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(r.unwrap_err().contains("expected/diag.txt"));
 }
+
+#[test]
+fn fails_when_the_verus_pin_differs() {
+    let tmp = std::env::temp_dir().join(format!("ebykn-pin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    let manifest = std::fs::read_to_string(golden_root().join("stack/Ebykn.toml")).unwrap();
+    let pin = ebykn::verus_pin();
+    let broken = manifest.replace(&pin.commit, &"0".repeat(40));
+    assert_ne!(broken, manifest);
+    std::fs::write(tmp.join("Ebykn.toml"), broken).unwrap();
+    std::fs::write(tmp.join("src/lib.eyk"), "pub fn f() {}\n").unwrap();
+    let r = check_project(&tmp).render(Lang::En);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(
+        r[0].contains("E0002: `verus.commit` in `Ebykn.toml`"),
+        "{r:?}"
+    );
+}

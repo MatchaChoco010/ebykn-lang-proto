@@ -321,6 +321,10 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             })
         } else if ["assume", "admit", "assume_"].contains(&name.as_str())
             && group(next, Delimiter::Parenthesis)
+            || crate::VERUS_BUILTIN_CALLS.contains(&name.as_str())
+                && group(next, Delimiter::Parenthesis)
+                && !punct(prev, '.')
+                && !punct(prev, ':')
         {
             Some(Message::VerusOnly {
                 written: format!("{name}(..)"),

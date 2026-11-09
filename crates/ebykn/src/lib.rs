@@ -41,6 +41,7 @@ impl CheckReport {
 /// プロジェクト `root` を読み、§6 の検査をする。構文エラーがあっても、読めた項目は検査する。
 pub fn check_project(root: &Path) -> CheckReport {
     let (project, mut diags) = project::load(root);
+    diags.extend(pin_mismatches(&project));
     let checked = ebykn_check::check(&project);
     diags.extend(checked.diags.iter().cloned());
     sort_diags(&mut diags);
@@ -48,6 +49,61 @@ pub fn check_project(root: &Path) -> CheckReport {
         project,
         checked: Some(checked),
         diags,
+    }
+}
+
+/// `Ebykn.toml` の `[verus]` が、この `ebykn` の固定した Verus と違えば E0002（仕様 §1.3）。
+fn pin_mismatches(project: &Project) -> Vec<Diagnostic> {
+    use ebykn_syntax::diag::{CheckMsg, Message};
+    let pin = verus_pin();
+    let m = &project.manifest;
+    let file = project.file(ebykn_syntax::span::FileId(0));
+    let mut out = Vec::new();
+    for (key, written, pinned) in [
+        ("release", &m.verus_release, &pin.release),
+        ("commit", &m.verus_commit, &pin.commit),
+    ] {
+        // 書いていなければ、読み込みが E0002（鍵がない）を出している。
+        if written.is_empty() || written == pinned {
+            continue;
+        }
+        let span = match file.text.find(&format!("\"{written}\"")) {
+            Some(i) => file.span(i, i + written.len() + 2),
+            None => file.span(0, 0),
+        };
+        out.push(Diagnostic::new(
+            span,
+            Message::Check(CheckMsg::VerusPinMismatch {
+                key,
+                written: written.clone(),
+                pinned: pinned.clone(),
+            }),
+        ));
+    }
+    out
+}
+
+/// `check` がまだ実行しない段階（仕様 §9 の `check` のうち、M2 の後半と M3 で足すもの）。
+pub const CHECK_SKIPPED: &[&str] = &[
+    "lower (§7)",
+    "verus --no-verify",
+    "self-contained check (§6.6)",
+];
+
+impl CheckReport {
+    /// `--json` の最後に出す 1 行：結果の件数と、実行しなかった段階。
+    pub fn summary_json(&self) -> String {
+        let errors = self.diags.iter().filter(|d| !d.code().is_warning()).count();
+        let warnings = self.diags.len() - errors;
+        let skipped = CHECK_SKIPPED
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"$message_type\":\"ebykn-summary\",\"command\":\"check\",\"success\":{},\"errors\":{errors},\"warnings\":{warnings},\"skipped\":[{skipped}]}}",
+            errors == 0
+        )
     }
 }
 
@@ -141,6 +197,19 @@ mod tests {
         let pin = verus_pin();
         assert!(pin.release.starts_with("release/"), "{pin:?}");
         assert_eq!(pin.commit.len(), 40);
+    }
+
+    #[test]
+    fn summary_lists_the_skipped_stages() {
+        let (project, _) = project::single("pub fn f() {}");
+        let r = CheckReport {
+            project,
+            checked: None,
+            diags: Vec::new(),
+        };
+        let j = r.summary_json();
+        assert!(j.contains("\"success\":true"), "{j}");
+        assert!(j.contains("\"skipped\":[\"lower (§7)\""), "{j}");
     }
 
     #[test]

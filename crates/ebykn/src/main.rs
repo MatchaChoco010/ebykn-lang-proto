@@ -102,6 +102,19 @@ fn not_yet(opts: &Opts, what: &str, milestone: &str) -> ExitCode {
 fn check(opts: &Opts) -> ExitCode {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let Some(root) = find_root(&cwd) else {
+        if opts.json {
+            use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message};
+            use ebykn_syntax::span::{FileId, SourceFile};
+            let file = SourceFile::new(FileId(0), MANIFEST, "");
+            let d = Diagnostic::new(
+                file.span(0, 0),
+                Message::Check(CheckMsg::ManifestNotFound {
+                    dir: cwd.display().to_string(),
+                }),
+            );
+            println!("{}", d.to_json(&file, opts.lang));
+            return ExitCode::from(1);
+        }
         match opts.lang {
             Lang::En => eprintln!(
                 "error[E0002]: `{MANIFEST}` was not found in `{}` or its parent directories",
@@ -119,6 +132,8 @@ fn check(opts: &Opts) -> ExitCode {
         for line in report.json(opts.lang) {
             println!("{line}");
         }
+        // 実行しなかった段階を機械可読にも出す（テキストでは最後の行で伝える）。
+        println!("{}", report.summary_json());
     } else {
         for line in report.render(opts.lang) {
             eprintln!("{line}");

@@ -120,6 +120,12 @@ pub enum Unimpl {
     NamedUsesCall,
     /// `build --verified`（M5）。
     BuildVerified,
+    /// クレートの外の型への `impl Invariant` / `impl View`（性質ファイル、M5）。
+    ExternalTypeSpec,
+    /// 関数の本体の中の Ebykn の項目（索引に入らない）。
+    NestedItem,
+    /// 中を読まないマクロの引数の中の権限の操作。
+    PermInMacro,
 }
 
 impl Unimpl {
@@ -164,6 +170,24 @@ impl Unimpl {
             }
             (Unimpl::BuildVerified, Lang::Ja) => {
                 "`build --verified` は `ebykn status` が要るので M5 で実装します"
+            }
+            (Unimpl::ExternalTypeSpec, Lang::En) => {
+                "`impl Invariant` / `impl View` for a type outside this crate belongs in a props file, which is implemented in M5"
+            }
+            (Unimpl::ExternalTypeSpec, Lang::Ja) => {
+                "クレートの外の型への `impl Invariant` / `impl View` は性質ファイルに書くもので、M5 で実装します"
+            }
+            (Unimpl::NestedItem, Lang::En) => {
+                "`impl Invariant`, `impl View`, structs with `owns` / `spec` and modules inside a function body are not supported yet; move them to the module level"
+            }
+            (Unimpl::NestedItem, Lang::Ja) => {
+                "関数の本体の中の `impl Invariant`・`impl View`・`owns` / `spec` を持つ構造体・モジュールはまだ扱えません。モジュールの直下に移します"
+            }
+            (Unimpl::PermInMacro, Lang::En) => {
+                "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"
+            }
+            (Unimpl::PermInMacro, Lang::Ja) => {
+                "このマクロの引数は Ebykn が読まないので、その中ではまだ権限を使えません。値はマクロの外で求めます"
             }
         }
     }
@@ -210,6 +234,16 @@ pub enum CheckMsg {
         a: String,
         b: String,
     },
+    /// 同じモジュールを二度宣言した。
+    ModuleDuplicate {
+        name: String,
+    },
+    /// `Ebykn.toml` の `[verus]` が、この `ebykn` の固定した Verus と違う。
+    VerusPinMismatch {
+        key: &'static str,
+        written: String,
+        pinned: String,
+    },
     /// ファイルを読めない。
     ReadFailed {
         path: String,
@@ -227,6 +261,8 @@ pub enum CheckMsg {
     },
     /// `impl Invariant for T` の中身の形が違う。
     InvariantImplShape,
+    /// `impl View for T` の中に `type V` と `spec fn` 以外がある。
+    ViewImplShape,
 
     // E0402
     /// 構造体リテラル・パターンに消去フィールドがない。
@@ -281,6 +317,8 @@ pub enum CheckMsg {
     PermLeft {
         names: Vec<String>,
     },
+    /// 権限を返す式（`Ptr::new(..)` や `gives` を持つ関数の呼び出し）を `let X = ..;` で受けていない。
+    PermDiscarded,
 
     // E0506
     AssignHeld {
@@ -312,6 +350,12 @@ pub enum CheckMsg {
     LoopMismatch {
         diffs: Vec<Mismatch>,
         at: LoopPoint,
+    },
+
+    /// `borrow` ブロックを `break` / `continue` で抜ける（#21 の既定）。
+    JumpOutOfBorrow {
+        name: String,
+        is_continue: bool,
     },
 
     // E0512
@@ -356,9 +400,11 @@ impl CheckMsg {
             | CrateRootAmbiguous
             | ModuleNotFound { .. }
             | ModuleAmbiguous { .. }
+            | ModuleDuplicate { .. }
+            | VerusPinMismatch { .. }
             | ReadFailed { .. } => Code::E0002,
             Unimplemented(_) => Code::E0003,
-            NotARegion { .. } | InvariantImplShape => Code::E0001,
+            NotARegion { .. } | InvariantImplShape | ViewImplShape => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
             UsesNotParam { .. }
             | UsesType { .. }
@@ -368,13 +414,13 @@ impl CheckMsg {
             RegionIndexNotIdent => Code::E0502,
             PermAlreadyHeld { .. } => Code::E0503,
             PermNotOwned { .. } | UsesArgNotVar { .. } => Code::E0504,
-            PermLeft { .. } => Code::E0505,
+            PermLeft { .. } | PermDiscarded => Code::E0505,
             AssignHeld { .. } => Code::E0506,
             ShadowHeld { .. } => Code::E0507,
             WriteShared { .. } => Code::E0508,
             ConsumeBorrowed { .. } => Code::E0509,
             BranchMismatch { .. } => Code::E0510,
-            LoopMismatch { .. } => Code::E0511,
+            LoopMismatch { .. } | JumpOutOfBorrow { .. } => Code::E0511,
             PermInClosure { .. } => Code::E0512,
             SpecFieldAsRegion { .. } => Code::E0513,
             MethodCallUses { .. } => Code::E0514,
@@ -438,6 +484,14 @@ impl CheckMsg {
             (ModuleAmbiguous { name, a, b }, Ja) => format!(
                 "モジュール `{name}` のファイルが `{a}` と `{b}` の二つあります。一つにします"
             ),
+            (ModuleDuplicate { name }, En) => format!("module `{name}` is declared twice"),
+            (ModuleDuplicate { name }, Ja) => format!("モジュール `{name}` を二度宣言しています"),
+            (VerusPinMismatch { key, written, pinned }, En) => format!(
+                "`verus.{key}` in `Ebykn.toml` is `{written}`, but this `ebykn` uses the Verus pinned at `{pinned}`"
+            ),
+            (VerusPinMismatch { key, written, pinned }, Ja) => format!(
+                "`Ebykn.toml` の `verus.{key}` は `{written}` ですが、この `ebykn` が使う固定した Verus は `{pinned}` です"
+            ),
             (ReadFailed { path, detail }, En) => format!("cannot read `{path}`: {detail}"),
             (ReadFailed { path, detail }, Ja) => format!("`{path}` を読めません: {detail}"),
 
@@ -452,6 +506,12 @@ impl CheckMsg {
             ),
             (InvariantImplShape, En) => {
                 "syntax error: `impl Invariant for T` must contain exactly one item, `spec fn invariant(&self) -> bool = ..;`".into()
+            }
+            (ViewImplShape, En) => {
+                "syntax error: `impl View for T` can only contain `type V = ..;` and `spec fn view(&self) -> V = ..;`".into()
+            }
+            (ViewImplShape, Ja) => {
+                "構文エラー: `impl View for T` の中には `type V = ..;` と `spec fn view(&self) -> V = ..;` だけを書きます".into()
             }
             (InvariantImplShape, Ja) => {
                 "構文エラー: `impl Invariant for T` の中には `spec fn invariant(&self) -> bool = ..;` を一つだけ書きます".into()
@@ -565,6 +625,20 @@ impl CheckMsg {
                     .join("、")
             ),
 
+            (PermDiscarded, En) => {
+                "the permission returned here is discarded; bind the result to a variable with `let x = ..;`".into()
+            }
+            (PermDiscarded, Ja) => {
+                "ここで返る権限が捨てられます。結果を `let x = ..;` で変数に束縛します".into()
+            }
+            (JumpOutOfBorrow { name, is_continue }, En) => format!(
+                "cannot `{}` out of the `borrow` block of `{name}`; end the block first",
+                if *is_continue { "continue" } else { "break" }
+            ),
+            (JumpOutOfBorrow { name, is_continue }, Ja) => format!(
+                "`{name}` の `borrow` ブロックから `{}` で抜けることはできません。先にブロックを終えます",
+                if *is_continue { "continue" } else { "break" }
+            ),
             (AssignHeld { name }, En) => format!(
                 "cannot assign to `{name}` while its permission `{name}@` is held"
             ),

@@ -15,7 +15,7 @@ use crate::span::Span;
 /// 呼び出しの形で書く証明の構文（仕様 §5.7）。`.eyk` ではどの位置でも拒否する。
 const PROOF_CALLS: &[&str] = &["assert", "reveal", "reveal_with_fuel", "hide"];
 /// 呼び出しの形で書く Verus の証明の関数で、Ebykn にないもの（`unchecked` を使う）。
-const VERUS_CALLS: &[&str] = &["assume", "admit", "assume_"];
+const VERUS_CALLS: &[&str] = crate::VERUS_BUILTIN_CALLS;
 
 fn mk(attrs: Vec<ast::Attr>, kind: ast::ExprKind, span: Span) -> ast::Expr {
     ast::Expr { attrs, kind, span }

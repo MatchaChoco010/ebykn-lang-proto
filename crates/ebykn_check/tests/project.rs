@@ -184,3 +184,23 @@ fn messages_have_japanese_text() {
         "src/lib.eyk:1:1: E0002: モジュール `a` のファイルがありません。`src/a.eyk` か `src/a/mod.eyk` を作ります"
     );
 }
+
+#[test]
+fn fails_when_a_module_is_declared_twice() {
+    let t = project(
+        "dupmod",
+        &[
+            ("Ebykn.toml", MANIFEST),
+            ("src/lib.eyk", "mod a;\nmod a;\n"),
+            ("src/a.eyk", ""),
+        ],
+    );
+    let (p, d) = load(&t.0);
+    let d: Vec<String> = d
+        .iter()
+        .map(|x| x.render(p.file(x.span.file), Lang::En))
+        .collect();
+    assert_eq!(d, ["src/lib.eyk:2:1: E0002: module `a` is declared twice"]);
+    // ファイルは一度だけ読む。
+    assert_eq!(p.modules.len(), 2);
+}

@@ -123,6 +123,7 @@ pub enum PreludeFn {
 
 /// prelude が定義する型の名前。
 pub const PRELUDE_TYPES: &[&str] = &[
+    "Invariant",
     "Ptr",
     "Cell",
     "Region",
@@ -167,6 +168,21 @@ pub struct Index {
     pub kinds: BTreeMap<ItemPath, DefKind>,
     /// `uses` / `gives` を持つメソッドの名前（E0514）。
     pub perm_method_names: BTreeSet<String>,
+    /// 型の別名（`type A = S;`）：別名のパス → (定義したモジュール, 型)。
+    pub aliases: BTreeMap<ItemPath, (ItemPath, ast::Type)>,
+}
+
+/// `impl` の種類。トレイトのパスは索引で解決して決める（`ebykn_prelude::Invariant`、改名を含む）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplTrait {
+    /// 固有の impl（`impl T { }`）。
+    Inherent,
+    /// `impl Invariant for T`。
+    Invariant,
+    /// `impl View for T`。
+    View,
+    /// それ以外のトレイト。
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +341,9 @@ impl Index {
                     self.fns
                         .insert(p, fn_info(&item.vis, &f.sig, &f.contract, FnKind::Lemma));
                 }
+                ItemKind::TypeAlias(t) => {
+                    self.aliases.insert(p, (module.to_vec(), t.ty.clone()));
+                }
                 ItemKind::Struct(s) => {
                     let fields = match &s.fields {
                         ast::Fields::Named(fs) => fs
@@ -366,8 +385,8 @@ impl Index {
             let Some(ty) = self.type_path(module, &imp.self_ty, None) else {
                 continue;
             };
-            match imp.trait_.as_ref().and_then(|t| t.as_ident()) {
-                Some(t) if t.is("Invariant") => {
+            match self.impl_trait(module, imp) {
+                ImplTrait::Invariant => {
                     self.invariants.insert(
                         ty,
                         InvariantInfo {
@@ -376,10 +395,10 @@ impl Index {
                         },
                     );
                 }
-                Some(t) if t.is("View") => {
+                ImplTrait::View => {
                     self.views.insert(ty);
                 }
-                _ if imp.trait_.is_none() => {
+                ImplTrait::Inherent => {
                     for m in &imp.items {
                         let info = match &m.kind {
                             ItemKind::Fn(f) => fn_info(
@@ -409,8 +428,27 @@ impl Index {
                             .insert(info.name.clone(), info);
                     }
                 }
-                _ => {}
+                ImplTrait::Other => {}
             }
+        }
+    }
+
+    /// `impl` のトレイトを索引で解決する。
+    pub fn impl_trait(&self, module: &[String], imp: &ast::Impl) -> ImplTrait {
+        let Some(t) = &imp.trait_ else {
+            return ImplTrait::Inherent;
+        };
+        if t.segments
+            .iter()
+            .any(|s| !matches!(s.args, ast::GenericArgs::None))
+        {
+            return ImplTrait::Other;
+        }
+        let segs: Vec<String> = t.segments.iter().map(|s| s.ident.name.clone()).collect();
+        match self.resolve(module, t.leading_colon, &segs, None) {
+            Resolved::PreludeType("Invariant") => ImplTrait::Invariant,
+            Resolved::PreludeType("View") => ImplTrait::View,
+            _ => ImplTrait::Other,
         }
     }
 
@@ -425,11 +463,31 @@ impl Index {
             return None;
         };
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
-        if segs == ["Self"] {
-            return self_ty.cloned();
+        let p = if segs == ["Self"] {
+            self_ty.cloned()?
+        } else {
+            match self.resolve(module, path.leading_colon, &segs, self_ty) {
+                Resolved::Type(p) => p,
+                _ => return None,
+            }
+        };
+        self.unalias(p, 0)
+    }
+
+    /// 型の別名をたどって、別名でない型のパスにする。クレートの型に行き着かなければ `None`。
+    fn unalias(&self, p: ItemPath, depth: usize) -> Option<ItemPath> {
+        let Some((m, ty)) = self.aliases.get(&p) else {
+            return Some(p);
+        };
+        if depth > 16 {
+            return None;
         }
-        match self.resolve(module, path.leading_colon, &segs, self_ty) {
-            Resolved::Type(p) => Some(p),
+        let TypeKind::Path { qself: None, path } = &ty.kind else {
+            return None;
+        };
+        let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+        match self.resolve(m, path.leading_colon, &segs, None) {
+            Resolved::Type(q) => self.unalias(q, depth + 1),
             _ => None,
         }
     }
@@ -459,6 +517,13 @@ impl Index {
                 Some(t) => (Resolved::Type(t.clone()), &segs[1..]),
                 None => return Resolved::Unknown,
             },
+            // 全 `.eyk` に暗黙に `use ebykn_prelude::*;` が付く（§3.1）。パスでも書ける。
+            "ebykn_prelude" if segs.len() > 1 => {
+                match PRELUDE_TYPES.iter().find(|t| **t == segs[1]) {
+                    Some(t) => (Resolved::PreludeType(t), &segs[2..]),
+                    None => return Resolved::Unknown,
+                }
+            }
             first => (self.lookup(module, first, 0), &segs[1..]),
         };
         self.descend(start, rest)
