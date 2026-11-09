@@ -567,7 +567,9 @@ fn owned_regions_are_rebound_as_mut() {
         "#[allow(unused_mut)] let tracked mut r = r; let (p, Tracked(__eyk_perm_p)) = Ptr::new",
     );
     lacks(&src, "let tracked mut s");
+}
 
+#[test]
 fn region_arguments_are_appended_as_tracked() {
     // #19 の既定 P1：`uses` の後の領域を、呼ばれる側の `uses` の宣言順で引数の末尾に足す。
     let helpers = "fn mv(n: u64) uses r: Region<Ptr<Node>> { }\nfn rd(n: u64) uses r: &Region<Ptr<Node>> { }\nfn wr(n: u64) uses r: &mut Region<Ptr<Node>> { }\nfn mixed(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>, &mut p@ { }\n";
