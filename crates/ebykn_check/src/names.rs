@@ -10,16 +10,8 @@ use ebykn_syntax::reserved::{DeferredName, ReservedKind};
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
-use crate::index::{Index, Resolved};
+use crate::index::Index;
 use crate::project::Project;
-
-/// 名前がクレートの中の定義を指すか。
-pub fn is_crate_def(r: &Resolved) -> bool {
-    matches!(
-        r,
-        Resolved::Fn(_) | Resolved::Type(_) | Resolved::Module(_) | Resolved::Method { .. }
-    )
-}
 
 /// 表の名前を最後に持つパスを拒否する診断。
 pub fn message(kind: ReservedKind, name: &str, written: &str) -> Message {
@@ -62,7 +54,8 @@ pub fn check(project: &Project, index: &Index, diags: &mut Diags) {
 
 fn check_one(index: &Index, module: &[String], span: Span, n: &DeferredName, diags: &mut Diags) {
     let r = index.resolve(module, false, &n.segments, None);
-    if is_crate_def(&r) {
+    // cfg で消えうる定義は数えない（消えれば暗黙の `use ebykn_prelude::*;` などに解決する）。
+    if index.is_live_def(&r) {
         return;
     }
     let last = n.segments.last().map(String::as_str).unwrap_or_default();

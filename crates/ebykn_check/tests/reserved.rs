@@ -40,6 +40,13 @@ const CALL_REJECTED: &[&str] = &[
     "pub fn f(x: bool) { println!(\"{}\", crate::NAME(x)); }",
     "mod m {}\npub fn f(x: bool) { m::NAME(x); }",
     "pub fn f(x: bool) { fn g() { use self::NAME as rq; } }",
+    // cfg で消えうる定義は、クレートの定義として数えない（3 回目のレビュー）。
+    "#[cfg(any())]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
+    "#[cfg(test)]\nfn NAME(x: bool) {}\npub fn f(x: bool) { self::NAME(x); }",
+    "#[cfg_attr(any(), cfg(test))]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
+    "#[cfg(test)]\nmod m { pub fn NAME(x: bool) {} }\npub fn f(x: bool) { m::NAME(x); }",
+    "mod m { #![cfg(test)] pub fn NAME(x: bool) {} }\npub fn f(x: bool) { m::NAME(x); }",
+    "pub struct H {}\n#[cfg(test)]\nimpl H { pub fn NAME(x: bool) {} }\npub fn f(x: bool) { H::NAME(x); }",
     "pub const C: u64 = { let r = NAME; 0 };",
 ];
 
@@ -50,6 +57,8 @@ const CALL_ACCEPTED: &[&str] = &[
     "pub fn NAME(x: bool) {}\nmod m { pub fn f(x: bool) { super::NAME(x); } }",
     "pub fn NAME(x: bool) {}\nuse crate::NAME as rq;\npub fn f(x: bool) { rq(x); }",
     "mod m { pub fn NAME(x: bool) {} }\npub fn f(x: bool) { m::NAME(x); }",
+    // `cfg_attr` で属性を足すだけの項目は残る。
+    "#[cfg_attr(any(), inline)]\npub fn NAME(x: bool) {}\npub fn f(x: bool) { crate::NAME(x); }",
     "pub fn f(NAME: u64) -> u64 { let y = NAME + 1; y }",
     // 腕の本体の先頭の `assume` / `assert` などは、構文解析器（verus_syn）が Verus の式として読む
     // （M1 の制限）。ここでは値として使えることだけを見る。
@@ -88,6 +97,9 @@ const TRAIT_REJECTED: &[&str] = &[
     "use self::NAME as Inv;\nimpl Inv for S BODY",
     "use ebykn_prelude::NAME as Inv;\nimpl Inv for S BODY",
     "pub fn outer() { use ebykn_prelude::NAME as I2; impl I2 for S BODY }",
+    // cfg で消えうる同じ名前のトレイトは、クレートの定義として数えない（3 回目のレビュー）。
+    "#[cfg(any())]\npub trait NAME {}\nimpl crate::NAME for S BODY",
+    "#[cfg(test)]\nmod m { pub trait NAME {} }\nimpl m::NAME for S BODY",
 ];
 
 #[test]
@@ -110,7 +122,7 @@ fn every_reserved_name_is_rejected_in_every_spelling() {
         }
     }
     // 表が空になって何も試さずに通らないよう、数を確かめる。
-    assert!(tried > 500, "{tried}");
+    assert!(tried > 700, "{tried}");
 }
 
 #[test]

@@ -204,3 +204,27 @@ fn fails_when_a_module_is_declared_twice() {
     // ファイルは一度だけ読む。
     assert_eq!(p.modules.len(), 2);
 }
+
+#[test]
+fn file_level_cfg_gates_the_module() {
+    let t = project(
+        "filecfg",
+        &[
+            ("Ebykn.toml", MANIFEST),
+            (
+                "src/lib.eyk",
+                "mod m;\npub fn f(x: bool) { m::requires(x); }\n",
+            ),
+            ("src/m.eyk", "#![cfg(test)]\npub fn requires(x: bool) {}\n"),
+        ],
+    );
+    let (p, mut d) = load(&t.0);
+    let c = ebykn_check::check(&p);
+    d.extend(c.diags);
+    let d: Vec<String> = d
+        .iter()
+        .map(|x| x.render(p.file(x.span.file), Lang::En))
+        .collect();
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].contains("`m::requires(..)` is Verus syntax"), "{d:?}");
+}

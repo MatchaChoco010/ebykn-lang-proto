@@ -52,6 +52,15 @@ pub struct Checked {
 pub fn check(project: &Project) -> Checked {
     let mut index = Index::default();
     project.for_each_module(|m, f, items| index.add_module(m, f, items));
+    // モジュールのファイルの先頭の `#![cfg(..)]`。
+    for m in &project.modules {
+        if let Some(ast) = project.ast(m.file)
+            && index::has_cfg(&ast.attrs)
+            && !m.module.is_empty()
+        {
+            index.gated.insert(m.module.clone());
+        }
+    }
     project.for_each_module(|m, f, items| index.add_impls(m, f, items));
     let mut facts = Facts::default();
     for ty in index.invariants.keys() {
@@ -61,6 +70,12 @@ pub fn check(project: &Project) -> Checked {
         }
     }
     let mut diags = Diags::default();
+    for span in &index.duplicates {
+        diags.push(
+            *span,
+            Message::Check(CheckMsg::Unimplemented(Unimpl::CfgDuplicate)),
+        );
+    }
     project.for_each_module(|m, _, items| check_items(&index, m, items, &mut diags, &mut facts));
     names::check(project, &index, &mut diags);
     let mut list = diags.list;

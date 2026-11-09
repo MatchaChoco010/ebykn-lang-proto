@@ -358,3 +358,59 @@ fn rereview_hidden_permission_sources() {
         "{PRELUDE}type P = Ptr<Node>;\npub fn f(n: u64) {{ let p = P::new(Node {{ val: n }}); leak p@; }}\n"
     ));
 }
+
+// ---- 3 回目のレビュー：索引は cfg を評価しない ----
+
+#[test]
+fn cfg_gated_trait_does_not_hide_the_invariant() {
+    let src = "#[cfg(any())] pub trait Invariant { }\npub struct S { a: u64 }\nimpl crate::Invariant for S { closed spec fn invariant(&self) -> bool = self.a > 0; }\npub fn f(x: S) {}\n";
+    rejects(src, "E0001", "written only as `impl Invariant for T`");
+    let src = "#[cfg(test)] mod m { pub trait Invariant {} }\npub struct S { a: u64 }\nimpl m::Invariant for S { closed spec fn invariant(&self) -> bool = self.a > 0; }\n";
+    rejects(src, "E0001", "written only as `impl Invariant for T`");
+}
+
+#[test]
+fn cfg_gated_functions_do_not_hide_verus_builtins() {
+    rejects(
+        "#[cfg(any())] fn requires(b: bool) {}\npub fn f(x: u64) { crate::requires(x == 0); }",
+        "E0001",
+        "`crate::requires(..)` is Verus syntax",
+    );
+    rejects(
+        "#[cfg(test)] fn ensures(b: bool) {}\npub fn f(x: u64) { self::ensures(x == 0); }",
+        "E0001",
+        "`self::ensures(..)` is Verus syntax",
+    );
+    rejects(
+        "#[cfg(test)] mod m { pub fn requires(b: bool) {} }\npub fn f(x: u64) { m::requires(x == 0); }",
+        "E0001",
+        "`m::requires(..)` is Verus syntax",
+    );
+    // cfg_attr は項目を消さない。
+    accepts(
+        "#[cfg_attr(any(), inline)] fn requires(b: bool) {}\npub fn f(x: u64) { crate::requires(x == 0); }",
+    );
+}
+
+#[test]
+fn duplicate_definitions_are_e0003() {
+    rejects(
+        "#[cfg(a)] pub fn f() {}\n#[cfg(not(a))] pub fn f() {}\n",
+        "E0003",
+        "does not evaluate `#[cfg]`",
+    );
+    rejects(
+        &format!(
+            "{PRELUDE}#[cfg(a)] fn eat(p: Ptr<Node>) uses p@ {{ leak p@; }}\n#[cfg(not(a))] fn eat(p: Ptr<Node>) {{ }}\n"
+        ),
+        "E0003",
+        "defined more than once",
+    );
+    rejects(
+        "pub struct H {}\nimpl H { #[cfg(a)] pub fn g(&self) {} }\nimpl H { #[cfg(not(a))] pub fn g(&self) {} }\n",
+        "E0003",
+        "defined more than once",
+    );
+    // 名前空間が違えば重複ではない（Rust と同じ）。
+    accepts("pub mod g {}\npub fn g() {}\n");
+}

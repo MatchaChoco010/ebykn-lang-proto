@@ -126,6 +126,8 @@ pub enum Unimpl {
     NestedItem,
     /// 中を読まないマクロの引数の中の権限の操作。
     PermInMacro,
+    /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
+    CfgDuplicate,
 }
 
 impl Unimpl {
@@ -182,6 +184,12 @@ impl Unimpl {
             }
             (Unimpl::NestedItem, Lang::Ja) => {
                 "関数の本体の中の `impl Invariant`・`impl View`・`owns` / `spec` を持つ構造体・モジュールはまだ扱えません。モジュールの直下に移します"
+            }
+            (Unimpl::CfgDuplicate, Lang::En) => {
+                "this name is defined more than once in the module (for example under different `#[cfg]`); Ebykn's index does not evaluate `#[cfg]` yet, so it cannot tell which definition remains"
+            }
+            (Unimpl::CfgDuplicate, Lang::Ja) => {
+                "この名前はモジュールの中で二度以上定義されています（`#[cfg]` で分けた定義など）。Ebykn の索引はまだ `#[cfg]` を評価しないので、どちらの定義が残るかを決められません"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"

@@ -170,6 +170,13 @@ pub struct Index {
     pub perm_method_names: BTreeSet<String>,
     /// 型の別名（`type A<T> = S;`）：別名のパス → 定義。
     pub aliases: BTreeMap<ItemPath, Alias>,
+    /// `#[cfg(..)]`（`cfg_attr` の中を含む）が付いた項目とモジュール。索引は cfg を評価しないので、
+    /// これらが残るかは分からない（`OPEN.md`）。
+    pub gated: BTreeSet<ItemPath>,
+    /// `#[cfg(..)]` が付いたメソッドか、それを含む impl（型のパス、名前）。
+    pub gated_methods: BTreeSet<(ItemPath, String)>,
+    /// 同じモジュール・同じ名前空間に同じ名前の定義が二つ以上ある位置（cfg で分けた定義など）。
+    pub duplicates: Vec<Span>,
 }
 
 /// 型の別名の定義。
@@ -311,6 +318,8 @@ impl Index {
             p
         };
         let mut defs = Vec::new();
+        // 名前空間（型とモジュール、値）ごとに、すでに見た名前。
+        let mut seen: BTreeSet<(String, bool)> = BTreeSet::new();
         for item in items {
             let (name, kind) = match &item.kind {
                 ItemKind::Fn(f) => (&f.sig.ident, DefKind::Fn),
@@ -331,6 +340,14 @@ impl Index {
                 _ => continue,
             };
             let p = path_of(&name.name);
+            let value_ns = matches!(kind, DefKind::Fn | DefKind::Other);
+            if !seen.insert((name.name.clone(), value_ns)) {
+                self.duplicates.push(item.span);
+            }
+            let inner_cfg = matches!(&item.kind, ItemKind::Mod(m) if m.content.as_ref().is_some_and(|(a, _)| has_cfg(a)));
+            if has_cfg(&item.attrs) || inner_cfg {
+                self.gated.insert(p.clone());
+            }
             scope.items.insert(name.name.clone(), p.clone());
             defs.push((p, kind, item));
         }
@@ -451,10 +468,14 @@ impl Index {
                         if info.has_perms() {
                             self.perm_method_names.insert(info.name.clone());
                         }
-                        self.methods
-                            .entry(ty.clone())
-                            .or_default()
-                            .insert(info.name.clone(), info);
+                        if has_cfg(&item.attrs) || has_cfg(&m.attrs) {
+                            self.gated_methods.insert((ty.clone(), info.name.clone()));
+                        }
+                        let ms = self.methods.entry(ty.clone()).or_default();
+                        if ms.contains_key(&info.name) {
+                            self.duplicates.push(m.span);
+                        }
+                        ms.insert(info.name.clone(), info);
                     }
                 }
                 ImplTrait::Other | ImplTrait::Misspelled => {}
@@ -481,7 +502,8 @@ impl Index {
             }
             Resolved::PreludeType("View") if bare && last == "View" => ImplTrait::View,
             Resolved::PreludeType("Invariant" | "View") => ImplTrait::Misspelled,
-            Resolved::Type(_) => ImplTrait::Other,
+            // cfg で消えうるトレイトは、クレートの定義として数えない（消えれば prelude に解決する）。
+            Resolved::Type(p) if !self.is_gated(&p) => ImplTrait::Other,
             _ if ebykn => ImplTrait::Misspelled,
             _ => ImplTrait::Other,
         }
@@ -724,6 +746,22 @@ impl Index {
         self.descend(start, &path[1..], true, depth)
     }
 
+    /// 項目か、それを囲むモジュールのどれかが `#[cfg(..)]` を持つか。
+    pub fn is_gated(&self, p: &ItemPath) -> bool {
+        (1..=p.len()).any(|n| self.gated.contains(&p[..n]))
+    }
+
+    /// 解決した結果が、cfg で消えないクレートの中の定義（関数・型・モジュール・メソッド）か。
+    pub fn is_live_def(&self, r: &Resolved) -> bool {
+        match r {
+            Resolved::Fn(p) | Resolved::Type(p) | Resolved::Module(p) => !self.is_gated(p),
+            Resolved::Method { ty, name } => {
+                !self.is_gated(ty) && !self.gated_methods.contains(&(ty.clone(), name.clone()))
+            }
+            _ => false,
+        }
+    }
+
     /// 呼び出しの対象の署名。
     pub fn callee(&self, r: &Resolved) -> Option<&FnInfo> {
         match r {
@@ -866,4 +904,22 @@ fn subst(ty: &ast::Type, map: &BTreeMap<&str, &ast::Type>) -> ast::Type {
         _ => {}
     }
     t
+}
+
+/// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む）。
+pub fn has_cfg(attrs: &[ast::Attr]) -> bool {
+    fn mentions_cfg(ts: &TokenStream) -> bool {
+        ts.clone().into_iter().any(|t| match t {
+            TokenTree::Ident(i) => i == "cfg",
+            TokenTree::Group(g) => mentions_cfg(&g.stream()),
+            _ => false,
+        })
+    }
+    attrs.iter().any(|a| match a.path.segments.last() {
+        Some(seg) if a.path.segments.len() == 1 && seg.ident.is("cfg") => true,
+        Some(seg) if a.path.segments.len() == 1 && seg.ident.is("cfg_attr") => {
+            mentions_cfg(&a.args)
+        }
+        _ => false,
+    })
 }
