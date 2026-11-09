@@ -1,6 +1,6 @@
-// probe: const・static・const fn・本体のない trait の関数・列挙子・列挙子のフィールド・予約語の関連型のほかの項目の名前は、予約語の r# でも Verus が通し、検証条件に出ても検証できる（#147）。関数・spec fn・proof fn・external_body・when_used_as_spec の組・構造体とそのフィールド（Ghost / Tracked を含む）・列挙型・trait・本体のある trait の関数・trait の関連定数と trait の impl の関連定数・予約語でない関連型・inherent なメソッド・モジュール・型の別名・型の引数・union・extern の static・型の不変条件
+// probe: const・static・const fn・本体のない trait の関数・列挙子・列挙子のフィールドのほかの項目の名前は、予約語の r# でも Verus が通し、検証条件に出ても検証できる（#147）。関数・spec fn・proof fn・external_body・when_used_as_spec の組・構造体とそのフィールド（Ghost / Tracked を含む）・列挙型・trait・inherent なメソッド・モジュール・型の別名・型の引数・union・extern の static・型の不変条件。trait の関連型・関連定数・本体のある関数は、予約語でない r#foo なら impl で与えて呼んでも通る（予約語は raw_name_assoc_type.rs、raw_name_assoc_const.rs、raw_name_trait_fn.rs）
 // verus-args: --edition=2024
-// expect: verified 13
+// expect: verified 15
 use vstd::prelude::*;
 
 verus! {
@@ -92,9 +92,9 @@ pub trait r#trait {
 
     const r#bar: u64;
 
-    fn r#dyn(&self) -> (r: u64)
+    fn r#baz(&self) -> (r: u64)
         ensures
-            r == 1,
+            r >= 1,
     {
         1
     }
@@ -108,6 +108,17 @@ impl r#trait for S {
     type r#foo = u64;
 
     const r#bar: u64 = 1;
+
+    fn r#baz(&self) -> (r: u64) {
+        2
+    }
+}
+
+fn call_baz(s: S) -> (r: u64)
+    ensures
+        r >= 1,
+{
+    s.r#baz()
 }
 
 impl S {

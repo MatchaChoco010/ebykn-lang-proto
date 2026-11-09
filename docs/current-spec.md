@@ -104,7 +104,7 @@ Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#g
 - 消去フィールドのパターン（`@r#type`）には、別の名前で束縛する書き方がありません。`spec` フィールドなら、パターンでは `@..` で外し、構造体の値から `s@r#type` のように読みます。`owns` フィールドなら、フィールドの名前を変えます（`@..` で外すと、権限を `leak` するのと同じになるため）。
 - 対象の語は `crates/ebykn_syntax/src/reserved.rs` の `RAW_KEYWORDS` です。厳格な予約語と将来のための予約語（`abstract`、`yield` など）と、版で予約語になった `async`・`await`・`dyn`・`try`（2018）、`gen`（2024）です。版で予約語になった語は、`Ebykn.toml` の `edition` がその版より前なら拒否しません（2021 の `r#gen` は通ります）。`edition` が数として読めなければ拒否します。
 - 予約語でない名前の raw の綴り（`r#foo`、弱いキーワードの `r#union`・`r#raw`、Verus の句の `r#requires`）は通ります。
-- 関数・型・モジュール・トレイト・型の別名・構造体のフィールド・型の引数の名前は、raw の綴りのまま通します（Verus が通すので、`fn r#gen` や `s.r#type` はそのまま書けます）。`const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前と、trait の関連型の予約語の名前は `E0104` です（§4「Verus が raw の綴りを扱えない項目の名前」）。
+- 関数・型・モジュール・トレイト・型の別名・構造体のフィールド・型の引数の名前は、raw の綴りのまま通します（Verus が通すので、`fn r#gen` や `s.r#type` はそのまま書けます）。`const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前と、trait の関連型・関連定数・本体のある関数の予約語の名前は `E0104` です（§4「Verus が raw の綴りを扱えない項目の名前」）。
 - 中を読まないトークン列（マクロの引数など）の中の束縛は見ません。そこに書いたものは、Verus の `function body check` のままです。
 - パターンの名前は字句で判定するので、予約語の raw の綴りの unit struct をパターンに書くと（`pub struct r#type;` の後の `let r#type = x;`）、Rust ではパスのパターンでも `E0103` になります。`r#type {}` か `crate::r#type` と書きます。
 
@@ -116,22 +116,23 @@ Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#g
 
 次の項目の名前は、`r#` で書けません（`E0104`）。予約語でない `r#foo` も含みます。
 
-- モジュール・inherent な `impl`・ブロックの中の `const`（trait の宣言と trait の `impl` の関連定数は通ります）
+- モジュール・inherent な `impl`・ブロックの中の `const`（trait の関連定数は、下の予約語だけの扱いです）
 - `static`
 - `const fn`（モジュールと `impl` の中）
-- 本体のない trait の関数（`fn f(..);`、`spec fn f(..);`、`lemma fn f(..);`。本体のある trait の関数は通ります）
+- 本体のない trait の関数（`fn f(..);`、`spec fn f(..);`、`lemma fn f(..);`。本体のある trait の関数は、下の予約語だけの扱いです）
 - 列挙子
 - 列挙子のフィールド（`A { r#foo: u64 }`）
 
-診断は、`r#` を外した語が Rust の予約語か Ebykn の予約語（`uses`）なら `type_` のような別の名前を、そうでなければ `r#` を外して書くよう案内します（`r#foo` と `foo` は同じ名前です）。Verus の句の語（`requires` など）は `r#` なしで名前に書けるので、`r#` を外すよう案内します。
+診断は、`r#` を外した語が Rust の予約語か Ebykn の予約語（`uses`）なら `type_` のような別の名前を、そうでなければ `r#` を外して書くよう案内します（`r#foo` と `foo` は同じ名前です）。Verus の句の語（`requires` など）は `r#` なしで名前に書けるので、`r#` を外すよう案内します。版で予約語になった語は、`Ebykn.toml` の `edition` がその版より前なら `r#` を外すよう案内します（2021 の `const r#gen` には `gen` と書くよう案内します）。
 
-trait の関連型の名前は、Rust の予約語の raw の綴り（`type r#type;`）だけが `E0104` です。対象の語と版の扱いは `E0103`（§4「Rust の予約語の raw の綴りは、局所の名前に使えない」）と同じで、2021 の `r#gen` は通ります。予約語でない `type r#foo;` は通ります。trait の `impl` の側（`type r#type = u64;`）は見ません（宣言の側を直せば合わせて変わります）。
+trait の関連型・関連定数・本体のある関数の名前は、Rust の予約語の raw の綴り（`type r#type;`、`const r#type: u64;`、`fn r#dyn(&self) { .. }`）だけが `E0104` です。対象の語と版の扱いは `E0103`（§4「Rust の予約語の raw の綴りは、局所の名前に使えない」）と同じで、2021 の `r#gen` は通ります。予約語でない `r#foo` は通ります。trait の `impl` の側（`type r#type = u64;` など）は見ません（宣言の側を直せば合わせて変わります）。
 
-- ほかの項目の名前（関数、`spec fn`、`lemma fn`、純粋関数、`unchecked fn`、構造体とそのフィールド・消去フィールド、列挙型、trait、本体のある trait の関数、inherent なメソッド、モジュール、型の別名、型の引数、`union` とそのフィールド）は、予約語の raw の綴りでも通します。固定した Verus で、検証条件に出ても検証できることを確かめました（`tests/verus-probes/raw_name_items.rs`）。
+- ほかの項目の名前（関数、`spec fn`、`lemma fn`、純粋関数、`unchecked fn`、構造体とそのフィールド・消去フィールド、列挙型、trait、inherent なメソッド、モジュール、型の別名、型の引数、`union` とそのフィールド）は、予約語の raw の綴りでも通します。固定した Verus で、検証条件に出ても検証できることを確かめました（`tests/verus-probes/raw_name_items.rs`）。
+- 列挙子のフィールドの名前に `E0104` が出た語には、構造体のパターンの省略形（`E::A { r#type }`）の `E0103` を出しません（`E0103` が案内する `r#type: type_` は、`E0104` で使えないフィールドの名前を使うため）。同じ名前のフィールドを持つ構造体の省略形の `E0103` も、列挙子のフィールドの名前を変えるまでは出ません。
 - 中を読まないトークン列（マクロの引数など）の中の項目は見ません。
 
 * 元の仕様：§4 は識別子を Rust のものとし、raw の綴りに触れない。
-* 根拠：#147。固定した Verus は、`const`・`static`・`const fn`・本体のない trait の関数の名前から記号（`VERUS_UNERASED_PROXY__r#foo`、`VERUS_SPEC__r#foo`）を作り、proc macro が panic する。列挙子は使ったところで `no variant`、列挙子のフィールドは宣言だけで `no field` で拒否する。予約語の関連型は、trait に関数があると AIR の内部エラーで落ち、`X::r#type` と使うと `Verus does not recognize associated type` になる。どれも文言から名前が原因だと分からない（`tests/verus-probes/raw_name_proc_macro.rs`、`raw_name_variant.rs`、`raw_name_variant_field.rs`、`raw_name_assoc_type.rs`、`raw_name_assoc_type_use.rs`。2021 の関連型の `r#gen` が通ることは `raw_name_assoc_type_2021.rs`）。書き下しで `r#` を外さない理由は `OPEN.md` の 2026-11-10 の行。
+* 根拠：#147。固定した Verus は、`const`・`static`・`const fn`・本体のない trait の関数の名前から記号（`VERUS_UNERASED_PROXY__r#foo`、`VERUS_SPEC__r#foo`）を作り、proc macro が panic する。列挙子は宣言だけで `no variant`、列挙子のフィールドは宣言だけで `no field` で拒否する。予約語の名前の trait の関連型は、trait に関数があると AIR の内部エラーで落ち、`X::r#type` と使うと `Verus does not recognize associated type` になる。関連定数は impl で与えると `function for external trait must have mode exec`、本体のある関数は impl で上書きして呼ぶと AIR の内部エラーで落ちる。どれも文言から名前が原因だと分からない（`tests/verus-probes/raw_name_proc_macro.rs`、`raw_name_variant.rs`、`raw_name_variant_field.rs`、`raw_name_assoc_type.rs`、`raw_name_assoc_type_use.rs`、`raw_name_assoc_const.rs`、`raw_name_trait_fn.rs`。2021 の `r#gen` がこれらの trait の名前で通ることは `raw_name_trait_members_2021.rs`）。書き下しで `r#` を外さない理由は `OPEN.md` の 2026-11-10 の行。
 * 状態：基準で決めた。
 
 ### `borrow` は式の位置にも書ける
@@ -144,7 +145,7 @@ trait の関連型の名前は、Rust の予約語の raw の綴り（`type r#ty
 
 ### Rust の版の予約語は `r#` を付けて名前にする
 
-`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は、関数・型・モジュール・構造体のフィールドの名前なら `r#gen` と書き、局所の名前と、`const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前なら `gen_` などの別の名前を使うよう案内します（局所の名前の `r#gen` は `E0103`、それらの項目の名前の `r#gen` は `E0104`。§4「Rust の予約語の raw の綴りは、局所の名前に使えない」と「Verus が raw の綴りを扱えない項目の名前」）。`r#gen` は書き下しでも `r#gen` のままです。
+`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は、関数（trait の中のものを除く）・型・モジュール・構造体のフィールドの名前なら `r#gen` と書き、局所の名前と、`const`・`static`・`const fn`・列挙子・列挙子のフィールド・trait の関数と関連型と関連定数の名前なら `gen_` などの別の名前を使うよう案内します（局所の名前の `r#gen` は `E0103`、それらの項目の名前の `r#gen` は `E0104`。§4「Rust の予約語の raw の綴りは、局所の名前に使えない」と「Verus が raw の綴りを扱えない項目の名前」）。`r#gen` は書き下しでも `r#gen` のままです。
 
 - 生成する `build/verus/` は `Ebykn.toml` の `edition`（既定は `2024`）でビルドするので、`r#` のない `gen` は生成コードの構文エラーになります。rustc の edition 2024 と同じく、書いた所で拒否します。
 - 書いた所とは、識別子の位置すべてです（関数・変数・引数・フィールド・型・モジュールの名前、パス、マクロの引数の中）。トークン列で判定するので、`stringify!(gen)` のように Rust 2024 でも書ける形も拒否します。
@@ -697,7 +698,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
-| `E0104` | `const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前の raw の綴り（`r#foo`）、trait の関連型の名前の Rust の予約語の raw の綴り（§4） | 同上 | #147（PR #164） | 基準で決めた |
+| `E0104` | `const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前の raw の綴り（`r#foo`）、trait の関連型・関連定数・本体のある関数の名前の Rust の予約語の raw の綴り（§4） | 同上 | #147（PR #164） | 基準で決めた |
 | `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |

@@ -64,13 +64,7 @@ pub(in crate::parse) fn binding_as(i: &proc_macro2::Ident, form: BindingForm) ->
 pub(in crate::parse) fn raw_checked_name(i: &proc_macro2::Ident, kind: RawNameKind) -> ast::Ident {
     let id = ident(i);
     if id.raw {
-        push(
-            id.span,
-            Message::RawItemName {
-                word: id.name.clone(),
-                kind,
-            },
-        );
+        push(id.span, Message::raw_item_name(id.name.clone(), kind));
     }
     id
 }
@@ -626,10 +620,7 @@ pub(super) fn variant_fields(f: &syn::Fields) -> ast::Fields {
             {
                 push(
                     i.span,
-                    Message::RawItemName {
-                        word: i.name.clone(),
-                        kind: RawNameKind::VariantField,
-                    },
+                    Message::raw_item_name(i.name.clone(), RawNameKind::VariantField),
                 );
             }
         }

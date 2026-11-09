@@ -626,6 +626,9 @@ fn fn_item(
             },
         ));
     };
+    if ctx == Ctx::Trait && body.is_some() {
+        raw_keyword_trait_member(&sig.ident, RawNameKind::TraitFnWithBody);
+    }
     Ok(ast::ItemKind::Fn(ast::Fn {
         unchecked,
         sig,
@@ -635,35 +638,27 @@ fn fn_item(
 }
 
 /// 本体のない trait の関数の名前の raw の綴りは E0104（#147）。固定した Verus は、その名前から作る
-/// `VERUS_SPEC__r#foo` で proc macro が panic する（`tests/verus-probes/raw_name_trait_fn.rs`）。
-/// 本体のある trait の関数は通る。
+/// `VERUS_SPEC__r#foo` で proc macro が panic する（`tests/verus-probes/raw_name_proc_macro.rs`）。
+/// 本体のある trait の関数は、予約語の名前だけを拒否する（[`raw_keyword_trait_member`]）。
 fn raw_trait_fn_without_body(name: &ast::Ident) {
     if name.raw {
         push(
             name.span,
-            Message::RawItemName {
-                word: name.name.clone(),
-                kind: RawNameKind::TraitFnWithoutBody,
-            },
+            Message::raw_item_name(name.name.clone(), RawNameKind::TraitFnWithoutBody),
         );
     }
 }
 
-/// trait の関連型の名前の、Rust の予約語の raw の綴り（`type r#type;`）は E0104（#147）。固定した
-/// Verus は、その trait に関数があるか、関連型を `X::r#type` と使うと、AIR の内部エラーか
-/// `Verus does not recognize associated type` で落ちる（`tests/verus-probes/raw_name_assoc_type.rs`）。
+/// trait の関連型・関連定数・本体のある関数の名前の、Rust の予約語の raw の綴りは E0104（#147）。
+/// 固定した Verus は、関連型なら trait に関数があるか `X::r#type` と使うと（AIR の内部エラーか
+/// `Verus does not recognize associated type`）、関連定数なら impl で与えると（`function for external
+/// trait must have mode exec`）、本体のある関数なら impl で上書きして呼ぶと（AIR の内部エラー）落ちる
+/// （`tests/verus-probes/raw_name_assoc_type.rs`、`raw_name_assoc_const.rs`、`raw_name_trait_fn.rs`）。
 /// 予約語でない名前（`r#foo`）は通る。版で予約語になった名前は、検査が `Ebykn.toml` の `edition` で
-/// 診断を捨てる（E0103 と同じ）。
-fn raw_keyword_assoc_type(i: &proc_macro2::Ident) {
-    let id = ident(i);
+/// 診断を捨てる（E0103 と同じ）。impl の側は trait の宣言に従うので見ない。
+fn raw_keyword_trait_member(id: &ast::Ident, kind: RawNameKind) {
     if id.raw && crate::reserved::raw_keyword_since(&id.name).is_some() {
-        push(
-            id.span,
-            Message::RawItemName {
-                word: id.name,
-                kind: RawNameKind::AssocType,
-            },
-        );
+        push(id.span, Message::raw_item_name(id.name.clone(), kind));
     }
 }
 
@@ -728,6 +723,9 @@ fn spec_fn(
             },
         ));
     };
+    if ctx == Ctx::Trait && body.is_some() {
+        raw_keyword_trait_member(&sig.ident, RawNameKind::TraitFnWithBody);
+    }
     Ok(ast::ItemKind::SpecFn(ast::SpecFn {
         closed,
         sig,
@@ -1051,8 +1049,14 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
         || matches!(t.first(), Some(TokenTree::Ident(_))) && is_punct(t.get(1), '!');
     if rust {
         let ti: syn::TraitItem = input.parse()?;
-        if let syn::TraitItem::Type(t) = &ti {
-            raw_keyword_assoc_type(&t.ident);
+        match &ti {
+            syn::TraitItem::Type(t) => {
+                raw_keyword_trait_member(&ident(&t.ident), RawNameKind::AssocType)
+            }
+            syn::TraitItem::Const(c) => {
+                raw_keyword_trait_member(&ident(&c.ident), RawNameKind::AssocConst)
+            }
+            _ => {}
         }
         match &ti {
             syn::TraitItem::Macro(m) => {
@@ -1317,9 +1321,9 @@ fn const_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::ItemKind> {
         None
     };
     input.parse::<Token![;]>()?;
-    // trait の impl の関連定数は、raw の名前でも Verus が通す（trait の宣言の側も通る。
-    // `tests/verus-probes/raw_name_items.rs`）。モジュール・inherent な impl・ブロックの `const` は
-    // proc macro が panic する（`raw_name_const.rs`）。
+    // trait の impl の関連定数は、trait の宣言に従う（宣言の側は、予約語の名前だけを拒否する。
+    // [`raw_keyword_trait_member`]）。モジュール・inherent な impl・ブロックの `const` は、予約語で
+    // なくても proc macro が panic する（`tests/verus-probes/raw_name_proc_macro.rs`）。
     let ident = if ctx == (Ctx::Impl { inherent: false }) {
         ident(&name)
     } else {
