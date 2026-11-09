@@ -91,6 +91,27 @@ fn lint_names_do_not_hide_the_e0003() {
     }
 }
 
+/// E0001 になる属性の隣の `#[cfg(..)]`。重ねないかは属性ごとに決めるので、隣の属性が拒否リストの E0001 に
+/// なっても、`#[cfg(any())]` の E0003 は出る（PR #59 の 4 回目の再確認の N2）。`L` を名前に置き換える。
+const DENIED_NEIGHBOR_POSITIONS: &[&str] = &[
+    "pub struct S { pub x: u32, pub y: u32 }\npub fn m(s: S) -> u32 { match s { S { #[cfg_attr(L, allow(unused))] #[cfg(any())] x: 0, .. } => 1, _ => 2 } }",
+    "pub fn f<#[cfg_attr(L, allow(unused))] #[cfg(any())] T>(a: u32) -> u32 { a }",
+];
+
+#[test]
+fn a_denied_neighbor_does_not_hide_the_e0003() {
+    for e in cfgs() {
+        for pos in DENIED_NEIGHBOR_POSITIONS {
+            let src = pos.replace('L', e.name);
+            let (_, lines) = run(&src);
+            let count = |code: &str| lines.iter().filter(|l| l.contains(code)).count();
+            assert_eq!(lines.len(), 2, "{}\n---\n{src}", lines.join("\n"));
+            assert_eq!(count(": E0001: "), 1, "{}\n---\n{src}", lines.join("\n"));
+            assert_eq!(count(": E0003: "), 1, "{}\n---\n{src}", lines.join("\n"));
+        }
+    }
+}
+
 #[test]
 fn every_entry_rejects_its_example() {
     for e in DENYLIST {
