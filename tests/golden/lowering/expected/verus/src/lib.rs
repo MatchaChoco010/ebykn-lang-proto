@@ -36,6 +36,13 @@ pub fn use_it() -> u64 {
 requires x < 100,
 ensures __eyk_r == __eyk_spec_double(x), { x *2 } pub open spec fn __eyk_spec_double(x: u32) -> u32 { (x *2) as u32 }
 
+pub fn qualified(x: u64) -> (r: u64)
+ensures r == x, {
+    let v = < Vec < u64 >>::with_capacity(2);
+    let y = < u64 as Clone >::clone(&x);
+    < u64 as::core::clone::Clone >::clone(&y)
+}
+
 proof fn helper(x: u64)
 ensures x + 0 == x, { vstd::prelude::admit() }
 

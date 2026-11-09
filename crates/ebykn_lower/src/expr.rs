@@ -119,13 +119,17 @@ impl Cx<'_> {
     }
 
     pub fn path(&self, p: &ast::Path) -> String {
-        let mut s = String::new();
+        let segs = self.segments(&p.segments);
         if p.leading_colon {
-            s.push_str("::");
+            format!("::{}", segs.join("::"))
+        } else {
+            segs.join("::")
         }
-        let segs: Vec<String> = p
-            .segments
-            .iter()
+    }
+
+    /// パスの各セグメント（`f`、`Vec<u8>`、`f::<u8>`、`Fn(u8) -> u8`）。
+    fn segments(&self, segs: &[ast::PathSegment]) -> Vec<String> {
+        segs.iter()
             .map(|seg| {
                 let name = ident(&seg.ident);
                 match &seg.args {
@@ -154,27 +158,26 @@ impl Cx<'_> {
                     ),
                 }
             })
-            .collect();
-        s.push_str(&segs.join("::"));
-        s
+            .collect()
     }
 
+    /// 修飾パス `<T>::rest` / `<T as Trait>::rest`（#100）。`position` は `Trait` のセグメントの数。
+    /// `<T>::rest` の `path` は先頭に `::` を持つ（syn の形）が、`>` の後の `::` は一つだけ出す。
+    /// セグメントごとに組み立てる（文字列を `::` で分けると、ターボフィッシュ `f::<u8>` も分かれる）。
     fn qpath(&self, q: Option<&ast::QSelf>, p: &ast::Path) -> String {
         let Some(q) = q else {
             return self.path(p);
         };
-        // `<T as Trait>::rest`：`position` は Trait のパスの長さ。
-        let all = self.path(p);
-        let segs: Vec<&str> = all.split("::").collect();
-        let (tr, rest) = segs.split_at(q.position.min(segs.len()));
+        let (tr, rest) = p.segments.split_at(q.position.min(p.segments.len()));
+        let rest = self.segments(rest).join("::");
         if tr.is_empty() {
-            format!("<{}>::{}", self.ty(&q.ty), rest.join("::"))
+            format!("<{}>::{rest}", self.ty(&q.ty))
         } else {
+            let lead = if p.leading_colon { "::" } else { "" };
             format!(
-                "<{} as {}>::{}",
+                "<{} as {lead}{}>::{rest}",
                 self.ty(&q.ty),
-                tr.join("::"),
-                rest.join("::")
+                self.segments(tr).join("::")
             )
         }
     }

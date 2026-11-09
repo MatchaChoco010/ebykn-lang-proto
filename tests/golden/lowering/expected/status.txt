@@ -3,6 +3,7 @@ verified lowering::get_val
 verified lowering::mk
 verified lowering::use_it
 verified lowering::double
+verified lowering::qualified
 admit lowering::helper
 unchecked lowering::ffi
 verified lowering::Pool::view
@@ -20,4 +21,4 @@ verified lowering::all_pos
 verified lowering::some_pos
 verified lowering::Bag::with_node
 verified lowering::wrap
-results 18 verified, 0 errors
+results 19 verified, 0 errors
