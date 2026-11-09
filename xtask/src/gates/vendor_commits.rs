@@ -11,7 +11,9 @@
 //!   マージの前に見つかる。pre-commit フックは作っているコミットの直前までの履歴を見るので、手元では次のコミットで見つかる。
 //! - 手入れのコミットを分けた PR を squash でマージすると、`develop` に混ざったコミットができ、`develop` への push の CI で
 //!   見つかる。`develop` の履歴は書き換えないので、そのコミットを理由を添えて `EXEMPT` に足す。
-//! - git は plumbing（`rev-list`、`diff-tree -z`、`cat-file`）だけを使い、利用者の `log.*` などの設定で結果を変えない。
+//! - git は plumbing（`rev-list`、`diff-tree -z`、`cat-file`）だけを使い、利用者の `log.*` や `submodule.*.ignore` などの
+//!   設定で結果を変えない。
+//! - マージコミットは見ない（理由は `REV_LIST`）。
 //! - 履歴が浅い（shallow）と、コミットを辿れないので失敗にする。CI のゲートのジョブは `fetch-depth: 0` で取り出す。
 //! - `vendor/` の下のファイルを追跡しているのに、それを変えたコミットが見つからなければ失敗にする。
 
@@ -27,6 +29,10 @@ pub const EXEMPT: &[(&str, &str)] = &[];
 const VENDOR: &str = "vendor/";
 
 /// `vendor/` を変えた、マージでないコミット。履歴を簡略化しない。
+///
+/// マージコミットは見ない。`vendor/` を変える PR のマージコミットは、第 1 親との差分が `vendor/` と `vendor/` の外の
+/// 両方にまたがるので、混ざったコミットと見分けられない。衝突を解いたマージで `vendor/` を手で変えたものも見ない。
+/// `develop` と衝突した PR は、update-branch のマージではなく rebase で直す規則（AGENTS.md「マージ」の `DIRTY`）に頼る。
 const REV_LIST: &[&str] = &[
     "rev-list",
     "--no-merges",
@@ -37,6 +43,7 @@ const REV_LIST: &[&str] = &[
 ];
 
 /// 1 つのコミットが変えたファイル（NUL 区切り）。ルートのコミットも親のない差分として出す。
+/// サブモジュールの gitlink は、`.gitmodules` や利用者の設定の `submodule.<名前>.ignore` に関わらず出す。
 const DIFF_TREE: &[&str] = &[
     "diff-tree",
     "-r",
@@ -45,6 +52,7 @@ const DIFF_TREE: &[&str] = &[
     "--no-commit-id",
     "--no-renames",
     "--root",
+    "--ignore-submodules=none",
 ];
 
 pub fn run(repo: &Repo) -> Report {
@@ -447,5 +455,29 @@ mod tests {
             parse_files(&sha, &broken).is_err_and(|e| e.contains("NUL で終わっていません")),
             "{broken:?}"
         );
+    }
+
+    #[test]
+    fn fails_when_a_commit_mixes_vendor_and_an_ignored_submodule() {
+        // .gitmodules に ignore = all を書いても、vendor/ と一緒に変えた gitlink を見逃さない。
+        let mut t = repo();
+        commit(
+            &mut t,
+            &[(
+                ".gitmodules",
+                "[submodule \"sub\"]\n\tpath = crates/sub\n\turl = ./sub\n\tignore = all\n",
+            )],
+            "サブモジュールの設定",
+        );
+        assert_passes(&t.run(run));
+        t.write("vendor/syn/lib.rs", "sub\n");
+        sh(t.root(), &["add", "vendor/syn/lib.rs"]);
+        let gitlink = format!("160000,{},crates/sub", "1".repeat(40));
+        sh(
+            t.root(),
+            &["update-index", "--add", "--cacheinfo", &gitlink],
+        );
+        sh(t.root(), &["commit", "-q", "-m", "gitlink と混ぜる"]);
+        assert_fails(&t.run(run), "crates/sub");
     }
 }
