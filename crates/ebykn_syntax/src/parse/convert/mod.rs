@@ -14,7 +14,7 @@ use verus_syn::parse::Parser as _;
 
 use super::{push, sp, span_of, span_of_tokens};
 use crate::ast;
-use crate::diag::Message;
+use crate::diag::{BindingForm, Message};
 
 /// 名前に使えない語（`r#` を付ければ使える）。
 pub(super) const RESERVED_WORDS: &[&str] = &["uses"];
@@ -34,6 +34,29 @@ pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
         raw,
         span: sp(i.span()),
     }
+}
+
+/// 局所の名前を束縛する位置の名前（パターンの名前、量化子の変数、名前付きの戻り値、`uses` の
+/// 領域、消去フィールドのパターン、const generics の引数）。Rust の予約語の raw の綴り（`r#type`）は
+/// Verus が検証できないので E0103（#119。[`crate::reserved::RAW_KEYWORDS`]）。版で予約語になった
+/// 名前の診断は、検査が `Ebykn.toml` の `edition` で捨てる。
+pub(in crate::parse) fn binding(i: &proc_macro2::Ident) -> ast::Ident {
+    binding_as(i, BindingForm::Name)
+}
+
+/// [`binding`] の、束縛の書き方（`form`）で直し方の案内を変える版。
+pub(in crate::parse) fn binding_as(i: &proc_macro2::Ident, form: BindingForm) -> ast::Ident {
+    let id = ident(i);
+    if id.raw && crate::reserved::raw_keyword_since(&id.name).is_some() {
+        push(
+            id.span,
+            Message::RawKeywordBinding {
+                word: id.name.clone(),
+                form,
+            },
+        );
+    }
+    id
 }
 
 pub(super) fn lifetime(l: &syn::Lifetime) -> ast::Lifetime {
@@ -233,7 +256,7 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
                 attrs: attrs(&c.attrs),
-                ident: ident(&c.ident),
+                ident: binding(&c.ident),
                 ty: ty(&c.ty),
                 default: c.default.clone().map(expr),
             },
