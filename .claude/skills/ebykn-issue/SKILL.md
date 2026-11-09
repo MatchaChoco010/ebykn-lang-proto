@@ -21,7 +21,7 @@ gh issue list --state all --search "<語>" --limit 50
 - 優先度：壊れ方だけで決める。P0 = 黙って誤る、P1 = 落ちる・書けない、P2 = 機能追加。
 - `blocker`：他の open な Issue がこれに依存しているときだけ。
 
-人間の判断が要るものには `needs review` を付ける。基準と既定で進められるものは Issue にせず `OPEN.md` に記録する。
+人間の判断が要るものには `needs review` を付ける。基準と既定で進められるものは Issue にせず `OPEN.md` に記録する。元の仕様を変えるなら `docs/current-spec.md` に書く。
 
 ## 3. 本文を書く
 

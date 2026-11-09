@@ -49,7 +49,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 * 元の仕様：全 `.eyk` / `.eykp` に `use ebykn_prelude::*;` が暗黙に付く。vstd の参照は定めていない。
 * 根拠：#16（PR #15、#20、#26）。パスは改名と再公開で綴りを変えられるので、名前ごとに塞いでも閉じない。
-* 状態：判断待ちの既定（#16）。
+* 状態：判断待ちの既定（#16。マクロと合わせて #53 に委ねた）。
 
 ### §3.2 `Ebykn.toml` の読み方
 
@@ -114,17 +114,25 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### マクロ
 
-方針（作者の決定、#27）：なるべく多くを許し、Verus で壊れる形だけを拒否リストで止めます。壊れる形とは、検証したものと配るものが食い違う形と、証明が紛れ込む形です。穴が見つかるたびに拒否リストを足して塞ぎます。拒否リストは一つの表にまとめ、各項目に壊す理由と再現の例を添えて、テストで固定します。
+マクロの扱いは、統一案 #53（needs review）の判断待ちです。#16（マクロの範囲）と #27（cfg と環境変数）の扱いは #53 に委ねました。
 
-拒否リストに入れるものは、#16 の調査の結果を見て確定します。#16 のコメントの調査による候補は次のとおりです。
+作者が示した方針は次の 2 つです。
 
-- 証明の入口を出すマクロ：`verus!`、`proof!` などの名前、`verus_builtin` のパス、`#[verifier::..]` などの属性。
-- Verus が自分で設定する cfg（`verus_keep_ghost`、`verus_keep_ghost_body`、`verus_only`、`verus_verify_core`、`verus_no_vstd`）と `debug_assertions` を条件に含む `cfg!` / `#[cfg]`。
-- `ebykn` と Verus が実行時に設定する環境変数（`CARGO_TERM_COLOR`、`RUSTUP_TOOLCHAIN` など）を読む `env!` / `option_env!`、path 依存で値の変わる `file!`、任意のコードを持ち込む `include!`。
+- なるべく多くを許し、Verus で壊れる形だけを拒否リストで止める。壊れる形とは、検証したものと配るものが食い違う形と、証明が紛れ込む形。穴が見つかるたびに拒否リストを足して塞ぐ（#27）。
+- マクロを一律に禁止することはとらない。tokio をはじめ多くのクレートはマクロを前提に作られていて、Rust のクレートの資産を使えるという原則に反する（#53）。
+
+#53 の提案（判断待ち）：
+
+1. 関数の本体の中のマクロは、どのクレートのものも使える。呼べるマクロの許可リストをやめ、壊れる形の拒否リストと、`ebykn verify` の出力の照合（§9、#37）で扱う。拒否リストの候補は、`.eyk` に書いた証明の入口（`verus!`、`proof!` などの名前と `verifier` の属性）、Verus が自分で設定する cfg（`verus_keep_ghost`、`verus_keep_ghost_body`、`verus_only`、`verus_verify_core`、`verus_no_vstd`）と `debug_assertions` を条件に含む `cfg!` / `#[cfg]`、`env!` / `option_env!` / `include!`。
+2. Verus が対応していない std のマクロ（`println!` 系、`write!`、`writeln!`、`dbg!`）は、prelude の関数の呼び出しに書き下し、その関数を前提として `ebykn status` に出す。
+3. derive・属性マクロを使えるようにし、検証されない部分を前提として一覧に出す。std の derive は Verus が検証する。関数に付く属性マクロ（`#[tokio::main]` など）は、検証する本体と、マクロを付ける薄い外側に分けて書き下す。
+4. 利用者の `macro_rules!` を使えるようにし、モジュール直下で項目を作るものは前提として一覧に出す。
+5. 関数の中の一部だけを `unchecked { .. }` ブロックにする逃げ道を足すかは、作者の判断（足すなら別の Issue で構文を詰める）。
+6. 依存クレートのマクロの中身は、依存クレートと同じく信頼する前提として扱う（`assume` の類は §9 の照合で捕まえる）。
 
 作者のコメント（#27）は、cfg で分岐するなら組み合わせごとに検証を走らせる方向（組み合わせを CLI で指定する）も示しています。形は決まっていません。
 
-#16 の調査では、std のマクロと利用者の `macro_rules!` は、展開した後も Verus が手で書いたコードと同じく検証します（`println!` 系と `write!` は Verus が拒否する）。依存クレートのマクロをどこまで信用するか（拒否リストと出力の照合だけにするか、`Ebykn.toml` で明示して許可するか）は判断待ちです（#16）。`ebykn verify` の出力の照合は §9 にあります。
+#16 の調査では、関数の本体の中の式・文のマクロ（std のマクロと利用者の `macro_rules!`）は、展開した後も Verus が手で書いたコードと同じく検証します（`println!` 系と `write!` は Verus が拒否する）。derive・属性マクロが `verus!` の外に作る項目は検証されず、それを前提に呼び出し側が verified になりえます。この穴は #49（P0、実装中）で扱い、既定では依存クレートの derive と属性マクロを拒否し、std の derive（`Clone`、`Copy`、`Debug`、`PartialEq`、`Eq`、`Hash`、`Default`、`PartialOrd`、`Ord`）は許します。
 
 今の develop（#16 の既定の許可リストと、#27 の旧既定 B）：
 
@@ -139,19 +147,21 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - `cfg!`（`std::cfg!` / `core::cfg!` を含む）と、関数の中に付けた `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は `E0003` です。関数の中とは、文・式・`let`・match の腕・構造体リテラルの欄・構造体パターンの欄・引数・本体の中の項目と、本体の中で定義した構造体・列挙の欄と列挙子です。項目に付ける `#[cfg]` は通します（Verus が見なかった項目は `verify` で `unknown`、同じパスの重複は `E0003`）。
 - `env!` / `option_env!` / `file!`（`std::` / `core::` から始まるパスを含む）は、`unchecked fn` の本体の外では、どこに書いても `E0003` です。値が要るなら `unchecked fn` で包みます。
 - `line!` / `column!` / `module_path!` / `include_str!` / `include_bytes!` は、Verus の実行と素のビルドで同じ値になるので通します。ただし生成コードの位置とモジュールを指すので、`include_str!` で読むファイルは `build/verus/src/` から見たパス（`"../../../src/data.txt"` など）で書きます。
-- 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）、外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ）。
+- 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）、外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ。#49）。
 
 * 元の仕様：マクロの扱いを定めていない。§5 は Rust の文法を土台とする。
-* 根拠：#16（PR #15、#20、#26）、#27（PR #26、`tests/golden/cfg_in_body/`）。`assume_specification .. ensures false` や `admit()` が一つ紛れ込むだけで何でも verified になる（P0）。
-* 状態：方針は作者が決めた（#27）。拒否リストへの組み替えは実装中（#27）。拒否リストの中身と依存クレートのマクロの扱いは判断待ちの既定（#16）。
+* 根拠：#16（PR #15、#20、#26）、#27（PR #26、`tests/golden/cfg_in_body/`）、#53、#49。`assume_specification .. ensures false` や `admit()` が一つ紛れ込むだけで何でも verified になる（P0）。
+* 状態：判断待ちの既定（#53）。今の develop は上の許可リスト。derive・属性マクロの穴は実装中（#49）。
 
-### §5.2 名前付きの消去される引数は、宣言だけ
+### §5.2 名前付きの消去される引数は、専用の構文で渡す
 
-`uses r: Region<..>` / `uses r: &mut Region<..>` の宣言は受理し、それを持つ関数の呼び出しは `E0003` にします。黙って何も渡さない書き下しにはしません。`uses r: T` の `T` が `Region<..>` / `&Region<..>` / `&mut Region<..>` でなければ `E0501` です。
+名前付きの消去される引数（`uses r: Region<..>` / `uses r: &mut Region<..>`）を持つ関数に、呼び出し側から領域を渡す専用の構文を作ります。構文の形は決まっていません（`build_chain(n, @r)` のように引数に混ぜるか、`build_chain(n)@(r)` のように分けるかなど、作者が案の比較を求めている）。
+
+今の develop：宣言は受理し、それを持つ関数の呼び出しは `E0003` です。黙って何も渡さない書き下しにはしません。`uses r: T` の `T` が `Region<..>` / `&Region<..>` / `&mut Region<..>` でなければ `E0501` です。
 
 * 元の仕様：宣言の書き下し（§7.3）だけがあり、呼び出し側の書き方がない。
-* 根拠：#19（PR #20）。推奨は案 B（呼び出しの引数に `@r` と書く）。
-* 状態：判断待ちの既定（#19）。
+* 根拠：#19（PR #20）。構造体を作る前の補助関数、二つの領域を行き来する再帰、領域の共有、補助関数の使い回しに要る。
+* 状態：専用の構文を作ることは作者が決めた。構文の形は判断待ち（#19）。
 
 ### §5.4 match の腕の本体に直接書いたループの句
 
@@ -165,30 +175,38 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### §6.2 `borrow` ブロックを `break` / `continue` / `return` / `?` で抜けるとき
 
-既定（案 D）：`borrow` / `borrow mut` ブロックを、普通に終わるときだけでなく、`break` / `continue` / `return` / `?` で抜けるときにも権限を返します。Rust のブロックと同じく、ブロックを抜けたら借用が終わります。
+`borrow` / `borrow mut` ブロックを、普通に終わるときだけでなく、`break` / `continue` / `return` / `?` で抜けるときにも権限を返します（案 D）。Rust のブロックと同じく、ブロックを抜けたら借用が終わります。
 
-- 書き下し：`borrow mut` のブロックの中の `break` / `continue` / `return` のうち、ブロックの外（外のループや関数）へ抜けるものの直前に `insert` を置きます。ブロックの中のループやラベル付きのブロックへの `break` は対象外です。`borrow` が入れ子なら、内側から順に戻します。
-- `borrow mut` の中の `?` は、`match` と `insert` と `return` に展開して書き下します。
+- 書き下し：`borrow mut` のブロックの中の `break` / `continue` / `return` のうち、ブロックの外（外のループ、ラベル付きのブロック、関数）へ抜けるものの直前に `proof { <r>.insert(__eyk_perm_p); }` を置きます。ブロックの中のループやラベル付きのブロックで閉じる文には置きません。行き先の決め方は検査と同じです。`borrow mut` が入れ子なら、内側から順に戻します。
+- 値を持って抜ける場合（`break 'a e` / `return e`）は、値を先に評価してから権限を戻します（`{ let __eyk_exit = e; proof { .. } return __eyk_exit }`）。値の式が借りている権限を読むことがあるためです（`return (*p).val` など）。
+- `borrow mut` の中の `e?` は明示の `match` に展開し、失敗の腕で権限を戻してから返します。失敗の値の形は、関数の戻り値の型の最後の名前で決めます（`Option` なら `None`、`Result` なら `Err(::core::convert::From::from(e))`）。戻り値の型を `Option<..>` / `Result<..>` と書いていない関数では、`borrow mut` の中の `?` は `E0003` です（書き下しは型を知らず、型の別名も読まないので、推測で別の形を書かない）。
+- 本体が必ず抜ける `borrow mut`（`loop { borrow mut r[p] { break; } }` など）では、本体の後の `let __eyk_res` と `insert` を置きません（制御が届かず、rustc が警告を出すため）。
+- クロージャの中の `return` / `break` はクロージャの外へ抜けないので、権限を戻す文は置きません。
 - 共有の `borrow` は領域から権限を取り出さないので、戻すものはありません。
-- 検査：ブロックを抜ける点で、`borrow` の `p` を Γ から消します（ブロックの終わりと同じ）。
+- 検査：抜ける点で、行き先より内側で開いた `borrow` の `p` を Γ から消します（ブロックの終わりと同じ）。抜けた先の Γ の比較（`E0510` / `E0511`）は、消したあとの Γ で行います。`return` / `?` で `Owned` の権限が残っていれば、今までどおり `E0505` です。
 - 参照モデル（`formal/linearity`）は、この規則で健全性の証明と判定の表を作り直します。
 - `panic = abort`（§1.3）なので、巻き戻しの経路はありません。
 
-今の develop（案 A）：`borrow` ブロックの中から外の枠へ `break` / `continue` で抜ける文は `E0511` です（位置はその文）。`while` / `for` / `loop` とラベル付きのブロックのどれでも同じです。抜けた先の Γ には、借りた権限を残しません。`return` / `?` で抜けるのは通します。参照モデルと判定の表（`formal/oracle/linearity.tsv`）も案 A です。
+今の develop（旧既定 A）：`borrow` ブロックの中から外の枠へ `break` / `continue` で抜ける文は `E0511` です（位置はその文）。`while` / `for` / `loop` とラベル付きのブロックのどれでも同じです。抜けた先の Γ には、借りた権限を残しません。`return` / `?` で抜けるのは通します。参照モデルと判定の表（`formal/oracle/linearity.tsv`）も案 A です。
 
 * 元の仕様：この場合を書いていない。文言どおりに読むと `loop { borrow mut r[p] { break; } }` を受理し、ループの後に借用中の `p` が残る（健全でない）。`borrow mut` を `return` で抜けると、権限が領域に戻らない。
-* 根拠：#21（PR #20、#22）。案 D は作者のコメントを受けて既定にした。
-* 状態：判断待ちの既定（#21）。案 D は実装中（#21）。
+* 根拠：#21（PR #20、#22、#51）。
+* 状態：作者が決めた（案 D）。実装中（PR #51。参照モデルは続く PR）。
 
 ### §6.4 `ensures` の `&mut` 引数は `old` / `final` を明示する
 
 `ensures` と `returns` に `&mut` 引数を `old(..)` も `final(..)` も付けずに書くと、`E0004` です。
 
 - 対象は `&mut self`（`self: &mut Self` を含む）、`x: &mut T`、`uses r: &mut Region<..>` の `r`、`uses &mut p@` の `p@` と `*p` です。`self@f`、`self@f[p]`、`self.view()` の `self` も対象です。
-- 量化子・クロージャの引数、`match` の腕、`let` のパターンで束縛し直した同じ名前は対象外です。
+- 量化子・クロージャの引数、`match` の腕、`let` のパターンで束縛し直した同じ名前は、その中では束縛した値を指すので対象外です。
 - 文言は、事後の値の `final(x)` と入口の値の `old(x)` の両方の書き方を示します。
 - `requires` の裸の `x` は入口の値です（Verus と同じ）。
-- 書き下しは、利用者が書いた `ensures` をそのまま写します。暗黙に `final` で包みません。
+- `old(e)` / `final(e)` の `e` が、`&mut` の引数、`uses &mut p@` の `p@` / `*p`、それらの消去フィールド（`x@f`）のどれでもなければ、どの句でも `E0004` です。Verus の `old` / `final` は `&mut` の引数そのものにしか付けられず、`old(self.len)` は生成コードの型エラーになります（`old(self).len` と書く）。
+- 権限を持つ名前 `p`（`uses` の権限と、事後条件の `gives` の権限）を束縛し直した中の `p@` / `*p` は、どの句でも、`old` / `final` の下でも `E0507` です。書き下しは束縛に従わず外側の引数の権限を指すからです。
+- 中を読まないマクロの引数（トークン列）も、`&mut` 引数の名前を探して `E0004` にします（位置はマクロ全体）。`.` / `::` の直後と、直後に `:` が続くパスの先頭・フィールドの名前は見ません（`S { f: x }` の `x` は見る）。`matches!(g(x), 3)` のように参照を丸ごと渡すと、裸のまま Verus に渡って入口の値と読まれ、黙って誤るためです。トークン列の中の束縛は読まないので、そこで束縛し直した名前も報告します。
+- マクロの引数の中の `final(..)` も `E0004` です（Verus が受け付けない）。文言は、事後の値なら条件をマクロの外で書く（`*final(x) == 3`）よう案内します。マクロの引数の中の `old(x)` は書けます。
+- `final(x)` を参照のまま丸ごと渡す形（`g(final(x))`、`final(x) == old(x)`）は Ebykn では拒まず、Verus に任せます（見分けるには型が要り、どちらも黙っては誤らない）。
+- 書き下しは、利用者が書いた `ensures` をそのまま写します。暗黙に `final` で包みません。`old(x@f)` / `final(x@f)` は `old(x).f@` / `final(x).f@` に書き下します。
 - Ebykn 自身が足す契約は `final` で書きます。§6.4 の `x: &mut T`（`&mut self` を含む）の展開は `requires P[old(x)]`、`ensures P[final(x)]` です。`uses &mut p@` に足す `ensures final(__eyk_perm_p).pptr() == p`（§7.3）も同じです。
 - 論理の領域添字は `final(self)@f[p]`、`old(self)@f[p]`、`old(self@f)[p]`、`final(r)[p]` も領域として読み、`final(self).f@.index(p)`、`final(r).index(p)` などに書き下します。
 
@@ -204,16 +222,16 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 `Ptr<T>` の `T` にゼロサイズ型（ZST）は使えません。次の 2 段で止めます。
 
-- `ebykn check` が、`.eyk` の上で確実に ZST と分かる型を `Ptr<T>` に使ったらエラーにし、`Cell<T>` を勧めます。確実に分かる型とは、`()`、フィールドのない構造体、ZST のフィールドしかない構造体、`owns` / `spec` だけの構造体です。
-- prelude の `Ptr::new` / `Ptr::empty` が、`verus!` の外に置いた定数 `assert!(size_of::<T>() != 0, ..)` を参照します。ZST で単相化するとコンパイルエラーになり、ジェネリックな関数を経由しても止まります。検証のときは単相化しないので、この検査は効きません。
+- `ebykn check` が、`.eyk` の上で確実に ZST と分かる型を `Ptr<T>` に使ったら `E0517` にし、識別が要るなら `Cell<T>` を使うよう案内します。見るのは、型の位置の `Ptr<T>`、ターボフィッシュの `Ptr::<T>`、型を書かない `Ptr::new(e)` の `e` です。確実に分かる型とは、`()` と ZST だけの tuple、長さ 0 の配列と ZST の配列、`PhantomData`、実行時のフィールドがすべて ZST のクレートの構造体（フィールドのない構造体、unit struct、`owns` / `spec` だけの構造体を含む。型の引数は使う側の型を代入して判定する）です。ジェネリックな `T` と、ジェネリックな構造体や型の別名の中の `Ptr<T>` を経由するものは判定しません（ZST ならビルドで止まる）。glob の `use` があれば判定しません。
+- prelude の `Ptr::new` / `Ptr::empty` が、`verus!` の外に置いた定数 `assert!(size_of::<T>() != 0, ..)` を参照します。ZST で単相化するとコンパイルエラー（`E0080`）になり、ジェネリックな関数を経由しても止まります。検証のときは単相化しないので、この検査は効きません（検証では参照しない。参照すると Verus が拒否する）。
 
 prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を持ちます。`Region::insert` は、鍵が新しいことを `requires` ではなく `ensures` で返します（利用者の義務にしない）。識別が要る中身のない型は、大きさによらず識別子を持つ `Cell<()>` で書きます。
 
-今の develop（#12 の旧既定 A）：`Ptr::new` / `Ptr::empty` は、ZST のとき戻りません（無限ループ）。`--no-cheating` でも検証が通り、実行すると止まりません。`ebykn check` の検査とコンパイル時の検査はまだありません。
+今の develop（#12 の旧既定 A）：`Ptr::new` / `Ptr::empty` は、ZST のとき戻りません（無限ループ）。`--no-cheating` でも検証が通り、実行すると止まりません。`E0517` とコンパイル時の検査はまだありません。
 
 * 元の仕様：`Region::insert` は `requires !old(self).contains(perm.loc())`。ZST に触れていない。
-* 根拠：#12。vstd の `is_distinct` は `size_of::<T>() != 0` を前提にし、Verus はジェネリックな構造体の `size_of` が 0 でないことを示せない（`size_of_generic.rs`）。そのままでは `stack` の `push` を検証できない。
-* 状態：作者が決めた。実装中（#12）。
+* 根拠：#12（PR #47）。vstd の `is_distinct` は `size_of::<T>() != 0` を前提にし、Verus はジェネリックな構造体の `size_of` が 0 でないことを示せない（`size_of_generic.rs`）。そのままでは `stack` の `push` を検証できない。
+* 状態：作者が決めた。実装中（PR #47）。
 
 ### §7.1 `Seq` の `first()` / `last()` は vstd の意味
 
@@ -292,9 +310,9 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 書き下しが自分で使う `admit` は、`vstd::prelude::admit()` のパスで書きます。
 - インラインの `mod` の中にも同じ `use` を置きます（Rust のモジュールは親の `use` を見ない）。
 
-* 元の仕様：「各 `.rs` の先頭は `use vstd::prelude::*; use ebykn_prelude::*; verus! {`」。
-* 根拠：#16（PR #26）。glob の下では、本体の文 `requires(x == 0);` が黙って事前条件になる（`prelude_glob_requires_in_body.rs`）。明示の `use` の下では名前が見つからない（`explicit_prelude_uses.rs`）。
-* 状態：判断待ちの既定（#16）。
+* 元の仕様：§7.5「各 `.rs` の先頭は `use vstd::prelude::*; use ebykn_prelude::*; verus! {`」。§1.3・§7.1「書き下しの出力は vstd を直接参照せず、prelude の API だけを参照する」。名前を挙げた `use vstd::prelude::{..}` と `vstd::prelude::admit()` は、§1.3・§7.1 の規則とも違う。
+* 根拠：#16（PR #26）。glob の下では、本体の文 `requires(x == 0);` が黙って事前条件になる（`prelude_glob_requires_in_body.rs`）。明示の `use` の下では名前が見つからない（`explicit_prelude_uses.rs`）。`Tracked` / `Ghost` / `old` は `verus!` が裸の名前で読むので、prelude を通せない。
+* 状態：判断待ちの既定（#16。#53 に委ねた）。
 
 ### §7.5 / §12 整形と組み立て
 
@@ -329,19 +347,19 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
 | `failed` | Verus のエラーの主な位置が、項目の行の範囲にある |
-| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、どの項目にも割り当てられないエラーがある |
+| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、どの項目にも割り当てられないエラーがあるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
+
+- 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
 - Verus の数えたエラーと読み取ったエラーの見出しの数が違えば、エラーを割り当てられないとみなします。
 - `failed` か `unknown` があれば、`verify` は失敗します。
 - 証明なしの前提（`admit` / `unchecked` / `external`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
 - 出力は、項目ごとの「状態 パス」の行と、最後の `results N verified, M errors` です（`status`（M5）の形が決まるまでの仮の形）。
-- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します。
+- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの主な位置がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
 - `--json` では、1 行の JSON（`$message_type: ebykn-verify`。`results` は `{"ran": true, "verified": N, "errors": M}` か `{"ran": false, "errors": N}`）を標準出力に出し、Verus の診断は標準エラーに出します。
 - Verus の出力は `CARGO_TERM_COLOR=never` で受け取り、制御文字を除いて読みます。Verus の診断は、生成コードの位置を `build/verus/src/..（生成コード）` として出します（§10.2 の変換できない場合の形）。
-
-Verus が検証の前に止まったら、どの項目も `verified` にせず、失敗していない項目はすべて `unknown` にします。実装中（#43）。今の develop は、項目ごとの状態を検証したときと同じに決めるので、検証していない項目が `verified` と出ます（終了コードは 1）。
 
 紛れ込んだ前提の照合：1 回目が検証まで進んだら、`cargo verus focus -- --no-cheating --no-verify` をもう一度走らせ、出たエラーを、Ebykn が自分で出した前提と照らし合わせます（`crates/ebykn/src/no_cheating.rs` の `judge`）。実装中（PR #42）。
 
@@ -352,8 +370,8 @@ Verus が検証の前に止まったら、どの項目も `verified` にせず�
 - 今の develop は、2 回目を走らせません。`.eyk` の検査をすり抜けた `assume(false)` を前提に、何でも verified になります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
-* 根拠：#17（PR #26）、#37（PR #42）、#43。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
-* 状態：基準で決めた。照合（#37）と止まったときの `unknown`（#43）は P0 のバグの修正で、実装中。
+* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
+* 状態：基準で決めた。照合（#37）は P0 のバグの修正で、実装中（PR #42）。
 
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
@@ -367,14 +385,17 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 ### §10.1 仕様にないコード
 
-| コード | 内容 | 根拠 | 状態 |
-| --- | --- | --- | --- |
-| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、`.eyk` の証明構文（M3 で `E0303` に置き換える）、性質ファイルだけの構文も、文言を分けて `E0001` | #7（PR #15） | 基準で決めた |
-| `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、`check --base`、`build --verified`、名前付きの消去される引数の呼び出しなど） | #17（PR #20） | 基準で決めた |
-| `E0004` | `ensures` / `returns` の裸の `&mut` 引数（§6.4） | #10（PR #35） | 作者が決めた。実装中（PR #35） |
+元の仕様の §10.1 の表にないコードです。元の仕様は、構文エラー、プロジェクトの誤り、未実装の機能、§6.4 の `&mut` の事後条件、ZST の `Ptr` に当たるコードを持ちません。
 
-`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
+| コード | 内容 | 元の仕様 | 根拠 | 状態 |
+| --- | --- | --- | --- | --- |
+| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、`.eyk` の証明構文（M3 で `E0303` に置き換える）、性質ファイルだけの構文も、文言を分けて `E0001` | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
+| `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、`check --base`、`build --verified`、名前付きの消去される引数の呼び出しなど） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた。実装中（PR #35） |
+| `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた。実装中（PR #47） |
+
+`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0517` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
 
 ### §10.1 位置の数え方
 
@@ -388,7 +409,14 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 ### `stack` が verified になるのは M3
 
-`stack` は `.eyk` だけでは verified になりません。`invariant` と `new` は verified、`push` と `pop` は failed（`final(self).invariant()` の事後条件）です。不変条件が `closed` で、`forall` の展開と帰納法が要るので、Verus が自動では示せません。証明は M3 の `.eykp` で足し、`stack` の golden が verified になることを M3 の完了条件にします。
+`stack` は `.eyk` だけでは verified になりません。`invariant` と `new` は verified、`push` と `pop` は failed（どちらも「postcondition not satisfied：`final(self).invariant()`」）です。不変条件が `closed` で、`forall` の展開と帰納法が要るので、Verus が自動では示せません。証明は M3 の `.eykp` で足し、`stack` の golden が verified になることを M3 の完了条件にします。
+
+M3 の `.eykp` で示す義務は次のとおりです。
+
+- `push`：新しい `n` が古い `nodes` にないこと（`Ptr::new` の権限と `Region::insert` の `ensures`）と、`order` の添字が一つずれることから、不変条件の `forall` の 2 項を示す。
+- `pop`：`order` に重複がないこと（`next` をたどると末尾の `None` に着くことからの帰納法。M0 の `lemma_no_duplicates` / `lemma_shifted_equal`）から、`h` が残りの `order` にないことと添字のずれを示す。
+
+`tests/golden/stack/expected/verus/` は、M0 の手書きの stack（2bca455）から `// +` の証明を除いたものです（ほかの違いは先頭の `use`、`and { }` の括弧、範囲の束縛子の型 `: int`）。
 
 * 元の仕様：§12 の M2 の完了条件は「`stack` が verified」。
 * 根拠：#17（PR #26）。証明は M0 の手書きの stack（2bca455）にある。
@@ -398,15 +426,15 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 元の仕様の OPEN のうち、M0 の実測で結果が出たものです。
 
-| OPEN | 結果 | 状態 |
-| --- | --- | --- |
-| OPEN-3（ユーザー定義 `Drop`） | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、`E` にしない。書き下しで `drop` に両方を足す（§7.2）。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | 実測で決めた |
-| OPEN-4（`borrow mut` の書き下し） | `remove` ＋ `insert`（既定どおり）。`insert` は `proof { }` に入れる（§7.3） | 実測で決めた |
-| OPEN-6（`by(mode)` の一覧） | 構文は §5.2 の 5 つを受け付け、使えないものは Verus のエラーに任せる。使えるのは場所で違う：`assert .. by(m)` は `bit_vector` / `nonlinear_arith` / `compute` / `compute_only`、関数単位の `by(m)` は `bit_vector` / `nonlinear_arith`。`integer_ring` は、Singular 付きでビルドした Verus でないと使えない | 実測で決めた |
-| OPEN-7（Verus の結果の取り方） | §9.1 | 実測で決めた |
-| OPEN-11（消去済みのクレート） | §1.3 | 実測で決めた |
-| OPEN-12（契約付きクロージャ） | Verus の構文（`\|x\| -> (r: T) requires .. ensures .. { .. }`）が通る。既定どおり、そのまま通す | 実測で決めた |
-| OPEN-13（`?`、`for .. in` の `invariant`、`let-else`） | どれも通るので `E` にしない。`?` は `Option` と `Result` で通り、早期 return の経路も事後条件で検査される | 実測で決めた |
+| OPEN | 元の既定 | 結果 | 出所 | 状態 |
+| --- | --- | --- | --- | --- |
+| OPEN-3（ユーザー定義 `Drop`） | M0 で確かめ、対応がなければ `owns` を持つ型の `Drop` を E にする | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、E にしない。書き下しで `drop` に両方を足す（§7.2）。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | #6（PR #13）、`drop.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_tracked_field.rs` | 実測で決めた |
+| OPEN-4（`borrow mut` の書き下し） | `remove` ＋ `insert` | 既定どおり。`insert` は `proof { }` に入れる（§7.3） | #6（PR #13）、`tracked_field_forms.rs` | 実測で決めた |
+| OPEN-6（`by(mode)` の一覧） | §5.2 の 5 つ | 構文は 5 つを受け付け、使えないものは Verus のエラーに任せる。使えるのは場所で違う：`assert .. by(m)` は `bit_vector` / `nonlinear_arith` / `compute` / `compute_only`、関数単位の `by(m)` は `bit_vector` / `nonlinear_arith`。`integer_ring` は、Singular 付きでビルドした Verus でないと使えない | #6（PR #13）、`prover_modes.rs`、`prover_mode_*.rs` | 実測で決めた |
+| OPEN-7（Verus の結果の取り方） | JSON 出力があればそれ、なければ標準出力を解析 | §9.1 | #6（PR #13）、`json_output.rs`、`json_output_failure.rs` | 実測で決めた |
+| OPEN-11（消去済みのクレート） | Verus なしの rustc でビルドして確かめ、不可なら別の emitter を検討 | §1.3 | #6（PR #13）、`verus-verify` と `golden-verify` | 実測で決めた |
+| OPEN-12（契約付きクロージャ） | Verus の構文をそのまま通す | Verus の構文（`\|x\| -> (r: T) requires .. ensures .. { .. }`）が通る。既定どおり | #6（PR #13）、`closure.rs` | 実測で決めた |
+| OPEN-13（`?`、`for .. in` の `invariant`、`let-else`） | M0 で確かめ、未対応なら E にする | どれも通るので E にしない。`?` は `Option` と `Result` で通り、早期 return の経路も事後条件で検査される | #6（PR #13）、`question_mark.rs`、`for_loop.rs`、`let_else.rs` | 実測で決めた |
 
 ## 付録の例との食い違い
 
