@@ -6,6 +6,7 @@ pub mod file_size;
 pub mod formal_oracle;
 pub mod gate_tests;
 pub mod md_links;
+pub mod md_tables;
 pub mod prelude_exports;
 pub mod verus_pin;
 pub mod verus_probes;
@@ -26,6 +27,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-md-links",
         run: md_links::run,
+    },
+    Gate {
+        name: "check-md-tables",
+        run: md_tables::run,
     },
     Gate {
         name: "check-book",
@@ -109,7 +114,10 @@ pub fn fence_open(line: &str) -> Option<(char, usize, &str)> {
         return None;
     }
     let n = t.chars().take_while(|&x| x == c).count();
-    (n >= 3).then(|| (c, n, t[n..].trim()))
+    let info = t[n..].trim();
+    // バッククォートのフェンスの情報文字列はバッククォートを含まない（CommonMark）。
+    // 含めば、行頭のインラインコード（```foo```）でフェンスではない。
+    (n >= 3 && !(c == '`' && info.contains('`'))).then_some((c, n, info))
 }
 
 /// `open` で開いたフェンスを閉じる行か。
