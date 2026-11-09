@@ -69,6 +69,28 @@ const CFG_E0003_POSITIONS: &[&str] = &[
     "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> B { let B { #[cfg(P)] @items } = b; B { @items: items } }",
 ];
 
+/// 拒否リストの名前を、cfg の述語でない所（lint の名前）に書いた属性。トークンの検査は E0001 にしないので、
+/// 同じ並びの `#[cfg(..)]` の E0003 を止めない（PR #59 の 3 回目の再確認の B1）。`L` を名前に置き換える。
+const LINT_NEIGHBOR_POSITIONS: &[&str] = &[
+    "pub struct S { pub x: u32, pub y: u32 }\npub fn m(s: S) -> (r: u32) ensures s.x != 0 ==> r == 2, { match s { S { #[cfg_attr(all(), allow(L))] #[cfg(any())] x: 0, .. } => 1, _ => 2 } }",
+    "pub struct S { pub x: u32, pub y: u32 }\npub fn m(s: S) -> (r: u32) ensures s.x != 0 ==> r == 2, { match s { S { #[cfg_attr(all(), cfg(any()), allow(L))] x: 0, .. } => 1, _ => 2 } }",
+    "pub fn f<#[cfg_attr(all(), allow(L))] #[cfg(any())] T>(a: u32) -> u32 { a }",
+    "pub fn f<#[cfg_attr(all(), cfg(any()), allow(L))] T>(a: u32) -> u32 { a }",
+    "pub fn f() -> u32 { let c = |#[cfg_attr(all(), allow(L))] #[cfg(any())] a: u32| 7u32; c(1) }",
+];
+
+#[test]
+fn lint_names_do_not_hide_the_e0003() {
+    for e in cfgs() {
+        for pos in LINT_NEIGHBOR_POSITIONS {
+            let src = pos.replace('L', e.name);
+            let (_, lines) = run(&src);
+            assert_eq!(lines.len(), 1, "{}\n---\n{src}", lines.join("\n"));
+            assert!(lines[0].contains(": E0003: "), "{}\n---\n{src}", lines[0]);
+        }
+    }
+}
+
 #[test]
 fn every_entry_rejects_its_example() {
     for e in DENYLIST {

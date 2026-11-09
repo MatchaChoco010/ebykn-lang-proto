@@ -681,6 +681,8 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
         "pub struct S { pub x: u32 }\npub fn p4(s: S) -> (r: u32) ensures s.x != 0 ==> r == 2, { match s { S { #[r#cfg(any())] x: 0, .. } => 1, _ => 2 } }",
         "pub struct S { pub x: u32 }\npub fn p(s: S) -> u32 { let S { #[cfg_attr(all(), r#cfg(any()))] x } = s; x }",
         "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> B { let B { #[cfg(test)] @items } = b; B { @items: items } }",
+        // fn の引数のパターンの欄（引数そのものの属性は受理。PR #59 の 3 回目の再確認の nit）。
+        "pub struct S { pub x: u32 }\npub fn t5(S { #[cfg(any())] x, .. }: S) -> u32 { 0 }",
     ] {
         rejects(src, "E0003", "`#[cfg(..)]` on a pattern");
     }

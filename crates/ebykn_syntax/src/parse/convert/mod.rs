@@ -245,11 +245,10 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
         | ast::GenericParam::Type { attrs, .. }
         | ast::GenericParam::Const { attrs, .. }) = p;
         // 診断は cfg の属性を指す（`<#[allow(unused)] #[cfg(x)] T>` の `allow` ではない）。
+        // 拒否リストの名前の cfg を持つ属性は、トークンの検査の E0001 だけにする（ほかの属性は見る）。
         if let Some(a) = attrs
             .iter()
-            .find(|a| ast::has_cfg(std::slice::from_ref(*a)))
-            // 拒否リストの名前の cfg は、トークンの検査の E0001 だけにする。
-            && !attrs.iter().any(crate::denylist::attr_denied)
+            .find(|a| ast::has_cfg(std::slice::from_ref(*a)) && !crate::denylist::attr_denied(a))
         {
             push(
                 a.span,

@@ -197,6 +197,18 @@ fn attr(tts: &[TokenTree], i: usize) {
     {
         push(span, Message::AttrPosition { written });
     }
+    // cfg の述語（拒否リストの E0001 と、頼っている cfg の名前）は、属性ごとに一度だけ見る
+    // （`cfg_attr` の中の属性も [`crate::denylist::for_each_cfg_pred`] がたどる）。
+    let (kind, rest) = crate::denylist::attr_head(&body);
+    crate::denylist::for_each_cfg_pred(kind, rest, &mut |pred, cond| {
+        let written = match (cond, inner) {
+            (false, false) => "#[cfg(..)]",
+            (false, true) => "#![cfg(..)]",
+            (true, false) => "#[cfg_attr(..)]",
+            (true, true) => "#![cfg_attr(..)]",
+        };
+        deny_cfg(pred, written, span);
+    });
     meta(&body, inner, span);
 }
 
@@ -283,25 +295,13 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
             },
         );
     } else if name == "cfg" {
-        if let Some(TokenTree::Group(g)) = body.get(k + 1) {
-            let written = if inner { "#![cfg(..)]" } else { "#[cfg(..)]" };
-            deny_cfg(&g.stream(), written, span);
-        }
+        // 述語は [`attr`] が拒否リストで見た。
     } else if name == "cfg_attr" {
+        // 条件と、中の cfg の述語は [`attr`] が拒否リストで見た（条件で属性が付くかどうかが変わる。
+        // `derive` などで、Verus のときだけ impl ができる）。ここでは中の属性のほかの検査だけをする。
         if let Some(TokenTree::Group(g)) = body.get(k + 1) {
             let args: Vec<TokenTree> = g.stream().into_iter().collect();
-            // 最初の引数は条件。残りが属性。条件で属性が付くかどうかが変わる（`derive` などで、
-            // Verus のときだけ impl ができる）ので、条件も拒否リストで見る。
-            let parts = split_commas(&args);
-            if let Some(cond) = parts.first() {
-                let written = if inner {
-                    "#![cfg_attr(..)]"
-                } else {
-                    "#[cfg_attr(..)]"
-                };
-                deny_cfg(&cond.iter().cloned().collect(), written, span);
-            }
-            for a in parts.into_iter().skip(1) {
+            for a in split_commas(&args).into_iter().skip(1) {
                 meta(a, inner, span);
             }
         }
@@ -327,14 +327,7 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
 /// cfg の述語に拒否リストの名前があれば、診断にする。`all` / `any` / `not` の入れ子の中まで、
 /// 識別子をすべて見る（`feature = "x"` の値は文字列なので見ない）。
 fn deny_cfg(pred: &TokenStream, written: &str, span: crate::span::Span) {
-    fn find(ts: &TokenStream) -> Option<&'static crate::denylist::Entry> {
-        ts.clone().into_iter().find_map(|t| match t {
-            TokenTree::Ident(i) => crate::denylist::cfg_entry(&unraw(&i.to_string())),
-            TokenTree::Group(g) => find(&g.stream()),
-            _ => None,
-        })
-    }
-    if let Some(entry) = find(pred) {
+    if let Some(entry) = crate::denylist::pred_entry(pred) {
         push(
             span,
             Message::Denied {

@@ -173,6 +173,7 @@ impl<'a> Walker<'a> {
                     self.var_types.insert(i.name.clone(), ty.clone());
                 }
                 self.add_locals(pat);
+                self.param_pattern_cfg(pat);
             }
         }
         for u in contract.uses() {

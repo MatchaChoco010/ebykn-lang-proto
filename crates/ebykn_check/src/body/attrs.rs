@@ -47,21 +47,58 @@ impl Walker<'_> {
         }
     }
 
-    /// 式の属性：Rust の組み込みのものだけ（[`Walker::builtin_attrs_only`]）で、安定版の Rust が式の属性を
-    /// 許す位置（[`Walker::attr_ok`]）か、代入・二項演算・型変換の文の左端（[`Walker::stmt`] が E0003 を
-    /// 出した）でなければ E0003。安定版の Rust は、それ以外の位置の式の属性を拒否する（`attributes on
-    /// expressions are experimental`）。Verus の toolchain では通るが、Verus なしのビルドで落ちる（PR #59 の
-    /// 再確認）。論理文脈の式は Verus なしのビルドで消える。
     /// パターン（クロージャの引数、構造体パターンの欄と `@x`）の `#[cfg]` は E0003（#95）。§6 の検査は cfg を
     /// 評価せずにパターンの名前（`@x` なら権限）を束縛するので、検査が見るパターンとコンパイルされるパターンが
     /// 食い違う。
     pub(super) fn no_cfg_pattern(&mut self, attrs: &[ast::Attr], span: Span) {
-        // 拒否リストの名前の cfg は、構文解析の E0001 だけにする。
-        if crate::index::has_cfg(attrs) && !attrs.iter().any(ebykn_syntax::denylist::attr_denied) {
+        // 拒否リストの名前の cfg を持つ属性は、構文解析の E0001 だけにする（ほかの属性は見る）。
+        if attrs.iter().any(|a| {
+            crate::index::has_cfg(std::slice::from_ref(a))
+                && !ebykn_syntax::denylist::attr_denied(a)
+        }) {
             self.diags.push(
                 span,
                 Message::Check(CheckMsg::Unimplemented(Unimpl::CfgOnPattern)),
             );
+        }
+    }
+
+    /// fn の引数のパターンの中の `#[cfg]`（`fn f(S { #[cfg(..)] x, .. }: S)`）。引数そのものの属性
+    /// （`fn f(#[cfg(..)] x: u32)`）は受理するが、中のパターンの欄は [`Walker::bind`] と同じく E0003 にする
+    /// （fn の引数は `bind` を通らないので、ここでたどる）。
+    pub(super) fn param_pattern_cfg(&mut self, p: &ast::Pat) {
+        use ast::{FieldPat, PatKind};
+        self.no_cfg_pattern(&p.attrs, p.span);
+        match &p.kind {
+            PatKind::Ident { sub: Some(q), .. } => self.param_pattern_cfg(q),
+            PatKind::Tuple(ps) | PatKind::Or(ps) | PatKind::Slice(ps) => {
+                for q in ps {
+                    self.param_pattern_cfg(q);
+                }
+            }
+            PatKind::TupleStruct { elems, .. } => {
+                for q in elems {
+                    self.param_pattern_cfg(q);
+                }
+            }
+            PatKind::Ref { pat, .. } | PatKind::Paren(pat) | PatKind::Type { pat, .. } => {
+                self.param_pattern_cfg(pat)
+            }
+            PatKind::Struct { fields, .. } => {
+                for f in fields {
+                    match f {
+                        FieldPat::Field {
+                            attrs, pat, span, ..
+                        } => {
+                            self.no_cfg_pattern(attrs, *span);
+                            self.param_pattern_cfg(pat);
+                        }
+                        FieldPat::Erased { attrs, ident } => self.no_cfg_pattern(attrs, ident.span),
+                        FieldPat::ErasedRest { .. } => {}
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -85,6 +122,11 @@ impl Walker<'_> {
         }
     }
 
+    /// 式の属性：Rust の組み込みのものだけ（[`Walker::builtin_attrs_only`]）で、安定版の Rust が式の属性を
+    /// 許す位置（[`Walker::attr_ok`]）か、代入・二項演算・型変換の文の左端（[`Walker::stmt`] が E0003 を
+    /// 出した）でなければ E0003。安定版の Rust は、それ以外の位置の式の属性を拒否する（`attributes on
+    /// expressions are experimental`）。Verus の toolchain では通るが、Verus なしのビルドで落ちる（PR #59 の
+    /// 再確認）。論理文脈の式は Verus なしのビルドで消える。
     pub(super) fn expr_attrs(&mut self, e: &Expr) {
         self.builtin_attrs_only(&e.attrs);
         let ok = std::mem::replace(&mut self.attr_ok, false)

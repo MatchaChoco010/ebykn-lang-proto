@@ -214,20 +214,97 @@ pub fn cfg_entry(name: &str) -> Option<&'static Entry> {
         .find(|e| e.kind == DenyKind::Cfg && e.name == name)
 }
 
-/// cfg の属性（`#[cfg(..)]` / `#[cfg_attr(..)]`）が拒否リストの cfg の名前を含むか。含むなら、トークンの
-/// 検査（`parse::tokens`）がすでに E0001 を出しているので、同じ属性に E0003 を重ねない（#95 の位置）。
-pub fn attr_denied(a: &crate::ast::Attr) -> bool {
-    fn find(ts: &proc_macro2::TokenStream) -> bool {
-        ts.clone().into_iter().any(|t| match t {
-            proc_macro2::TokenTree::Ident(i) => {
-                let n = i.to_string();
-                cfg_entry(n.strip_prefix("r#").unwrap_or(&n)).is_some()
-            }
-            proc_macro2::TokenTree::Group(g) => find(&g.stream()),
-            _ => false,
-        })
+/// cfg の述語に拒否リストの名前があれば、その項目。`all` / `any` / `not` の入れ子の中まで、識別子を
+/// すべて見る（`feature = "x"` の値は文字列なので見ない。`r#` は外す）。
+pub fn pred_entry(pred: &proc_macro2::TokenStream) -> Option<&'static Entry> {
+    pred.clone().into_iter().find_map(|t| match t {
+        proc_macro2::TokenTree::Ident(i) => {
+            let n = i.to_string();
+            cfg_entry(n.strip_prefix("r#").unwrap_or(&n))
+        }
+        proc_macro2::TokenTree::Group(g) => pred_entry(&g.stream()),
+        _ => None,
+    })
+}
+
+/// 属性の名前の種類（cfg の述語を持つ属性か）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CfgAttr {
+    /// `cfg(述語)`
+    Cfg,
+    /// `cfg_attr(条件, 属性, ..)`
+    CfgAttr,
+    /// ほかの属性（lint の `allow(..)` など。引数は cfg の述語ではない）。
+    Other,
+}
+
+/// 属性の中身（`path args`）の、パスの名前の種類と、パスの後ろのトークン。先頭の `::` は飛ばし、名前は
+/// パスの最初の語で見る（`parse::tokens` の属性の検査と同じ）。
+pub fn attr_head(body: &[proc_macro2::TokenTree]) -> (CfgAttr, &[proc_macro2::TokenTree]) {
+    use proc_macro2::TokenTree;
+    let mut k = 0;
+    while matches!(body.get(k), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
+        k += 1;
     }
-    (a.is_builtin("cfg") || a.is_builtin("cfg_attr")) && find(&a.args)
+    let Some(TokenTree::Ident(head)) = body.get(k) else {
+        return (CfgAttr::Other, &[]);
+    };
+    let kind = if crate::macros::token_is_name(head, "cfg") {
+        CfgAttr::Cfg
+    } else if crate::macros::token_is_name(head, "cfg_attr") {
+        CfgAttr::CfgAttr
+    } else {
+        CfgAttr::Other
+    };
+    (kind, &body[k + 1..])
+}
+
+/// 属性の cfg の述語を一つずつ `f` に渡す。`cfg(述語)` の述語と、`cfg_attr(条件, 属性, ..)` の条件
+/// （`f` の 2 つ目の引数が真）と、並びの中の属性（再帰）。ほかの属性の引数（`allow(verus_keep_ghost)` の
+/// lint の名前など）は述語ではないので渡さない。トークンの検査（`parse::tokens`）の拒否リストの E0001 と、
+/// [`attr_denied`] の両方がこれで述語を決める。
+pub fn for_each_cfg_pred(
+    kind: CfgAttr,
+    rest: &[proc_macro2::TokenTree],
+    f: &mut dyn FnMut(&proc_macro2::TokenStream, bool),
+) {
+    use proc_macro2::TokenTree;
+    let Some(TokenTree::Group(g)) = rest.first() else {
+        return;
+    };
+    match kind {
+        CfgAttr::Cfg => f(&g.stream(), false),
+        CfgAttr::CfgAttr => {
+            let args: Vec<TokenTree> = g.stream().into_iter().collect();
+            let mut parts = args.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ','));
+            if let Some(cond) = parts.next() {
+                f(&cond.iter().cloned().collect(), true);
+            }
+            for a in parts {
+                let (k, r) = attr_head(a);
+                for_each_cfg_pred(k, r, f);
+            }
+        }
+        CfgAttr::Other => {}
+    }
+}
+
+/// 属性そのものが、トークンの検査で拒否リストの E0001 になるか（[`for_each_cfg_pred`] の述語のどれかに
+/// 拒否リストの名前がある）。なるなら、同じ属性に E0003 を重ねない（#95 の位置）。隣の属性は見ない。
+pub fn attr_denied(a: &crate::ast::Attr) -> bool {
+    let kind = if a.is_builtin("cfg") {
+        CfgAttr::Cfg
+    } else if a.is_builtin("cfg_attr") {
+        CfgAttr::CfgAttr
+    } else {
+        return false;
+    };
+    let rest: Vec<proc_macro2::TokenTree> = a.args.clone().into_iter().collect();
+    let mut denied = false;
+    for_each_cfg_pred(kind, &rest, &mut |pred, _| {
+        denied |= pred_entry(pred).is_some()
+    });
+    denied
 }
 
 /// マクロの名前が拒否リストにあれば、その項目。
