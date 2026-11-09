@@ -12,11 +12,17 @@
 //! <出力の行>        直前のコマンドの出力。行ごとに完全に等しいこと
 //! ```
 //!
-//! - `ebykn` は、このリポジトリでビルドしたもの（`target/debug/ebykn`）を `PATH` の先頭に置いて使う。
+//! - `ebykn` は、このリポジトリでビルドしたもの（`<リポジトリ>/target/debug/ebykn`）を `PATH` の先頭に置いて使う。
 //! - 出力の中の、例のディレクトリの絶対パスは `$PWD` と書く。
+//! - コマンドは 1 つずつ新しい `sh` で走る。`cd`・`export` などのシェルの状態は次のコマンドに引き継がれない
+//!   ので、それで始まるコマンドは失敗にする。ヒアドキュメント（`<<`）も、本文が期待の出力として読まれるので失敗にする。
+//!   引き継がれるのは、例のディレクトリのファイル（`ebykn build` が作る実行ファイルなど）と、次の `$?` だけ。
 //! - `$ echo $?` は、直前のコマンドの終了コードを出す（各コマンドの前に、直前の終了コードを `$?` に戻す）。
 //! - コマンドの前に出力の行があるもの、コマンドのないブロック、`\` で続けるコマンドは読めないので失敗にする。
 //! - 言語のないフェンスと閉じていないフェンスも失敗にする。` ```console ` 以外のフェンス（` ```eyk ` など）は実行しない。
+//!   その数を出力に出す。目次（`examples/README.md`）の ` ```console ` は実行しないので、失敗にする（各例の README に書く）。
+//! - `playground/`（`cargo xtask playground` の写し先）の下のファイルを追跡していたら失敗にする。追跡すると、
+//!   release のワークスペースの早送りが、作者の書き換えたファイルを上書きしうる。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +32,8 @@ use super::{Repo, Report, fence_close, fence_open};
 
 pub const DIR: &str = "examples/";
 pub const INDEX: &str = "examples/README.md";
+/// `cargo xtask playground` の写し先。追跡しない。
+pub const PLAYGROUND: &str = "playground/";
 
 /// README の 1 つのコマンドと、期待する出力。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,11 +51,27 @@ pub struct Example {
     /// 例の中の追跡しているファイル（`examples/<名前>/` からの相対パス）。
     pub files: Vec<String>,
     pub steps: Vec<Step>,
+    /// README の、実行しないフェンス（` ```console ` 以外）の数。
+    pub other_fences: usize,
 }
 
-/// README の ` ```console ` ブロックを読む。
-pub fn parse_readme(file: &str, text: &str) -> Result<Vec<Step>, String> {
+/// シェルの状態を変えるだけで、次のコマンドに引き継がれないもの。
+const STATEFUL: &[&str] = &["cd", "export", "unset", "source", ".", "alias", "set"];
+
+/// README の ` ```console ` ブロックを読む。コマンドと、実行しないフェンスの数を返す。
+pub fn parse_readme(file: &str, text: &str) -> Result<(Vec<Step>, usize), String> {
+    let (steps, other) = scan(file, text)?;
+    if steps.is_empty() {
+        return Err(format!(
+            "{file}: ```console のブロックがありません（打つコマンドと期待する出力を書きます）"
+        ));
+    }
+    Ok((steps, other))
+}
+
+fn scan(file: &str, text: &str) -> Result<(Vec<Step>, usize), String> {
     let mut steps: Vec<Step> = Vec::new();
+    let mut other = 0;
     let mut lines = text.lines().enumerate();
     while let Some((i, line)) = lines.next() {
         let Some((c, n, info)) = fence_open(line) else {
@@ -60,6 +84,9 @@ pub fn parse_readme(file: &str, text: &str) -> Result<Vec<Step>, String> {
             ));
         }
         let console = info.split_whitespace().next() == Some("console");
+        if !console {
+            other += 1;
+        }
         let mut block = 0;
         let mut closed = false;
         for (j, l) in lines.by_ref() {
@@ -79,6 +106,18 @@ pub fn parse_readme(file: &str, text: &str) -> Result<Vec<Step>, String> {
                 if cmd.ends_with('\\') {
                     return Err(format!(
                         "{file}:{no}: `\\` で続けるコマンドは読めません（1 行に書きます）"
+                    ));
+                }
+                if cmd.contains("<<") {
+                    return Err(format!(
+                        "{file}:{no}: ヒアドキュメント（`<<`）は使えません（本文が期待の出力として読まれます）"
+                    ));
+                }
+                if let Some(w) = cmd.split_whitespace().next()
+                    && STATEFUL.contains(&w)
+                {
+                    return Err(format!(
+                        "{file}:{no}: `{w}` で始まるコマンドは使えません（コマンドは 1 つずつ新しい sh で走り、シェルの状態は次に引き継がれません）"
                     ));
                 }
                 steps.push(Step {
@@ -106,18 +145,20 @@ pub fn parse_readme(file: &str, text: &str) -> Result<Vec<Step>, String> {
             ));
         }
     }
-    if steps.is_empty() {
-        return Err(format!(
-            "{file}: ```console のブロックがありません（打つコマンドと期待する出力を書きます）"
-        ));
-    }
-    Ok(steps)
+    Ok((steps, other))
 }
 
-/// 追跡しているファイルから例を集め、形を確かめる。読めたものを返し、誤りは `errors` に足す。
-pub fn collect(repo: &Repo, errors: &mut Vec<String>) -> Vec<Example> {
+/// 追跡しているファイルから例を集め、形を確かめる。読めたものを返し、誤りは `errors` に、
+/// 通ったときにも出す情報は `notes` に足す。
+pub fn collect(repo: &Repo, errors: &mut Vec<String>, notes: &mut Vec<String>) -> Vec<Example> {
     let mut by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for f in &repo.files {
+        if f.starts_with(PLAYGROUND) {
+            errors.push(format!(
+                "{f}: {PLAYGROUND} の下は追跡しません（作者が書き換える写しで、追跡すると release の早送りが上書きしうる）"
+            ));
+            continue;
+        }
         let Some(rest) = f.strip_prefix(DIR) else {
             continue;
         };
@@ -143,6 +184,21 @@ pub fn collect(repo: &Repo, errors: &mut Vec<String>) -> Vec<Example> {
             None
         }
     };
+    let mut index_fences = 0;
+    if let Some(index) = &index {
+        match scan(INDEX, index) {
+            Ok((steps, n)) => {
+                index_fences = n;
+                if let Some(s) = steps.first() {
+                    errors.push(format!(
+                        "{INDEX}:{}: 目次の ```console は実行しません。コマンドの例は各例の README に書き、ここは ```sh などにします",
+                        s.line
+                    ));
+                }
+            }
+            Err(e) => errors.push(e),
+        }
+    }
     let mut out = Vec::new();
     for (name, files) in by_name {
         let base = format!("{DIR}{name}");
@@ -163,9 +219,20 @@ pub fn collect(repo: &Repo, errors: &mut Vec<String>) -> Vec<Example> {
         }
         let readme = format!("{base}/README.md");
         match repo.read(&readme).and_then(|t| parse_readme(&readme, &t)) {
-            Ok(steps) => out.push(Example { name, files, steps }),
+            Ok((steps, other_fences)) => out.push(Example {
+                name,
+                files,
+                steps,
+                other_fences,
+            }),
             Err(e) => errors.push(e),
         }
+    }
+    if index.is_some() {
+        notes.push(format!(
+            "実行しないフェンス（```console 以外）: 目次 {index_fences}、各例 {}",
+            out.iter().map(|e| e.other_fences).sum::<usize>()
+        ));
     }
     out
 }
@@ -173,7 +240,7 @@ pub fn collect(repo: &Repo, errors: &mut Vec<String>) -> Vec<Example> {
 /// `check-examples`：形だけを見る（実行しない）。
 pub fn run_static(repo: &Repo) -> Report {
     let mut r = Report::default();
-    let examples = collect(repo, &mut r.errors);
+    let examples = collect(repo, &mut r.errors, &mut r.notes);
     let steps: usize = examples.iter().map(|e| e.steps.len()).sum();
     r.notes.push(format!(
         "例 {}、コマンド {steps} の形を検査した（実行は examples-verify）",
@@ -197,14 +264,46 @@ pub fn run(repo: &Repo) -> Report {
             notes: Vec::new(),
         };
     }
-    if !crate::cargo(&["build", "--quiet", "-p", "ebykn"]) {
-        return Report {
-            errors: vec!["ebykn をビルドできません".into()],
-            notes: Vec::new(),
-        };
-    }
-    let bin = repo.root.join("target/debug");
+    let bin = match build_ebykn(&repo.root) {
+        Ok(b) => b,
+        Err(e) => {
+            return Report {
+                errors: vec![e],
+                notes: Vec::new(),
+            };
+        }
+    };
     run_with(repo, &|dir, cmd, prev| sh(&bin, dir, cmd, prev))
+}
+
+/// `ebykn` を `<root>/target` にビルドし、`ebykn` のあるディレクトリ（`<root>/target/debug`）を返す。
+///
+/// `CARGO_TARGET_DIR` や `build.target-dir` に左右されないよう `--target-dir` を渡し、できたことを確かめる。
+/// 古い `ebykn` や、`PATH` にある別の `ebykn` を走らせないため。`--locked` で `Cargo.lock` を書き換えない。
+pub fn build_ebykn(root: &Path) -> Result<PathBuf, String> {
+    let target = root.join("target");
+    let target_arg = target
+        .to_str()
+        .ok_or_else(|| format!("{}: パスが UTF-8 ではありません", target.display()))?;
+    if !crate::cargo(&[
+        "build",
+        "--quiet",
+        "--locked",
+        "-p",
+        "ebykn",
+        "--target-dir",
+        target_arg,
+    ]) {
+        return Err("ebykn をビルドできません".into());
+    }
+    let bin = target.join("debug");
+    if !bin.join("ebykn").is_file() {
+        return Err(format!(
+            "{}: ビルドしたはずの ebykn がありません",
+            bin.join("ebykn").display()
+        ));
+    }
+    Ok(bin)
 }
 
 fn sh(bin: &Path, dir: &Path, cmd: &str, prev: i32) -> Result<(String, i32), String> {
@@ -267,7 +366,7 @@ fn prepare(repo: &Repo, ex: &Example) -> Result<PathBuf, String> {
 
 pub fn run_with(repo: &Repo, run_cmd: RunCmd) -> Report {
     let mut r = Report::default();
-    let examples = collect(repo, &mut r.errors);
+    let examples = collect(repo, &mut r.errors, &mut r.notes);
     let mut ran = 0;
     for ex in &examples {
         let dir = match prepare(repo, ex) {
@@ -353,6 +452,7 @@ mod tests {
             let readme = format!("{DIR}{name}/README.md");
             let steps: Vec<(String, String)> = parse_readme(&readme, &real(&readme))
                 .unwrap()
+                .0
                 .into_iter()
                 .map(|s| (s.cmd, s.expected.iter().map(|l| format!("{l}\n")).collect()))
                 .collect();
@@ -434,14 +534,27 @@ mod tests {
             ("```\n$ ebykn verify\n```\n", "言語のないフェンス"),
             ("```console\n$ ebykn \\\n  verify\n```\n", "`\\` で続ける"),
             ("```console\n$\n```\n", "`$` の後にコマンドがありません"),
+            (
+                "```console\n$ cd src\n```\n",
+                "`cd` で始まるコマンドは使えません",
+            ),
+            (
+                "```console\n$ export PATH=x\n```\n",
+                "`export` で始まるコマンドは使えません",
+            ),
+            (
+                "```console\n$ cat > a <<'X'\nfn f() {}\nX\n```\n",
+                "ヒアドキュメント",
+            ),
         ] {
             let err = parse_readme("R.md", text).unwrap_err();
             assert!(err.contains(want), "{text:?}: {err}");
         }
         // console 以外のフェンスは実行しない。
         let s = parse_readme("R.md", "```eyk\n$ x\n```\n```console\n$ a\nb\n$ c\n```\n").unwrap();
+        assert_eq!(s.1, 1);
         assert_eq!(
-            s,
+            s.0,
             vec![
                 Step {
                     line: 5,
@@ -493,6 +606,43 @@ mod tests {
             &real("examples/stack/README.md"),
         );
         assert_fails(&t.run(run_static), "examples/stack/: 目次");
+    }
+
+    #[test]
+    fn fails_when_playground_files_are_tracked() {
+        let mut t = real_examples(|_, s| s);
+        t.write("playground/hello/src/lib.eyk", "");
+        assert_fails(&t.run(run_static), "playground/hello/src/lib.eyk");
+    }
+
+    #[test]
+    fn fails_when_the_index_has_console_blocks() {
+        let mut t = real_examples(|_, s| s);
+        let index = mutate(&real(INDEX), "```sh\n", "```console\n$ ");
+        t.write(INDEX, &index);
+        assert_fails(&t.run(run_static), "目次の ```console は実行しません");
+    }
+
+    #[test]
+    fn counts_the_fences_that_are_not_run() {
+        let t = real_examples(|_, s| s);
+        let r = t.run(run_static);
+        assert_passes(&r);
+        // 目次の ```sh が 1 つ、hello の ```eyk が 1 つ。
+        assert!(
+            r.notes.iter().any(|n| n.contains("目次 1、各例 1")),
+            "{:?}",
+            r.notes
+        );
+    }
+
+    /// stack の README は「tests/golden/stack/ と同じもの」と書く。
+    #[test]
+    fn the_stack_example_is_the_golden_stack() {
+        assert_eq!(
+            real("examples/stack/src/lib.eyk"),
+            real("tests/golden/stack/src/lib.eyk")
+        );
     }
 
     #[test]

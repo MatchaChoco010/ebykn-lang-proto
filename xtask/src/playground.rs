@@ -47,9 +47,13 @@ pub fn copy(root: &Path, files: &[String]) -> Result<Copied, String> {
 }
 
 pub fn run(root: &Path, files: &[String]) -> bool {
-    if !crate::cargo(&["build", "--quiet", "-p", "ebykn"]) {
-        return false;
-    }
+    let bin = match crate::gates::examples::build_ebykn(root) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: playground: {e}");
+            return false;
+        }
+    };
     let c = match copy(root, files) {
         Ok(c) => c,
         Err(e) => {
@@ -90,7 +94,7 @@ pub fn run(root: &Path, files: &[String]) -> bool {
     }
     eprintln!(
         "\n次のようにして試す（説明は {PLAYGROUND}/README.md）:\n  export PATH=\"{}:$PATH\"\n  cd {} && ebykn verify",
-        root.join("target/debug").display(),
+        bin.display(),
         dir.join("hello").display()
     );
     true

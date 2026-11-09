@@ -8,7 +8,7 @@
 | [linearity-broken](linearity-broken/) | 権限の誤り（解放し忘れ E0505、二重解放 E0504）を `ebykn check` が見つけて止める |
 | [linearity-fixed](linearity-fixed/) | `linearity-broken` を直した版。権限の検査と検証を通る |
 | [stack](stack/) | 付録 B の stack。`owns` / `spec` と不変条件。いまは `push` / `pop` が verified にならない |
-| [main-program](main-program/) | `src/main.eyk` のプログラムを `ebykn build` で実行ファイルにする。まだ何も出力できない（Issue #54） |
+| [main-program](main-program/) | `src/main.eyk` のプログラムを `ebykn build` で実行ファイルにして実行する。表示は検証しない `unchecked fn` に置く（#54） |
 
 ## 試し方
 
@@ -30,5 +30,5 @@ ebykn verify
 ## 例を足す・直すとき
 
 - 機能が増えたら、それを示す例をここに足し、上の表にも載せます。
-- README の ```` ```console ```` のブロックは、CI（`cargo xtask examples-verify`）が実際に実行して、出力を比べます。`$ ` で始まる行がコマンド、続く行がその出力（標準エラーを含む）です。例のディレクトリの絶対パスは `$PWD` と書きます。`$ echo $?` は直前のコマンドの終了コードを出します。
+- README の ```` ```console ```` のブロックは、CI（`cargo xtask examples-verify`）が実際に実行して、出力を比べます。`$ ` で始まる行がコマンド、続く行がその出力（標準エラーを含む）です。例のディレクトリの絶対パスは `$PWD` と書きます。`$ echo $?` は直前のコマンドの終了コードを出します。コマンドは 1 つずつ新しい `sh` で走るので、`cd`・`export` とヒアドキュメント（`<<`）は使えません。
 - 形は `cargo xtask check-examples` で確かめられます（Verus なしで、実行はしない）。決まりの詳細は `xtask/src/gates/examples.rs` の先頭にあります。

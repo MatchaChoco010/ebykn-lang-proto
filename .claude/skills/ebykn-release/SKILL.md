@@ -380,7 +380,7 @@ fi
 git -C "$ws" merge-base --is-ancestor HEAD origin/release \
   || { echo "止まる：$ws の release に origin/release にないコミットがある"; git -C "$ws" log --oneline origin/release..HEAD; exit 1; }
 
-git -C "$ws" merge --ff-only origin/release
+git -C "$ws" merge --ff-only --no-overwrite-ignore origin/release
 [ "$(git -C "$ws" rev-parse HEAD)" = "$sha" ] || { echo "止まる：$ws の HEAD が ${sha} ではない"; exit 1; }
 echo 'ws_state=早送りした' >> "$dir/release-ws.txt"
 cat "$dir/release-ws.txt"
@@ -388,6 +388,7 @@ EOF
 ```
 
 - 作業ツリーに変更（追跡していないファイルを含む）があれば、捨てずに止まる。作者が試しに書いたものかもしれないため。`git stash`・`git checkout -- .`・`git clean` はしない。
+- `--no-overwrite-ignore`：無視されたファイル（`playground/` の下など）は `git status --porcelain` に出ないが、`git merge` は既定で、それを上書きする。新しいコミットが同じパスのファイルを追跡していたら、作者が書き換えたファイルを黙って上書きしないよう、git に止めさせる。止まったら、そのパスを報告し、作者に片づけてもらう。
 - 作者がワークスペースでコミットしていたら（`release` に `origin/release` にないコミットがある）、同じく止まる。
 - ここで止まっても、タグ・Release・`release` の早送りは済んでいる。ワークスペースは進めずに手順 8 に進み、手順 9 の報告に、止まった理由と `status` か `log` の出力を書く。作者が片づけたら、この手順だけをやり直す（何度やり直してもよい）。
 
@@ -409,7 +410,7 @@ echo "playground=$ws/playground" >> "$dir/release-ws.txt"
 EOF
 ```
 
-- `playground/` は `.gitignore` に入っているので、作者が書き換えても、次の回の「早送りする」の「作業ツリーに変更がある」には当たらない。
+- `playground/` は `.gitignore` に入っているので、作者が書き換えても、次の回の「早送りする」の「作業ツリーに変更がある」には当たらない。`playground/` の下のファイルは追跡しない（`check-examples` が、追跡されたファイルがあれば失敗にする）ので、早送りが作者のファイルを上書きすることもない。万一追跡されていても、「早送りする」の `--no-overwrite-ignore` で git が止まる。
 - すでにあるファイルは上書きしない。作者が書き換えたものは残り、新しく増えた例だけが足される。中身が `examples/` と違って残したファイルは、出力の「上書きせずに残した」に並ぶ。手順 9 の報告に添える。
 - ここで失敗しても（`ebykn` のビルドの失敗など）、タグ・Release・`release` の早送りは済んでいる。手順 8 に進み、手順 9 の報告に `playground.txt` の終わりを書く。
 
