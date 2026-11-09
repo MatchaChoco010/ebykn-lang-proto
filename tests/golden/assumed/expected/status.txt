@@ -3,4 +3,7 @@ verified assumed::caller
 admit assumed::helper
 unknown assumed::hidden
 external assumed::t
-results 2 verified, 0 errors
+unknown assumed::S::e
+unknown assumed::S::e
+verified assumed::<u32 as Tr2>::f
+results 4 verified, 0 errors

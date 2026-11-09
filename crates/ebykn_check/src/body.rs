@@ -121,6 +121,9 @@ impl<'a> Walker<'a> {
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
         for p in &sig.params {
+            let (ast::Param::Typed { attrs, span, .. } | ast::Param::Receiver { attrs, span, .. }) =
+                p;
+            self.no_cfg(attrs, *span);
             if let ast::Param::Typed { pat, ty, .. } = p {
                 if let Some(i) = pat_ident(pat) {
                     self.var_types.insert(i.name.clone(), ty.clone());
@@ -508,6 +511,16 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 関数の中の `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は E0003（#27 の既定 B）。
+    fn no_cfg(&mut self, attrs: &[ast::Attr], span: Span) {
+        if crate::index::has_cfg(attrs) {
+            self.diags.push(
+                span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::CfgInBody)),
+            );
+        }
+    }
+
     // ---- ブロックと文 ----
 
     /// ブロック。発散するなら `true`。
@@ -528,6 +541,7 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
+                self.no_cfg(&item.attrs, item.span);
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -644,6 +658,7 @@ impl<'a> Walker<'a> {
     }
 
     fn local(&mut self, l: &ast::Local, span: Span) -> bool {
+        self.no_cfg(&l.attrs, span);
         let mut diverges = false;
         if let Some(init) = &l.init {
             let prev = self.bound_source.take();
@@ -778,7 +793,12 @@ impl<'a> Walker<'a> {
                 let mut rest = false;
                 for f in fields {
                     match f {
-                        FieldPat::Field { pat, .. } => self.bind(pat),
+                        FieldPat::Field {
+                            attrs, pat, span, ..
+                        } => {
+                            self.no_cfg(attrs, *span);
+                            self.bind(pat)
+                        }
                         FieldPat::Erased { ident, .. } => {
                             named.insert(ident.name.clone());
                             match info.and_then(|s| s.erased_kind(&ident.name)) {
@@ -863,6 +883,7 @@ impl<'a> Walker<'a> {
 
     /// 式。発散するなら `true`。
     fn expr(&mut self, e: &Expr) -> bool {
+        self.no_cfg(&e.attrs, e.span);
         match &e.kind {
             ExprKind::Array(es) | ExprKind::Tuple(es) => self.exprs(es),
             ExprKind::Repeat { expr, len } => self.expr(expr) | self.expr(len),
@@ -1358,6 +1379,7 @@ impl<'a> Walker<'a> {
         for arm in arms {
             self.env = start.clone();
             let saved = self.save_scope();
+            self.no_cfg(&arm.attrs, arm.span);
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
                 self.expr(g);
@@ -1677,6 +1699,7 @@ impl<'a> Walker<'a> {
         let mut d = false;
         let mut given = BTreeSet::new();
         for f in &lit.fields {
+            self.no_cfg(&f.attrs, f.span);
             if f.erased {
                 let name = match &f.member {
                     Member::Named(i) => i.name.clone(),

@@ -21,4 +21,32 @@ ensures r == 0, { x }
 
 #[verifier::external] #[test] fn t() {}
 
+pub trait Tr {
+    fn e(&self) -> u32;
+
+}
+
+pub struct S { pub v: u32, }
+
+impl Tr for S {
+    fn e(&self) -> u32 { 1 }
+
+}
+
+impl S {
+    #[cfg(not(verus_keep_ghost))] pub fn e(&self) -> (r: u32)
+    ensures r == 0, { 1 }
+
+}
+
+pub trait Tr2 {
+    fn f(&self) -> u32;
+
+}
+
+impl Tr2 for u32 {
+    fn f(&self) -> u32 { 2 }
+
+}
+
 } // verus!

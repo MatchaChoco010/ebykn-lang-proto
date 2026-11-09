@@ -132,6 +132,8 @@ pub enum Unimpl {
     NestedAssumption,
     /// 論理文脈の、中を読まないマクロの引数の中の `.first()` / `.last()`（#11 の置き換えが届かない）。
     MacroFirstLast,
+    /// 関数の本体の中の `cfg!` と `#[cfg(..)]`（#27 の既定 B）。
+    CfgInBody,
 }
 
 impl Unimpl {
@@ -200,6 +202,12 @@ impl Unimpl {
             }
             (Unimpl::NestedAssumption, Lang::Ja) => {
                 "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
+            }
+            (Unimpl::CfgInBody, Lang::En) => {
+                "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"
+            }
+            (Unimpl::CfgInBody, Lang::Ja) => {
+                "関数の中（文・式・match の腕・欄・引数）の `cfg!` と `#[cfg(..)]` はまだ扱えません。Verus が検証するコードと Verus なしでビルドするコードが食い違いうるためです。条件付きのコードは別の項目に分けます"
             }
             (Unimpl::MacroFirstLast, Lang::En) => {
                 "`.first()` / `.last()` in the arguments of this macro in a logical context are not supported yet (Ebykn does not read them, so they would mean vstd's `first` instead of `first_opt`); compute the value outside the macro"

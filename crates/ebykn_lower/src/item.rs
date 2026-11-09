@@ -830,6 +830,12 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
     let g = generics(cx, &imp.generics);
     let w = where_clause(&imp.where_clause);
     let st = cx.ty(&imp.self_ty);
+    if self_ty.is_none() {
+        c.foreign_impl = Some(match &imp.trait_ {
+            Some(t) => format!("<{st} as {}>", cx.path(t)),
+            None => format!("<{st}>"),
+        });
+    }
     match cx.index.impl_trait(&cx.module, imp) {
         ImplTrait::Invariant => {
             let Some(f) = ebykn_check::invariant_fn(imp) else {

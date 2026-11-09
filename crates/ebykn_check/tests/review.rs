@@ -444,3 +444,23 @@ fn first_last_in_logical_macro_tokens_are_e0003() {
     // 実行文脈の `Vec::first` はそのまま。
     accepts("pub fn f(v: Vec<u64>) -> bool { matches!(v.first(), Some(_)) }");
 }
+
+// ---- PR #26 の再レビュー：関数の中の条件付きコンパイル（#27 の既定 B） ----
+
+#[test]
+fn cfg_inside_functions_is_e0003() {
+    for src in [
+        "pub fn f(x: u32) -> (r: u32) ensures r == 0, { if cfg!(verus_keep_ghost) { 0 } else { 1 } }",
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { #[cfg(not(verus_keep_ghost))] return 1; 0 }",
+        "pub fn h() -> u32 { #[cfg_attr(test, cfg(test))] let y = 1; y }",
+        "pub fn k(x: u32) -> u32 { match x { #[cfg(test)] 0 => 1, _ => 2 } }",
+        "pub struct P { a: u32 }\npub fn m() -> P { P { #[cfg(test)] a: 1 } }",
+        "pub fn n(#[cfg(test)] x: u32) {}",
+        "pub fn o() { #[cfg(test)] fn inner() {} }",
+    ] {
+        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
+    // 項目に付ける #[cfg] と、cfg を含まない cfg_attr は今のまま。
+    accepts("#[cfg(test)]\npub fn f() {}");
+    accepts("pub fn f() { #[cfg_attr(test, inline)] let y = 1; }");
+}

@@ -44,7 +44,6 @@ pub const ALLOWED_MACROS: &[&str] = &[
     "column",
     "file",
     "module_path",
-    "cfg",
     "env",
     "option_env",
     "include_str",

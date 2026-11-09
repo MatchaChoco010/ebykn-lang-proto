@@ -418,12 +418,46 @@ pub fn decide(f: ItemFacts) -> &'static str {
 }
 
 /// 全項目の状態を決める。`checked` は Verus の `func-details` の鍵（`None` なら一覧がない）。
+/// `error_count` は Verus が数えたエラーの数で、読み取ったエラーの見出しの数と違えば、エラーを
+/// 項目に割り当てられていないとみなす。
 pub fn statuses(
     files: &[OutFile],
     output: &Output,
     errors: &[Option<(String, usize)>],
     checked: Option<&std::collections::BTreeSet<String>>,
+    error_count: Option<u64>,
 ) -> Vec<ItemStatus> {
+    // 項目の Verus の名前。パスで決まらない項目（クレートの外の型への impl のメソッド）は、形に当たる
+    // 鍵がちょうど一つのときだけ決まる。
+    let verus_of = |item: &str| -> Option<String> {
+        match output.verus_patterns.get(item) {
+            Some(pat) => {
+                let (pre, post) = pat.split_once('*')?;
+                let hits: Vec<&String> = checked?
+                    .iter()
+                    .filter(|k| {
+                        k.strip_prefix(pre)
+                            .and_then(|r| r.strip_suffix(post))
+                            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+                    })
+                    .collect();
+                match hits.as_slice() {
+                    [k] => Some((*k).clone()),
+                    _ => None,
+                }
+            }
+            None => Some(verus_name(item)),
+        }
+    };
+    let names: Vec<(String, Option<String>)> = files
+        .iter()
+        .flat_map(|f| f.items.iter().map(|(_, _, i)| (i.clone(), verus_of(i))))
+        .collect();
+    // 同じ Verus の名前になる項目が二つ以上あれば、どれの証拠か分からないので数えない。
+    let shared = |n: &Option<String>| match n {
+        Some(n) => names.iter().filter(|(_, m)| m.as_ref() == Some(n)).count() > 1,
+        None => false,
+    };
     let in_item = |file: &str, line: usize| {
         files
             .iter()
@@ -432,7 +466,7 @@ pub fn statuses(
     let stray = errors.iter().any(|e| match e {
         Some((file, line)) => !in_item(file, *line),
         None => true,
-    });
+    }) || error_count.is_some_and(|n| n != errors.len() as u64);
     let mut out = Vec::new();
     for f in files {
         for (start, end, item) in &f.items {
@@ -445,7 +479,10 @@ pub fn statuses(
                 unchecked: output.unchecked.contains(item),
                 external: output.external.contains(item),
                 error,
-                checked: checked.is_some_and(|c| c.contains(&verus_name(item))),
+                checked: {
+                    let n = verus_of(item);
+                    !shared(&n) && n.is_some_and(|n| checked.is_some_and(|c| c.contains(&n)))
+                },
                 stray_errors: stray,
             };
             out.push(ItemStatus {
@@ -629,6 +666,7 @@ mod tests {
             admitted: vec!["k::l".into()],
             unchecked: vec![],
             external: vec![],
+            verus_patterns: Default::default(),
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()
@@ -639,17 +677,80 @@ mod tests {
             &output,
             &[Some(("src/lib.rs".into(), 7))],
             Some(&checked),
+            Some(1),
         );
         assert_eq!(
             status_text(&st, Some((1, 1))),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
         // 項目に入らないエラーがあれば、失敗していない項目は unknown。
-        let st = statuses(&files, &output, &[None], Some(&checked));
+        let st = statuses(&files, &output, &[None], Some(&checked), Some(1));
         assert_eq!(st[0].status, "unknown");
         // func-details がなければ unknown。
-        let st = statuses(&files, &output, &[], None);
+        let st = statuses(&files, &output, &[], None, Some(0));
         assert_eq!(st[0].status, "unknown");
+        // Verus の数えたエラーと、読み取ったエラーの見出しの数が違えば unknown（nit 4）。
+        let st = statuses(&files, &output, &[], Some(&checked), Some(1));
+        assert_eq!(st[0].status, "unknown");
+    }
+
+    #[test]
+    fn items_sharing_a_verus_name_are_unknown() {
+        // R2：同じパスになる二つの項目（trait の impl の S::e と、#[cfg] で消える固有の S::e）。
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![
+                (1, 2, "k3::S::e".into()),
+                (3, 4, "k3::S::e".into()),
+                (5, 6, "k3::f".into()),
+            ],
+        }];
+        let output = Output {
+            files: files.clone(),
+            ..Default::default()
+        };
+        let checked: std::collections::BTreeSet<String> = ["k3::S::e", "k3::f"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let st = statuses(&files, &output, &[], Some(&checked), Some(0));
+        let got: Vec<&str> = st.iter().map(|s| s.status).collect();
+        assert_eq!(got, ["unknown", "unknown", "verified"]);
+    }
+
+    #[test]
+    fn foreign_impl_methods_match_their_verus_names() {
+        // S8：クレートの外の型への impl のメソッドは `impl&%N`。形に当たる鍵が一つなら決まる。
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![(1, 2, "k4::<u32 as Tr>::e".into())],
+        }];
+        let mut output = Output {
+            files: files.clone(),
+            ..Default::default()
+        };
+        output
+            .verus_patterns
+            .insert("k4::<u32 as Tr>::e".into(), "k4::impl&%*::e".into());
+        let one: std::collections::BTreeSet<String> = ["k4::impl&%0::e", "k4::Tr::e"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            statuses(&files, &output, &[], Some(&one), Some(0))[0].status,
+            "verified"
+        );
+        // 当たる鍵が二つ（同じ名前のメソッドを持つ別の impl）なら決められない。
+        let two: std::collections::BTreeSet<String> = ["k4::impl&%0::e", "k4::impl&%1::e"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            statuses(&files, &output, &[], Some(&two), Some(0))[0].status,
+            "unknown"
+        );
     }
 
     #[test]

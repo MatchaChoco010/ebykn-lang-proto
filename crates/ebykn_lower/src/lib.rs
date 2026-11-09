@@ -54,6 +54,9 @@ pub struct Output {
     pub unchecked: Vec<String>,
     /// `#[test]` の項目（`#[verifier::external]`。Verus は見ない）。
     pub external: Vec<String>,
+    /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
+    /// `func-details` の名前の形（`k::m::impl&%*::e`。`*` は impl の番号）。
+    pub verus_patterns: BTreeMap<String, String>,
 }
 
 /// 書き下しの間に集めるもの。
@@ -62,6 +65,7 @@ pub(crate) struct Report {
     admitted: Vec<String>,
     unchecked: Vec<String>,
     external: Vec<String>,
+    verus_patterns: BTreeMap<String, String>,
 }
 
 /// 書き下しの文脈。式ごとに複製して使う（[`Cx::sub`]）。
@@ -72,6 +76,8 @@ pub(crate) struct Cx<'a> {
     pub crate_name: &'a str,
     pub module: Vec<String>,
     pub self_ty: Option<ItemPath>,
+    /// クレートの外の型への impl の中なら、その表示（`<u32 as Tr>`）。
+    pub foreign_impl: Option<String>,
     pub self_struct: Option<&'a StructInfo>,
     /// 権限の変数の種類（関数の中で、文の順に更新する）。
     pub perms: BTreeMap<String, PermKind>,
@@ -94,12 +100,31 @@ impl<'a> Cx<'a> {
         c
     }
 
-    /// 項目のパスの表示（`stack::Stack::push`）。
+    /// 項目のパスの表示（`stack::Stack::push`）。Verus の `func-details` の名前に合わせる：
+    /// impl のメソッドは型の完全なパス（型を定義したモジュール）の下、trait の既定のメソッドは
+    /// trait の下。クレートの外の型への impl のメソッドは `<u32 as Tr>` の下に表示し、Verus の名前
+    /// （impl を置いたモジュールの `impl&%N`）は形で持つ。
     pub(crate) fn item_path(&self, name: &str) -> String {
         let mut p = vec![self.crate_name.to_string()];
-        p.extend(self.module.iter().cloned());
-        if let Some(t) = &self.self_ty {
-            p.push(t.last().cloned().unwrap_or_default());
+        match &self.self_ty {
+            Some(t) => p.extend(t.iter().cloned()),
+            None => {
+                p.extend(self.module.iter().cloned());
+                if let Some(f) = &self.foreign_impl {
+                    let mut pat = vec![self.crate_name.replace('-', "_")];
+                    pat.extend(self.module.iter().cloned());
+                    pat.push("impl&%*".into());
+                    pat.push(name.to_string());
+                    p.push(f.clone());
+                    p.push(name.to_string());
+                    let shown = p.join("::");
+                    self.report
+                        .borrow_mut()
+                        .verus_patterns
+                        .insert(shown.clone(), pat.join("::"));
+                    return shown;
+                }
+            }
         }
         p.push(name.to_string());
         p.join("::")
@@ -156,6 +181,7 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
             crate_name: &project.manifest.name,
             module: m.module.clone(),
             self_ty: None,
+            foreign_impl: None,
             self_struct: None,
             perms: BTreeMap::new(),
             mut_params: BTreeSet::new(),
@@ -183,6 +209,7 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
     out.admitted = r.admitted;
     out.unchecked = r.unchecked;
     out.external = r.external;
+    out.verus_patterns = r.verus_patterns;
     Ok(out)
 }
 

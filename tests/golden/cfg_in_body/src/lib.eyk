@@ -1,0 +1,20 @@
+// 関数の中の条件付きコンパイルは、Verus が検証するコードと Verus なしでビルドするコードを食い違わせる
+// （PR #26 の再レビュー、#27 の既定 B）。どれも E0003 になる。
+
+pub fn f(x: u32) -> (r: u32) ensures r == 0, { if cfg!(verus_keep_ghost) { 0 } else { 1 } }
+
+pub fn g(x: u32) -> (r: u32) ensures r == 0, {
+    #[cfg(not(verus_keep_ghost))]
+    return 1;
+    0
+}
+
+pub fn h(x: u32) -> u32 {
+    #[cfg_attr(test, cfg(test))]
+    let y = 1;
+    match x {
+        #[cfg(test)]
+        0 => 1,
+        _ => 2,
+    }
+}

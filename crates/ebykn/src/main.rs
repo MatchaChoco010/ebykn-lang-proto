@@ -205,7 +205,13 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let all = ebykn::verus::statuses(&output.files, &output, &r.errors, r.checked.as_ref());
+    let all = ebykn::verus::statuses(
+        &output.files,
+        &output,
+        &r.errors,
+        r.checked.as_ref(),
+        r.results.map(|(_, e)| e),
+    );
     let Some(shown) = ebykn::verus::select(&all, items) else {
         say(
             opts,

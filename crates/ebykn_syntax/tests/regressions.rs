@@ -772,3 +772,11 @@ fn verus_clause_builtins_are_rejected_as_calls() {
         "`m::requires(..)` is Verus syntax",
     );
 }
+
+/// #27 の既定 B：`cfg!` は `.eyk` で呼べるマクロの一覧にない（関数の中の条件付きコンパイルは E0003）。
+#[test]
+fn cfg_macro_is_not_allowed() {
+    assert!(!ebykn_syntax::ALLOWED_MACROS.contains(&"cfg"));
+    rejects("pub fn f() -> bool { cfg!(test) }", "E0003");
+    rejects("pub fn f() -> bool { std::cfg!(test) }", "E0003");
+}
