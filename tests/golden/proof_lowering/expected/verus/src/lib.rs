@@ -31,7 +31,7 @@ ensures (forall | i: int | #![trigger sq(i)] 0 <= i && i <= n ==> 0 <= sq(i)), {
 proof fn unproven(x: int)
 ensures x == x + 0, { vstd::prelude::admit() }
 
-#[doc = " 0 から n までを数える。"] pub fn count(n: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] #[doc = " 0 から n までを数える。"] pub fn count(n: u64) -> (r: u64)
 ensures r == n, {
     let mut i: u64 = 0;
     let ghost start = i;
@@ -49,7 +49,7 @@ ensures r == n, {
     i
 }
 
-pub fn twice(x: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn twice(x: u64) -> (r: u64)
 requires x < 1000,
 ensures r == double(x as int), {
     proof {
@@ -58,7 +58,7 @@ ensures r == double(x as int), {
     x + x
 }
 
-#[doc = " 本体のない補題に頼る。"] pub fn leans(x: u64) -> u64 {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] #[doc = " 本体のない補題に頼る。"] pub fn leans(x: u64) -> u64 {
     proof {
         unproven(x as int);
     }

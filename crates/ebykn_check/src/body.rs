@@ -10,6 +10,8 @@ mod erased;
 mod perms;
 mod proof;
 
+pub use proof::PRELUDE_SPEC_FNS;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ebykn_syntax::ast::{
@@ -1254,6 +1256,7 @@ impl<'a> Walker<'a> {
     }
 
     fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr], uses: &[ast::RegionArg]) -> bool {
+        self.proof_call(None, None, Some(func), args);
         let mut d = false;
         let resolved = match &func.kind {
             ExprKind::Path { qself: None, path } => {
@@ -1298,6 +1301,7 @@ impl<'a> Walker<'a> {
         args: &[Expr],
         uses: &[ast::RegionArg],
     ) -> bool {
+        self.proof_call(Some(receiver), Some(method), None, args);
         let mut d = self.exprs(args);
         // 呼ばれる側を引けない形でも、書いた領域は書き下しに残す（受け取らなければ Verus が拒む）。
         let unresolved = |w: &mut Self| {

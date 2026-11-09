@@ -412,6 +412,27 @@ fn verify(
     if let Some(note) = ebykn::verus::termination_note(&shown, &output.exec, opts.lang) {
         eprintln!("ebykn: {note}");
     }
+    // `results` の行は Verus が数えた件数なので、Ebykn が `unverified` にした項目を別に数えて出す。
+    let unverified: Vec<&str> = shown
+        .iter()
+        .filter(|s| s.status == "unverified")
+        .map(|s| s.item.as_str())
+        .collect();
+    if !unverified.is_empty() {
+        say(
+            opts,
+            &format!(
+                "{} item(s) passed Verus but are unverified, because they depend on a lemma without a body (the `results` line counts what Verus checked): {}",
+                unverified.len(),
+                unverified.join(", ")
+            ),
+            &format!(
+                "{} 個の項目は Verus を通りましたが、本体のない補題に頼るので unverified です（`results` の行は Verus が確かめた件数です）: {}",
+                unverified.len(),
+                unverified.join("、")
+            ),
+        );
+    }
     if shown.iter().any(|s| s.status == "unknown") {
         say(
             opts,

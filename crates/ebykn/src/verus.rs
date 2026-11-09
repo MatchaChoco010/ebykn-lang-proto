@@ -1257,6 +1257,7 @@ mod tests {
             item: item.into(),
             status,
             via: None,
+            depends_on: None,
         }
     }
 

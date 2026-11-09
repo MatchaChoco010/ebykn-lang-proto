@@ -7,10 +7,10 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-fn bump(c: u64) -> u64
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn bump(c: u64) -> u64
 requires c < 100, { c + 1 }
 
-pub fn keep(x: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn keep(x: u64) -> (r: u64)
 requires x < 100,
 ensures r == x, {
     let mut y = x;

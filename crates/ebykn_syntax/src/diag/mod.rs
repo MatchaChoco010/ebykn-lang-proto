@@ -401,10 +401,10 @@ impl Message {
                 "構文エラー: `{written}` は Verus の書き方で、`{src}` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
             ),
             (Message::VerusWrapper { written }, En) => format!(
-                "syntax error: `{written}` is Verus's ghost wrapper and cannot be written in `.eyk`; write ghost state as `owns` / `spec` fields (`self@f`) and region arguments as `uses r: Region<..>`"
+                "syntax error: `{written}` is Verus's ghost wrapper and cannot be written in `{src}`; write ghost state as `owns` / `spec` fields (`self@f`) and region arguments as `uses r: Region<..>`"
             ),
             (Message::VerusWrapper { written }, Ja) => format!(
-                "構文エラー: `{written}` は Verus の ghost の包みで、`.eyk` には書けません。ghost の状態は `owns` / `spec` フィールド（`self@f`）、領域の引数は `uses r: Region<..>` で書きます"
+                "構文エラー: `{written}` は Verus の ghost の包みで、`{src}` には書けません。ghost の状態は `owns` / `spec` フィールド（`self@f`）、領域の引数は `uses r: Region<..>` で書きます"
             ),
             (Message::Deferred(n), _) => n.written.clone(),
             (Message::Lex, En) => {
@@ -532,11 +532,11 @@ impl Message {
             (Message::Denied { written, entry }, En) => {
                 let mut s = match entry.kind {
                     crate::denylist::DenyKind::Cfg => format!(
-                        "syntax error: `{written}` cannot be written in `.eyk`, because its condition uses `{}`: {}",
+                        "syntax error: `{written}` cannot be written in `{src}`, because its condition uses `{}`: {}",
                         entry.name, entry.why_en
                     ),
                     crate::denylist::DenyKind::Macro { .. } => format!(
-                        "syntax error: `{written}` cannot be written in `.eyk`, because {}",
+                        "syntax error: `{written}` cannot be written in `{src}`, because {}",
                         entry.why_en
                     ),
                 };
@@ -549,11 +549,11 @@ impl Message {
             (Message::Denied { written, entry }, Ja) => {
                 let mut s = match entry.kind {
                     crate::denylist::DenyKind::Cfg => format!(
-                        "構文エラー: `{written}` は `.eyk` に書けません（条件に `{}` を使っている）。書けないのは、{}ためです",
+                        "構文エラー: `{written}` は `{src}` に書けません（条件に `{}` を使っている）。書けないのは、{}ためです",
                         entry.name, entry.why_ja
                     ),
                     crate::denylist::DenyKind::Macro { .. } => format!(
-                        "構文エラー: `{written}` は `.eyk` に書けません。書けないのは、{}ためです",
+                        "構文エラー: `{written}` は `{src}` に書けません。書けないのは、{}ためです",
                         entry.why_ja
                     ),
                 };

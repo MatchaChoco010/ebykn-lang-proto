@@ -24,6 +24,7 @@ verified proof_file::double
 verified proof_file::double_monotonic
 verified proof_file::twice
 results 2 verified, 0 errors
+ebykn: `verified` for an executable function does not include termination: it means the function meets its contract whenever it returns. `decreases` shows only that the loop or recursion it is written on is well-founded; code that reaches a loop or recursion without `decreases` may not terminate
 ```
 
 証明ファイルで契約を変えると、剥がしても一致しません。`twice` の `requires x <= 1000` を `proof/lib.eykp` でだけ `2000` に変えてみます。
@@ -48,6 +49,7 @@ admit proof_file::double_monotonic
 verified proof_file::twice
 results 2 verified, 0 errors
 ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): proof_file::double_monotonic (admit)
+ebykn: `verified` for an executable function does not include termination: it means the function meets its contract whenever it returns. `decreases` shows only that the loop or recursion it is written on is well-founded; code that reaches a loop or recursion without `decreases` may not terminate
 ```
 
 ## 試してみること

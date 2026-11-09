@@ -239,3 +239,129 @@ fn proofs_cannot_free_or_pass_permissions_mutably() {
         );
     }
 }
+
+const RES: &str = "pub struct Node { pub v: u64 }\npub fn f(p: Ptr<Node>, c: Cell<u64>) uses p@, c@, r: &mut Region<Ptr<Node>>, a: &mut Region<Ptr<Node>> {\n    leak p@;\n    leak c@;\n}\n";
+
+/// 証明の中で、prelude の `Region` の `proof fn` を直接呼んで領域を変える形（#149 の 3 回目の再レビューの B4）。
+#[test]
+fn proofs_cannot_call_region_proof_fns_directly() {
+    for body in [
+        "proof { r.remove(p); }",
+        "proof { r.insert(a.remove(p)); }",
+        "proof { Region::remove(r, p); }",
+        "proof { r.insert(p@); }",
+    ] {
+        let proof = RES.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        assert_ne!(proof, RES);
+        let d = run(RES, &proof);
+        assert!(d.iter().any(|l| l.contains("E0520")), "{body}: {d:?}");
+    }
+    // prelude の spec の関数を呼ぶ形と、権限を読む形は通る。
+    for body in [
+        "proof { assert r.contains(p) || !r.contains(p); }",
+        "proof { assert r.len() == r.len(); }",
+        "proof { assert p@.pptr() == p@.pptr(); }",
+        "proof { assert c@.id() == c@.id(); }",
+    ] {
+        let proof = RES.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        let d = run(RES, &proof);
+        assert!(d.is_empty(), "{body}: {d:?}");
+    }
+}
+
+/// prelude の公開の関数を一つずつ証明の中で呼び、spec の関数は許すリストにあり、ほかはすべて E0520 に
+/// なることを確かめる（prelude に関数を足しても、黙って穴が開かないように。B4 の再発防止）。
+#[test]
+fn every_prelude_fn_is_classified() {
+    let spec_list = ebykn_check::body::PRELUDE_SPEC_FNS;
+    let mut specs = Vec::new();
+    let mut others = Vec::new();
+    for (file, text) in [
+        (
+            "region.rs",
+            include_str!("../../ebykn_prelude/src/region.rs"),
+        ),
+        ("ptr.rs", include_str!("../../ebykn_prelude/src/ptr.rs")),
+        ("cell.rs", include_str!("../../ebykn_prelude/src/cell.rs")),
+    ] {
+        let mut ty = String::new();
+        for line in text.lines() {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("impl") {
+                // `impl<L: Loc> Region<L> {` の型の名前：型の引数の `<..>` を飛ばし、トレイトの impl なら
+                // `for` の後を見る。
+                let mut depth = 0;
+                let mut k = 0;
+                for (n, ch) in rest.char_indices() {
+                    match ch {
+                        '<' => depth += 1,
+                        '>' => depth -= 1,
+                        _ if depth == 0 => {
+                            k = n;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                let head = &rest[k..];
+                let head = head.rsplit(" for ").next().unwrap_or(head);
+                ty = head
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+            }
+            if t.starts_with("pub ") && t.contains(" fn ") {
+                let name = t
+                    .split(" fn ")
+                    .nth(1)
+                    .unwrap()
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap();
+                if t.contains("spec fn") {
+                    specs.push(name.to_string());
+                } else {
+                    others.push((file, ty.clone(), name.to_string()));
+                }
+            }
+        }
+    }
+    assert!(
+        specs.len() >= 10 && others.len() >= 10,
+        "{specs:?} {others:?}"
+    );
+    for s in &specs {
+        assert!(
+            spec_list.contains(&s.as_str()),
+            "prelude の spec fn `{s}` が PRELUDE_SPEC_FNS にない"
+        );
+    }
+    for s in spec_list {
+        assert!(
+            specs.iter().any(|x| x == s),
+            "PRELUDE_SPEC_FNS の `{s}` が prelude の spec fn にない"
+        );
+    }
+    for (file, ty, name) in &others {
+        let recv = match ty.as_str() {
+            "Region" => "r",
+            "PointsTo" => "p@",
+            "CellPointsTo" => "c@",
+            "Ptr" => "p",
+            "Cell" => "c",
+            other => panic!("{file}: 知らない型 `{other}` の `{name}`"),
+        };
+        for call in [format!("{ty}::{name}({recv})"), format!("{recv}.{name}()")] {
+            let proof = RES.replace(
+                "    leak p@;\n",
+                &format!("    proof {{ {call}; }}\n    leak p@;\n"),
+            );
+            let d = run(RES, &proof);
+            assert!(
+                d.iter().any(|l| l.contains("E0520")),
+                "{file}: `{call}` が E0520 にならない: {d:?}"
+            );
+        }
+    }
+}
