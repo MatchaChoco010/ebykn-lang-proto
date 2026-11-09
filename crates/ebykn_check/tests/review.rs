@@ -299,6 +299,31 @@ fn s4_jumps_inside_macro_arguments_are_e0003() {
     ));
 }
 
+/// Rust のトークンのまま持つ式（`.await`）の中の脱出は E0003（PR #51 の再レビューの B3）。前は
+/// 検査が中を見ず、`?` の経路で権限を捨てても E0505 にならなかった。
+#[test]
+fn s4_jumps_inside_raw_rust_expressions_are_e0003() {
+    const ID: &str = "async fn id(x: u64) -> (r: u64) ensures r == x, { x }\n";
+    for body in [
+        "borrow mut self@nodes[p] { (*p).val = id(o?).await; } None",
+        "borrow mut self@nodes[p] { (*p).val = id({ return None; }).await; } None",
+        // `borrow` の外でも：`?` の経路で `q@` を捨てる。
+        "let q = Ptr::new(Node { val: 1 }); let _v = id(o?).await; q.free(); None",
+    ] {
+        rejects(
+            &format!(
+                "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self, p: Ptr<Node>, o: Option<u64>) -> Option<u64> {{ {body} }} }}\n"
+            ),
+            "E0003",
+            "such as `.await`",
+        );
+    }
+    // 脱出のない `.await` は今のまま。
+    accepts(&format!(
+        "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self, p: Ptr<Node>) -> u64 {{ let v = id(1).await; borrow mut self@nodes[p] {{ (*p).val = v; }} v }} }}\n"
+    ));
+}
+
 /// 戻り値の型の名前が `Option` でも、クレートで定義した型なら `?` を展開できない（E0003）。
 #[test]
 fn s4_try_with_a_crate_type_named_option_is_e0003() {

@@ -1111,7 +1111,18 @@ impl<'a> Walker<'a> {
                 }
                 false
             }
-            ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer | ExprKind::Rust(_) => false,
+            ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer => false,
+            // Rust のトークンのまま持つ式（`.await` など）は中を読まないので、その中の脱出は
+            // 権限を戻せず、§6.2 の検査も見ない（E0003。#21 の案 D）。
+            ExprKind::Rust(tk) => {
+                if jump_in_tokens(tk.tokens.clone()) {
+                    self.diags.push(
+                        e.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInRustExpr)),
+                    );
+                }
+                false
+            }
         }
     }
 
