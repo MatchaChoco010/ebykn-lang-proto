@@ -36,6 +36,23 @@ pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
     }
 }
 
+/// 局所の名前を束縛する位置の名前（パターンの名前、量化子の変数、名前付きの戻り値、`uses` の
+/// 領域、消去フィールドのパターン、const generics の引数）。Rust の予約語の raw の綴り（`r#type`）は
+/// Verus が検証できないので E0103（#119。[`crate::reserved::RAW_KEYWORDS`]）。版で予約語になった
+/// 名前の診断は、検査が `Ebykn.toml` の `edition` で捨てる。
+pub(in crate::parse) fn binding(i: &proc_macro2::Ident) -> ast::Ident {
+    let id = ident(i);
+    if id.raw && crate::reserved::raw_keyword_since(&id.name).is_some() {
+        push(
+            id.span,
+            Message::RawKeywordBinding {
+                word: id.name.clone(),
+            },
+        );
+    }
+    id
+}
+
 pub(super) fn lifetime(l: &syn::Lifetime) -> ast::Lifetime {
     ast::Lifetime {
         name: l.ident.to_string(),
@@ -233,7 +250,7 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
                 attrs: attrs(&c.attrs),
-                ident: ident(&c.ident),
+                ident: binding(&c.ident),
                 ty: ty(&c.ty),
                 default: c.default.clone().map(expr),
             },

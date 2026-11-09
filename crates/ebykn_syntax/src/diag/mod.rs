@@ -29,6 +29,8 @@ pub enum Code {
     E0101,
     /// `#[verifier::..]` の使用。
     E0102,
+    /// 局所の名前に Rust の予約語の raw の綴り（`r#type`）（仕様 §10.1 にない。#119）。
+    E0103,
     /// 対応する `.eyk` のない `.eykp`。
     E0301,
     /// `.eykp` の置き場所の誤り。
@@ -89,6 +91,7 @@ impl Code {
             Code::E0001 => "E0001",
             Code::E0101 => "E0101",
             Code::E0102 => "E0102",
+            Code::E0103 => "E0103",
             Code::E0301 => "E0301",
             Code::E0302 => "E0302",
             Code::E0303 => "E0303",
@@ -199,6 +202,8 @@ pub enum Message {
     ReservedPrefix { ident: String },
     /// E0102。
     VerifierAttr,
+    /// E0103。局所の名前を束縛する位置の、Rust の予約語の raw の綴り（#119）。
+    RawKeywordBinding { word: String },
     /// E0401。
     ErasedOnNonNamed {
         section: &'static str,
@@ -330,6 +335,7 @@ impl Message {
         match self {
             Message::ReservedPrefix { .. } => Code::E0101,
             Message::VerifierAttr => Code::E0102,
+            Message::RawKeywordBinding { .. } => Code::E0103,
             Message::ProofSyntax { .. } => Code::E0303,
             Message::ErasedOnNonNamed { .. } => Code::E0401,
             Message::DirectInvariantOrView { .. } => Code::E0403,
@@ -426,6 +432,12 @@ impl Message {
             ),
             (Message::EditionKeyword { word, since }, Ja) => format!(
                 "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
+            ),
+            (Message::RawKeywordBinding { word }, En) => format!(
+                "`r#{word}` cannot be used as a local name (variable, parameter, pattern binding, quantified variable, return value name, region, const generic parameter) because Verus cannot verify it; use another name such as `{word}_`"
+            ),
+            (Message::RawKeywordBinding { word }, Ja) => format!(
+                "`r#{word}` は局所の名前（変数、引数、パターンの束縛、量化子の変数、戻り値の名前、領域、const generics の引数）には使えません。Verus が検証できないためです。`{word}_` などの別の名前を使います"
             ),
             (Message::UsesOutsideCall, En) => {
                 "syntax error: `uses` passes regions only at the end of the arguments of a call (`f(x, uses &mut r)`)".into()

@@ -5,7 +5,9 @@ use quote::ToTokens;
 use verus_syn as syn;
 use verus_syn::parse::Parser as _;
 
-use super::{attrs, generic_arg, ident, lifetime, lit, mac, member, path, qself, tokens, ty};
+use super::{
+    attrs, binding, generic_arg, ident, lifetime, lit, mac, member, path, qself, tokens, ty,
+};
 use crate::ast;
 use crate::diag::Message;
 use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawVerbatimExpr};
@@ -625,7 +627,7 @@ fn closure(c: syn::ExprClosure, span: Span) -> ast::Expr {
             }
             Some(ast::Ret {
                 name: named.as_ref().and_then(|n| match &n.1 {
-                    syn::Pat::Ident(i) => Some(ident(&i.ident)),
+                    syn::Pat::Ident(i) => Some(binding(&i.ident)),
                     _ => None,
                 }),
                 ty: ty(t),
@@ -789,7 +791,7 @@ pub(in crate::parse) fn raw_atom(raw: RawAtom) -> ast::ExprKind {
                 .binders
                 .into_iter()
                 .map(|b| {
-                    let id = ident(&b.ident);
+                    let id = binding(&b.ident);
                     let (kind, end) = match b.kind {
                         hook::RawBinderKind::Typed(t) => {
                             let t = ty(&t);
@@ -1084,7 +1086,7 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
         syn::Pat::Ident(i) => P::Ident {
             by_ref: i.by_ref.is_some(),
             mutable: i.mutability.is_some(),
-            ident: ident(&i.ident),
+            ident: binding(&i.ident),
             sub: i.subpat.map(|(_, s)| Box::new(pat(*s))),
         },
         syn::Pat::Wild(_) => P::Wild,
@@ -1207,7 +1209,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                     }
                     hook::RawFieldPat::Erased { attrs: a, ident: i } => ast::FieldPat::Erased {
                         attrs: attrs(&a),
-                        ident: ident(&i),
+                        ident: binding(&i),
                     },
                     hook::RawFieldPat::ErasedRest { attrs: a, span: s } => {
                         ast::FieldPat::ErasedRest {
