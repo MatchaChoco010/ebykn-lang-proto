@@ -1,0 +1,4 @@
+unknown stopped::ok1
+failed stopped::bad
+unchecked stopped::pid
+results not verified: Verus stopped before verification (1 errors)
