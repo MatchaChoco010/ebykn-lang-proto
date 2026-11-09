@@ -605,6 +605,12 @@ fn cfg_inside_functions_is_e0003() {
         "pub struct P { a: u32 }\npub fn m() -> P { P { #[cfg(test)] a: 1 } }",
         "pub fn n(#[cfg(test)] x: u32) {}",
         "pub fn o() { #[cfg(test)] fn inner() {} }",
+        // raw の綴りも同じ名前（rustc は `r#cfg` を `cfg` と同じに読む。#122）。
+        "pub fn g(x: u32) -> (r: u32) ensures r == 1, { let x: u32 = 0; #[r#cfg(verus_keep_ghost)] let x: u32 = 1; x }",
+        "pub fn h() -> u32 { #[cfg_attr(all(), r#cfg(test))] let y = 1; y }",
+        "pub fn h() -> u32 { #[r#cfg_attr(all(), cfg(test))] let y = 1; y }",
+        "pub fn k(x: u32) -> u32 { match x { #[r#cfg(test)] 0 => 1, _ => 2 } }",
+        "pub fn n(#[r#cfg(test)] x: u32) {}",
     ] {
         rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
     }

@@ -564,10 +564,11 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// 文・式・`let`・match の腕に付ける属性は、Rust の組み込みのものだけ（#49）。安定版の Rust は
-    /// ここに属性マクロを許さないが、Verus は `stmt_expr_attributes` などを有効にして動くので、
-    /// `#![feature(proc_macro_hygiene)]` がなくても検証では効きうる。拒否して、検証されないコードが
-    /// verified の陰に入らないようにする。
+    /// 文・式・`let`・match の腕に付ける属性は、Rust の組み込みの属性とツールの属性（`#[rustfmt::skip]`）
+    /// だけ（#49。`macros::non_builtin`）。ここに付く属性マクロは Verus でも E0658 で大きく失敗する
+    /// （`proc_macro_hygiene` は有効でない。それを有効にする `#![feature(..)]` は内側の属性の検査が
+    /// 拒否する）ので、この拒否は二重の守り。ツールの属性は、同じ名前の依存クレートのマクロを指しても
+    /// 大きく失敗するだけなので許す。
     fn builtin_attrs_only(&mut self, attrs: &[ast::Attr]) {
         for a in attrs {
             if let Some(written) =
