@@ -330,7 +330,14 @@ fn verify(
     if opts.json {
         println!(
             "{}",
-            ebykn::verus::status_json(&shown, v.summary, &v.cheating, &output.cfg_uses, success)
+            ebykn::verus::status_json(
+                &shown,
+                v.summary,
+                &v.cheating,
+                &output.cfg_uses,
+                success,
+                &output.exec
+            )
         );
     } else {
         print!(
@@ -425,15 +432,8 @@ fn verify(
         );
     }
     // 実行関数の verified は停止を含まない（#81）。verified の実行関数があるときは、そう断る。
-    if shown
-        .iter()
-        .any(|s| s.status == "verified" && output.exec.contains(&s.item))
-    {
-        say(
-            opts,
-            "`verified` for an executable function means it meets its contract whenever it returns; termination is proven only for loops and recursion that have `decreases`",
-            "実行関数の `verified` は、戻ったときに契約を満たすことを示します。停止を示すのは、`decreases` を書いたループと再帰だけです",
-        );
+    if let Some(note) = ebykn::verus::termination_note(&shown, &output.exec, opts.lang) {
+        eprintln!("ebykn: {note}");
     }
     if shown.iter().any(|s| s.status == "unknown") {
         say(
