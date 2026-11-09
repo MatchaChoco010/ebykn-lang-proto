@@ -12,10 +12,7 @@ use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawV
 use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
 
-/// 呼び出しの形で書く証明の構文（仕様 §5.7）。`.eyk` ではどの位置でも拒否する。
-const PROOF_CALLS: &[&str] = &["assert", "reveal", "reveal_with_fuel", "hide"];
 /// 呼び出しの形で書く Verus の証明の関数で、Ebykn にないもの（`unchecked` を使う）。
-const VERUS_CALLS: &[&str] = crate::VERUS_BUILTIN_CALLS;
 
 fn mk(attrs: Vec<ast::Attr>, kind: ast::ExprKind, span: Span) -> ast::Expr {
     ast::Expr { attrs, kind, span }
@@ -90,18 +87,24 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
             if c.atomically.is_some() {
                 return rejected(&c, verus_only("atomically"));
             }
-            // `assert(..)` などは、式の位置でも証明の構文（Verus に渡すとそう読まれる）。
+            // 裸の名前の呼び出し `assert(..)`・`requires(..)` は、式の位置でも証明・Verus の構文
+            // （Verus に渡すとそう読まれる）。パス付きの綴りは下の `syn::Expr::Path` で判定する。
             if let syn::Expr::Path(p) = &*c.func
                 && p.qself.is_none()
                 && let Some(i) = p.path.get_ident()
             {
                 let n = i.to_string();
                 let n = n.strip_prefix("r#").unwrap_or(&n).to_string();
-                if PROOF_CALLS.contains(&n.as_str()) {
-                    return rejected(&c, proof(&format!("{n}(..)")));
-                }
-                if VERUS_CALLS.contains(&n.as_str()) {
-                    return rejected(&c, verus_only(&format!("{n}(..)")));
+                let tk = tokens(&c);
+                if crate::parse::reserved_path(
+                    std::slice::from_ref(&n),
+                    false,
+                    crate::reserved::is_call,
+                    format!("{n}(..)"),
+                    tk.span,
+                ) {
+                    let span = tk.span;
+                    return mk(Vec::new(), ast::ExprKind::Rust(tk), span);
                 }
             }
             mk(
@@ -251,14 +254,59 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
             )
         }
         syn::Expr::Paren(p) => mk(attrs(&p.attrs), K::Paren(bx(*p.expr)), span),
-        syn::Expr::Path(p) => mk(
-            attrs(&p.attrs),
-            K::Path {
-                qself: qself(&p.qself),
-                path: path(&p.path),
-            },
-            span,
-        ),
+        syn::Expr::Path(p) => {
+            // 表（`crate::reserved`）の関数の名前は、呼び出しでない参照（`let r = requires;`）や
+            // ターボフィッシュ、パス付きの綴りでも判定する。
+            // 裸の名前の値としての参照（`let r = requires;`）は、ローカル変数（§4 の文脈キーワードは
+            // 識別子としても使える）と区別するため、検査（`ebykn_check` の本体の走査）が見る。
+            let bare_value = p.path.leading_colon.is_none()
+                && p.path.segments.len() == 1
+                && p.path.segments[0].arguments.is_none();
+            if p.qself.is_none() && !bare_value {
+                let segs: Vec<String> = p
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| {
+                        let n = s.ident.to_string();
+                        n.strip_prefix("r#").unwrap_or(&n).to_string()
+                    })
+                    .collect();
+                let last = segs.last().cloned().unwrap_or_default();
+                let written = if segs.len() == 1 && p.path.leading_colon.is_none() {
+                    format!("{last}(..)")
+                } else {
+                    format!(
+                        "{}{}(..)",
+                        if p.path.leading_colon.is_some() {
+                            "::"
+                        } else {
+                            ""
+                        },
+                        segs.join("::")
+                    )
+                };
+                if crate::parse::reserved_path(
+                    &segs,
+                    p.path.leading_colon.is_some(),
+                    crate::reserved::is_call,
+                    written,
+                    span,
+                ) {
+                    let tk = tokens(&p);
+                    let span = tk.span;
+                    return mk(Vec::new(), ast::ExprKind::Rust(tk), span);
+                }
+            }
+            mk(
+                attrs(&p.attrs),
+                K::Path {
+                    qself: qself(&p.qself),
+                    path: path(&p.path),
+                },
+                span,
+            )
+        }
         syn::Expr::Range(r) => mk(
             attrs(&r.attrs),
             K::Range {

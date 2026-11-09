@@ -156,6 +156,10 @@ pub enum Message {
     DirectInvariantOrView { name: String },
     /// §3、§6 の検査（[`check`]）。
     Check(CheckMsg),
+    /// Verus の句・証明の組み込み関数（[`crate::reserved::VERUS_BUILTIN_CALLS`]）。
+    VerusBuiltin { name: String, written: String },
+    /// 構文解析では判定できず検査に任せる名前（診断としては出さない。[`crate::Parsed::deferred`]）。
+    Deferred(crate::reserved::DeferredName),
 }
 
 /// [`Message::Expected`] の対象。
@@ -252,6 +256,13 @@ impl Message {
         use Lang::{En, Ja};
         match (self, lang) {
             (Message::Check(m), _) => m.text(lang),
+            (Message::VerusBuiltin { name, written }, En) => format!(
+                "syntax error: `{written}` is Verus syntax and cannot be written in `.eyk`; to use your own function or item named `{name}`, write its path from the crate (`crate::..::{name}`)"
+            ),
+            (Message::VerusBuiltin { name, written }, Ja) => format!(
+                "構文エラー: `{written}` は Verus の書き方で、`.eyk` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
+            ),
+            (Message::Deferred(n), _) => n.written.clone(),
             (Message::Lex, En) => {
                 "syntax error: cannot read tokens here (unbalanced delimiter or unterminated literal)".into()
             }

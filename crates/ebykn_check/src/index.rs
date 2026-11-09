@@ -168,8 +168,18 @@ pub struct Index {
     pub kinds: BTreeMap<ItemPath, DefKind>,
     /// `uses` / `gives` を持つメソッドの名前（E0514）。
     pub perm_method_names: BTreeSet<String>,
-    /// 型の別名（`type A = S;`）：別名のパス → (定義したモジュール, 型)。
-    pub aliases: BTreeMap<ItemPath, (ItemPath, ast::Type)>,
+    /// 型の別名（`type A<T> = S;`）：別名のパス → 定義。
+    pub aliases: BTreeMap<ItemPath, Alias>,
+}
+
+/// 型の別名の定義。
+#[derive(Debug, Clone)]
+pub struct Alias {
+    /// 定義したモジュール（右辺の名前はここで解決する）。
+    pub module: ItemPath,
+    /// 型の引数の名前（ライフタイムと定数は除く）。
+    pub params: Vec<String>,
+    pub ty: ast::Type,
 }
 
 /// `impl` の種類。トレイトのパスは索引で解決して決める（`ebykn_prelude::Invariant`、改名を含む）。
@@ -183,6 +193,9 @@ pub enum ImplTrait {
     View,
     /// それ以外のトレイト。
     Other,
+    /// 最後の名前が `Invariant` / `View` で、`impl Invariant for T` の 1 つの書き方でないもの
+    /// （パス付き、`::`、`<>`、改名、`mod` 経由）。クレートで定義したトレイトでなければ E0001。
+    Misspelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,7 +355,23 @@ impl Index {
                         .insert(p, fn_info(&item.vis, &f.sig, &f.contract, FnKind::Lemma));
                 }
                 ItemKind::TypeAlias(t) => {
-                    self.aliases.insert(p, (module.to_vec(), t.ty.clone()));
+                    let params = t
+                        .generics
+                        .params
+                        .iter()
+                        .filter_map(|g| match g {
+                            ast::GenericParam::Type { ident, .. } => Some(ident.name.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    self.aliases.insert(
+                        p,
+                        Alias {
+                            module: module.to_vec(),
+                            params,
+                            ty: t.ty.clone(),
+                        },
+                    );
                 }
                 ItemKind::Struct(s) => {
                     let fields = match &s.fields {
@@ -428,31 +457,37 @@ impl Index {
                             .insert(info.name.clone(), info);
                     }
                 }
-                ImplTrait::Other => {}
+                ImplTrait::Other | ImplTrait::Misspelled => {}
             }
         }
     }
 
-    /// `impl` のトレイトを索引で解決する。
+    /// `impl` のトレイトを決める。Ebykn のトレイトとして受理するのは、裸の名前・ジェネリクスなしの
+    /// `impl Invariant for T` / `impl View for T` だけ（設計ノート §3.2「同じ概念を複数の形で
+    /// 書けるようにしない」）。クレートで定義した同じ名前のトレイトは Rust のトレイト。
     pub fn impl_trait(&self, module: &[String], imp: &ast::Impl) -> ImplTrait {
         let Some(t) = &imp.trait_ else {
             return ImplTrait::Inherent;
         };
-        if t.segments
-            .iter()
-            .any(|s| !matches!(s.args, ast::GenericArgs::None))
-        {
-            return ImplTrait::Other;
-        }
         let segs: Vec<String> = t.segments.iter().map(|s| s.ident.name.clone()).collect();
+        let bare = !t.leading_colon
+            && t.segments.len() == 1
+            && matches!(t.segments[0].args, ast::GenericArgs::None);
+        let last = segs.last().map(String::as_str).unwrap_or_default();
+        let ebykn = crate::reserved_trait(last);
         match self.resolve(module, t.leading_colon, &segs, None) {
-            Resolved::PreludeType("Invariant") => ImplTrait::Invariant,
-            Resolved::PreludeType("View") => ImplTrait::View,
+            Resolved::PreludeType("Invariant") if bare && last == "Invariant" => {
+                ImplTrait::Invariant
+            }
+            Resolved::PreludeType("View") if bare && last == "View" => ImplTrait::View,
+            Resolved::PreludeType("Invariant" | "View") => ImplTrait::Misspelled,
+            Resolved::Type(_) => ImplTrait::Other,
+            _ if ebykn => ImplTrait::Misspelled,
             _ => ImplTrait::Other,
         }
     }
 
-    /// 型のパスを解決する（`Self` は `self_ty`）。クレートの型でなければ `None`。
+    /// 型のパスを解決する（`Self` は `self_ty`）。型の別名はたどる。クレートの型でなければ `None`。
     pub fn type_path(
         &self,
         module: &[String],
@@ -463,42 +498,88 @@ impl Index {
             return None;
         };
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
-        let p = if segs == ["Self"] {
-            self_ty.cloned()?
-        } else {
-            match self.resolve(module, path.leading_colon, &segs, self_ty) {
-                Resolved::Type(p) => p,
-                _ => return None,
-            }
-        };
-        self.unalias(p, 0)
-    }
-
-    /// 型の別名をたどって、別名でない型のパスにする。クレートの型に行き着かなければ `None`。
-    fn unalias(&self, p: ItemPath, depth: usize) -> Option<ItemPath> {
-        let Some((m, ty)) = self.aliases.get(&p) else {
-            return Some(p);
-        };
-        if depth > 16 {
-            return None;
+        if segs == ["Self"] {
+            return self_ty.cloned();
         }
-        let TypeKind::Path { qself: None, path } = &ty.kind else {
-            return None;
-        };
-        let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
-        match self.resolve(m, path.leading_colon, &segs, None) {
-            Resolved::Type(q) => self.unalias(q, depth + 1),
+        match self.resolve(module, path.leading_colon, &segs, self_ty) {
+            Resolved::Type(p) => Some(p),
             _ => None,
         }
     }
 
-    /// パスを解決する。
+    /// 型が型の別名なら、右辺の型（型の引数を代入したもの）と、右辺を解決するモジュール。
+    pub fn expand_alias(
+        &self,
+        module: &[String],
+        ty: &ast::Type,
+        self_ty: Option<&ItemPath>,
+    ) -> Option<(ItemPath, ast::Type)> {
+        let TypeKind::Path { qself: None, path } = &ty.kind else {
+            return None;
+        };
+        let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+        let Resolved::Type(p) =
+            self.resolve_with(module, path.leading_colon, &segs, self_ty, false, 0)
+        else {
+            return None;
+        };
+        let a = self.aliases.get(&p)?;
+        let args: Vec<&ast::Type> = match path.segments.last().map(|s| &s.args) {
+            Some(ast::GenericArgs::Angle { args, .. }) => args
+                .iter()
+                .filter_map(|g| match g {
+                    ast::GenericArg::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let map: BTreeMap<&str, &ast::Type> = a
+            .params
+            .iter()
+            .map(String::as_str)
+            .zip(args.iter().copied())
+            .collect();
+        Some((a.module.clone(), subst(&a.ty, &map)))
+    }
+
+    /// 型の別名をたどる（右辺がパスの型のとき）。
+    fn follow(&self, r: Resolved, depth: usize) -> Resolved {
+        let Resolved::Type(p) = &r else {
+            return r;
+        };
+        let Some(a) = self.aliases.get(p) else {
+            return r;
+        };
+        if depth > 16 {
+            return Resolved::Unknown;
+        }
+        let TypeKind::Path { qself: None, path } = &a.ty.kind else {
+            return Resolved::Unknown;
+        };
+        let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+        self.resolve_with(&a.module, path.leading_colon, &segs, None, true, depth + 1)
+    }
+
+    /// パスを解決する。型の別名はたどる（`type P = Ptr<N>;` の `P::new` は prelude の `Ptr::new`）。
     pub fn resolve(
         &self,
         module: &[String],
         leading_colon: bool,
         segs: &[String],
         self_ty: Option<&ItemPath>,
+    ) -> Resolved {
+        self.resolve_with(module, leading_colon, segs, self_ty, true, 0)
+    }
+
+    fn resolve_with(
+        &self,
+        module: &[String],
+        leading_colon: bool,
+        segs: &[String],
+        self_ty: Option<&ItemPath>,
+        follow: bool,
+        depth: usize,
     ) -> Resolved {
         if leading_colon || segs.is_empty() {
             return Resolved::Unknown;
@@ -526,11 +607,14 @@ impl Index {
             }
             first => (self.lookup(module, first, 0), &segs[1..]),
         };
-        self.descend(start, rest)
+        self.descend(start, rest, follow, depth)
     }
 
-    fn descend(&self, mut cur: Resolved, rest: &[String]) -> Resolved {
+    fn descend(&self, mut cur: Resolved, rest: &[String], follow: bool, depth: usize) -> Resolved {
         for (i, seg) in rest.iter().enumerate() {
+            if follow {
+                cur = self.follow(cur, depth);
+            }
             cur = match cur {
                 Resolved::Module(m) => self.lookup_in(&m, seg),
                 Resolved::Type(t) if i + 1 == rest.len() => {
@@ -550,6 +634,9 @@ impl Index {
                 },
                 _ => return Resolved::Unknown,
             };
+        }
+        if follow {
+            cur = self.follow(cur, depth);
         }
         cur
     }
@@ -634,7 +721,7 @@ impl Index {
             },
         };
         let _ = depth;
-        self.descend(start, &path[1..])
+        self.descend(start, &path[1..], true, depth)
     }
 
     /// 呼び出しの対象の署名。
@@ -742,4 +829,41 @@ fn is_path_sep(tts: &[TokenTree], i: usize) -> bool {
         (tts.get(i), tts.get(i + 1)),
         (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b))) if a.as_char() == ':' && b.as_char() == ':'
     )
+}
+
+/// 型の中の型の引数（一つの名前のパス）を代入する。
+fn subst(ty: &ast::Type, map: &BTreeMap<&str, &ast::Type>) -> ast::Type {
+    if map.is_empty() {
+        return ty.clone();
+    }
+    let mut t = ty.clone();
+    match &mut t.kind {
+        TypeKind::Path { qself: None, path } => {
+            if let Some(i) = path.as_ident()
+                && let Some(r) = map.get(i.name.as_str())
+            {
+                return (*r).clone();
+            }
+            for seg in &mut path.segments {
+                if let ast::GenericArgs::Angle { args, .. } = &mut seg.args {
+                    for a in args {
+                        if let ast::GenericArg::Type(x) = a {
+                            *x = subst(x, map);
+                        }
+                    }
+                }
+            }
+        }
+        TypeKind::Ref { elem, .. }
+        | TypeKind::Array { elem, .. }
+        | TypeKind::Slice(elem)
+        | TypeKind::Paren(elem) => **elem = subst(elem, map),
+        TypeKind::Tuple(ts) => {
+            for x in ts {
+                *x = subst(x, map);
+            }
+        }
+        _ => {}
+    }
+    t
 }

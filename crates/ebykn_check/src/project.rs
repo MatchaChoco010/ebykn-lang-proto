@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use ebykn_syntax::ast::{self, ItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
 use ebykn_syntax::parse_eyk;
+use ebykn_syntax::reserved::DeferredName;
 use ebykn_syntax::span::{FileId, SourceFile, Span};
 use toml::de::{DeTable, DeValue};
 
@@ -56,6 +57,8 @@ pub struct Project {
     pub files: Vec<SourceFile>,
     /// `files` と同じ番号の AST（`.eyk` でないファイルは `None`）。
     pub asts: Vec<Option<ast::File>>,
+    /// `files` と同じ番号の、構文解析が検査に任せた名前（[`ebykn_syntax::reserved`]）。
+    pub deferred: Vec<Vec<(Span, DeferredName)>>,
     /// 見つけた `.eyk`（クレートルートが先頭）。
     pub modules: Vec<FileModule>,
     /// クレートルートが `src/main.eyk` か。
@@ -116,6 +119,7 @@ pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
         },
         files: vec![manifest, file],
         asts: vec![None, Some(parsed.file)],
+        deferred: vec![Vec::new(), parsed.deferred],
         modules: vec![FileModule {
             file: FileId(1),
             module: Vec::new(),
@@ -152,6 +156,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         manifest: Manifest::default(),
         files: vec![manifest_file],
         asts: vec![None],
+        deferred: vec![Vec::new()],
         modules: Vec::new(),
         bin: false,
     };
@@ -278,6 +283,7 @@ fn parse_file(p: &mut Project, rel: &str, diags: &mut Vec<Diagnostic>) -> Option
     diags.extend(parsed.diags);
     p.files.push(file);
     p.asts.push(Some(parsed.file));
+    p.deferred.push(parsed.deferred);
     Some(id)
 }
 
@@ -303,6 +309,7 @@ fn scan_unsupported(p: &mut Project, diags: &mut Vec<Diagnostic>) {
         ));
         p.files.push(file);
         p.asts.push(None);
+        p.deferred.push(Vec::new());
     }
 }
 

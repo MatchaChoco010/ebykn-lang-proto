@@ -47,6 +47,14 @@ fn diff(a: &Env, b: &Env) -> Vec<Mismatch> {
         .collect()
 }
 
+/// [`Walker::save_scope`] で取っておくスコープ。
+struct Scope {
+    regions: BTreeSet<String>,
+    var_types: BTreeMap<String, ast::Type>,
+    locals: BTreeSet<String>,
+    known: BTreeSet<String>,
+}
+
 /// ループ・ラベル付きブロックの枠。
 struct Frame {
     label: Option<String>,
@@ -75,6 +83,9 @@ pub struct Walker<'a> {
     regions: BTreeSet<String>,
     /// 一度でも権限を持った名前（解放後の `X.free()` を E0504 にする）。
     known: BTreeSet<String>,
+    /// スコープにあるローカルの束縛（引数とパターン）。表の名前の値としての参照を、ローカル変数と
+    /// 区別する（[`ebykn_syntax::reserved`]）。
+    locals: BTreeSet<String>,
     /// 型を書いた変数（引数と型注釈付きの `let`）。
     var_types: BTreeMap<String, ast::Type>,
     frames: Vec<Frame>,
@@ -97,6 +108,7 @@ impl<'a> Walker<'a> {
             env: Env::new(),
             regions: BTreeSet::new(),
             known: BTreeSet::new(),
+            locals: BTreeSet::new(),
             var_types: BTreeMap::new(),
             frames: Vec::new(),
             closure_outer: None,
@@ -109,10 +121,11 @@ impl<'a> Walker<'a> {
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
         for p in &sig.params {
-            if let ast::Param::Typed { pat, ty, .. } = p
-                && let Some(i) = pat_ident(pat)
-            {
-                self.var_types.insert(i.name.clone(), ty.clone());
+            if let ast::Param::Typed { pat, ty, .. } = p {
+                if let Some(i) = pat_ident(pat) {
+                    self.var_types.insert(i.name.clone(), ty.clone());
+                }
+                self.add_locals(pat);
             }
         }
         for u in contract.uses() {
@@ -428,19 +441,74 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// スコープの状態（領域変数、型を書いた変数、ローカルの束縛、`known`）を取っておく。
+    fn save_scope(&self) -> Scope {
+        Scope {
+            regions: self.regions.clone(),
+            var_types: self.var_types.clone(),
+            locals: self.locals.clone(),
+            known: self.known.clone(),
+        }
+    }
+
+    /// スコープを戻す。`known` は減らさない（スコープの中で権限を持った名前も残す）。
+    fn restore_scope(&mut self, s: Scope) {
+        self.regions = s.regions;
+        self.var_types = s.var_types;
+        self.locals = s.locals;
+        self.known.extend(s.known);
+    }
+
+    /// パターンが束縛する名前をローカルに足す。
+    fn add_locals(&mut self, p: &ast::Pat) {
+        match &p.kind {
+            PatKind::Ident { ident, sub, .. } => {
+                self.locals.insert(ident.name.clone());
+                if let Some(s) = sub {
+                    self.add_locals(s);
+                }
+            }
+            PatKind::Tuple(ps) | PatKind::Or(ps) | PatKind::Slice(ps) => {
+                for q in ps {
+                    self.add_locals(q);
+                }
+            }
+            PatKind::TupleStruct { elems, .. } => {
+                for q in elems {
+                    self.add_locals(q);
+                }
+            }
+            PatKind::Ref { pat, .. } | PatKind::Paren(pat) | PatKind::Type { pat, .. } => {
+                self.add_locals(pat)
+            }
+            PatKind::Struct { fields, .. } => {
+                for f in fields {
+                    match f {
+                        FieldPat::Field { pat, .. } => self.add_locals(pat),
+                        FieldPat::Erased { ident, .. } => {
+                            self.locals.insert(ident.name.clone());
+                        }
+                        FieldPat::ErasedRest { .. } => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ---- ブロックと文 ----
 
     /// ブロック。発散するなら `true`。
     fn block(&mut self, b: &Block) -> bool {
-        // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで戻さない。
-        let saved = (self.regions.clone(), self.var_types.clone());
+        // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで減らさない。
+        let saved = self.save_scope();
         let mut diverges = false;
         for s in &b.stmts {
             if self.stmt(s) {
                 diverges = true;
             }
         }
-        (self.regions, self.var_types) = saved;
+        self.restore_scope(saved);
         diverges
     }
 
@@ -564,6 +632,7 @@ impl<'a> Walker<'a> {
                     self.introduce(&x.name, PermState::Owned, false, x.span);
                     self.facts.perm_lets.insert(span.into(), x.name.clone());
                 }
+                self.locals.insert(x.name.clone());
             }
             _ => self.bind(&l.pat),
         }
@@ -627,6 +696,7 @@ impl<'a> Walker<'a> {
 
     /// パターンの束縛：Γ にある名前なら E0507。消去フィールドのパターンを検査する。
     fn bind(&mut self, p: &ast::Pat) {
+        self.add_locals(p);
         match &p.kind {
             PatKind::Ident { ident, sub, .. } => {
                 if self.env.contains_key(&ident.name) {
@@ -891,6 +961,18 @@ impl<'a> Walker<'a> {
                 region,
                 body,
             } => self.borrow(e, *mutable, region, body),
+            ExprKind::Path { qself: None, path } if path.as_ident().is_some() => {
+                // 表の関数の名前の値としての参照（`let r = requires; r(..)`）。ローカル変数なら通す。
+                let i = path.as_ident().expect("ident");
+                if let Some(kind) = ebykn_syntax::reserved::kind_of(&i.name)
+                    && ebykn_syntax::reserved::is_call(kind)
+                    && !self.locals.contains(&i.name)
+                {
+                    self.diags
+                        .push(e.span, crate::names::message(kind, &i.name, &i.name));
+                }
+                false
+            }
             ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer | ExprKind::Rust(_) => false,
         }
     }
@@ -1146,8 +1228,7 @@ impl<'a> Walker<'a> {
             }
             None => (self.env.clone(), self.regions.clone()),
         };
-        let saved_known = self.known.clone();
-        let saved_types = self.var_types.clone();
+        let saved_scope = self.save_scope();
         let saved_regions_all = self.regions.clone();
         // 引数は外の Γ と比べる（Γ にある名前を束縛し直せば E0507）。
         for p in &c.params {
@@ -1167,8 +1248,7 @@ impl<'a> Walker<'a> {
         self.regions = saved_regions;
         self.frames = saved_frames;
         self.borrows = saved_borrows;
-        self.known = saved_known;
-        self.var_types = saved_types;
+        self.restore_scope(saved_scope);
         self.closure_outer = prev_outer;
     }
 
@@ -1222,17 +1302,13 @@ impl<'a> Walker<'a> {
         let mut ends = Vec::new();
         for arm in arms {
             self.env = start.clone();
-            let saved = (
-                self.regions.clone(),
-                self.known.clone(),
-                self.var_types.clone(),
-            );
+            let saved = self.save_scope();
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
                 self.expr(g);
             }
             let d = self.expr(&arm.body);
-            (self.regions, self.known, self.var_types) = saved;
+            self.restore_scope(saved);
             ends.push((std::mem::take(&mut self.env), d));
         }
         if ends.is_empty() {
@@ -1263,11 +1339,7 @@ impl<'a> Walker<'a> {
     }
 
     fn loop_expr(&mut self, e: &Expr, l: &ast::Loop) -> bool {
-        let saved = (
-            self.regions.clone(),
-            self.known.clone(),
-            self.var_types.clone(),
-        );
+        let saved = self.save_scope();
         if let LoopKind::For { iter, .. } = &l.kind {
             self.expr(iter);
         }
@@ -1294,7 +1366,7 @@ impl<'a> Walker<'a> {
         });
         let d = self.block(&l.body);
         let frame = self.frames.pop().expect("frame");
-        (self.regions, self.known, self.var_types) = saved;
+        self.restore_scope(saved);
         if !d {
             let diffs = diff(&entry, &self.env);
             if !diffs.is_empty() {
@@ -1421,23 +1493,26 @@ impl<'a> Walker<'a> {
     }
 
     /// 中を読まないマクロの引数（std のマクロ）の中の権限の操作を探す。見つけたら E0003。
+    /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
+    /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
-        use proc_macro2::TokenTree;
-        fn flat(ts: proc_macro2::TokenStream, out: &mut Vec<TokenTree>) {
-            for t in ts {
-                match t {
-                    TokenTree::Group(g) => flat(g.stream(), out),
-                    t => out.push(t),
-                }
-            }
+        if self.perm_in_tokens(m.tokens.clone()) {
+            self.diags.push(
+                m.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::PermInMacro)),
+            );
         }
-        let mut tts = Vec::new();
-        flat(m.tokens.clone(), &mut tts);
+    }
+
+    fn perm_in_tokens(&self, ts: proc_macro2::TokenStream) -> bool {
+        use proc_macro2::{Delimiter, TokenTree};
+        let tts: Vec<TokenTree> = ts.into_iter().collect();
         let id = |t: Option<&TokenTree>| match t {
             Some(TokenTree::Ident(i)) => Some(i.to_string()),
             _ => None,
         };
         let pc = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
+        let grp = |t: Option<&TokenTree>, d: Delimiter| matches!(t, Some(TokenTree::Group(g)) if g.delimiter() == d);
         let held = |n: &str| {
             self.env.contains_key(n)
                 || self.regions.contains(n)
@@ -1447,35 +1522,89 @@ impl<'a> Walker<'a> {
                     .as_ref()
                     .is_some_and(|(e, r)| e.contains_key(n) || r.contains(n))
         };
-        let perm_fns: BTreeSet<&str> = self
-            .cx
-            .index
-            .fns
-            .values()
-            .filter(|f| f.has_perms())
-            .map(|f| f.name.as_str())
-            .chain(self.cx.index.perm_method_names.iter().map(String::as_str))
-            .collect();
-        let found = (0..tts.len()).any(|i| {
-            let Some(n) = id(tts.get(i)) else {
-                return false;
+        // 領域添字（`x[..]`、`self@x[..]`）が `tts[j]` から始まるか。
+        let region_index = |j: usize| {
+            (id(tts.get(j)).is_some() && grp(tts.get(j + 1), Delimiter::Bracket))
+                || (id(tts.get(j)).as_deref() == Some("self") && pc(tts.get(j + 1), '@'))
+        };
+        for (i, tt) in tts.iter().enumerate() {
+            if let TokenTree::Group(g) = tt
+                && self.perm_in_tokens(g.stream())
+            {
+                return true;
+            }
+            let Some(n) = id(Some(tt)) else {
+                continue;
             };
+            let prev = i.checked_sub(1).and_then(|j| tts.get(j));
+            let after_dot = pc(prev, '.');
+            let after_path = pc(prev, ':') && i >= 2 && pc(tts.get(i - 2), ':');
             let next = tts.get(i + 1);
-            (held(&n)
-                && (pc(next, '@')
-                    || (i > 0 && pc(tts.get(i - 1), '*'))
-                    || (pc(next, '.') && id(tts.get(i + 2)).as_deref() == Some("free"))))
-                || (n == "self" && pc(next, '@'))
-                || (["take", "put", "borrow", "leak"].contains(&n.as_str())
-                    && matches!(next, Some(TokenTree::Ident(_))))
-                || (perm_fns.contains(n.as_str()) && i + 1 < tts.len())
-        });
-        if found {
-            self.diags.push(
-                m.span,
-                Message::Check(CheckMsg::Unimplemented(Unimpl::PermInMacro)),
-            );
+            // メソッドの呼び出し `x.f(..)` で `f` が `uses` / `gives` を持つ（E0514 の形）。
+            if after_dot {
+                if self.cx.index.perm_method_names.contains(&n) && grp(next, Delimiter::Parenthesis)
+                {
+                    return true;
+                }
+                if n == "free" && grp(next, Delimiter::Parenthesis) {
+                    // `X.free()` の `X` が権限を持つ名前か。
+                    if let Some(x) = i.checked_sub(2).and_then(|j| id(tts.get(j)))
+                        && held(&x)
+                    {
+                        return true;
+                    }
+                }
+                continue;
+            }
+            // パスの最後の名前の呼び出し：`uses` / `gives` を持つ関数か、`Ptr::new` などか。
+            if grp(next, Delimiter::Parenthesis) {
+                let mut segs = vec![n.clone()];
+                let mut j = i;
+                while j >= 3 && pc(tts.get(j - 1), ':') && pc(tts.get(j - 2), ':') {
+                    match id(tts.get(j - 3)) {
+                        Some(s) => {
+                            segs.insert(0, s);
+                            j -= 3;
+                        }
+                        None => break,
+                    }
+                }
+                let r = self
+                    .cx
+                    .index
+                    .resolve(self.cx.module, false, &segs, self.cx.self_ty);
+                if matches!(r, Resolved::Prelude(PreludeFn::Alloc { .. }))
+                    || self.cx.index.callee(&r).is_some_and(FnInfo::has_perms)
+                {
+                    return true;
+                }
+            }
+            if after_path {
+                continue;
+            }
+            let found = match n.as_str() {
+                "self" => pc(next, '@'),
+                "take" | "put" => region_index(i + 1),
+                "borrow" => {
+                    region_index(i + 1)
+                        || (id(next).as_deref() == Some("mut") && region_index(i + 2))
+                }
+                "leak" => id(next).is_some() && pc(tts.get(i + 2), '@'),
+                _ => {
+                    // `*X`（前の `*` の前が式でなければ参照外し。`2 * x` は掛け算）。
+                    let deref = pc(prev, '*')
+                        && !matches!(
+                            i.checked_sub(2).and_then(|j| tts.get(j)),
+                            Some(TokenTree::Ident(_) | TokenTree::Literal(_) | TokenTree::Group(_))
+                        );
+                    held(&n) && (pc(next, '@') || deref)
+                }
+            };
+            if found {
+                return true;
+            }
         }
+        false
     }
 
     fn struct_lit(&mut self, e: &Expr, lit: &ast::StructLit) -> bool {

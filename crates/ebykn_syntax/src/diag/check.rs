@@ -263,6 +263,10 @@ pub enum CheckMsg {
     InvariantImplShape,
     /// `impl View for T` の中に `type V` と `spec fn` 以外がある。
     ViewImplShape,
+    /// `Invariant` / `View` を `impl Invariant for T` 以外の綴り（パス付き、改名、`use`）で書いた。
+    EbyknTraitSpelling {
+        written: String,
+    },
 
     // E0402
     /// 構造体リテラル・パターンに消去フィールドがない。
@@ -404,7 +408,9 @@ impl CheckMsg {
             | VerusPinMismatch { .. }
             | ReadFailed { .. } => Code::E0002,
             Unimplemented(_) => Code::E0003,
-            NotARegion { .. } | InvariantImplShape | ViewImplShape => Code::E0001,
+            NotARegion { .. } | InvariantImplShape | ViewImplShape | EbyknTraitSpelling { .. } => {
+                Code::E0001
+            }
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
             UsesNotParam { .. }
             | UsesType { .. }
@@ -507,6 +513,12 @@ impl CheckMsg {
             (InvariantImplShape, En) => {
                 "syntax error: `impl Invariant for T` must contain exactly one item, `spec fn invariant(&self) -> bool = ..;`".into()
             }
+            (EbyknTraitSpelling { written }, En) => format!(
+                "syntax error: `{written}` cannot be written; Ebykn's `Invariant` and `View` are always in scope and are written only as `impl Invariant for T` / `impl View for T` (no path, rename or generics)"
+            ),
+            (EbyknTraitSpelling { written }, Ja) => format!(
+                "構文エラー: `{written}` とは書けません。Ebykn の `Invariant` と `View` は常に使える名前で、`impl Invariant for T` / `impl View for T` とだけ書きます（パス・改名・ジェネリクスなし）"
+            ),
             (ViewImplShape, En) => {
                 "syntax error: `impl View for T` can only contain `type V = ..;` and `spec fn view(&self) -> V = ..;`".into()
             }

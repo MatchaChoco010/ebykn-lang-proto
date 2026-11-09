@@ -8,6 +8,7 @@
 pub mod body;
 pub mod facts;
 pub mod index;
+pub mod names;
 pub mod project;
 pub mod sig;
 
@@ -20,6 +21,11 @@ use facts::Facts;
 use index::{ImplTrait, Index, ItemPath};
 use project::Project;
 use sig::SigCx;
+
+/// 名前が `Invariant` / `View`（[`ebykn_syntax::reserved`] の Ebykn のトレイト）か。
+pub fn reserved_trait(name: &str) -> bool {
+    ebykn_syntax::reserved::kind_of(name) == Some(ebykn_syntax::reserved::ReservedKind::EbyknTrait)
+}
 
 /// 診断を集めるもの。
 #[derive(Debug, Default)]
@@ -56,6 +62,7 @@ pub fn check(project: &Project) -> Checked {
     }
     let mut diags = Diags::default();
     project.for_each_module(|m, _, items| check_items(&index, m, items, &mut diags, &mut facts));
+    names::check(project, &index, &mut diags);
     let mut list = diags.list;
     sort_diags(&mut list);
     Checked {
@@ -298,6 +305,17 @@ fn check_impl(
             }
             return;
         }
+        ImplTrait::Misspelled => {
+            if let Some(t) = &imp.trait_ {
+                diags.push(
+                    t.span,
+                    Message::Check(CheckMsg::EbyknTraitSpelling {
+                        written: format!("impl {}", path_text(t)),
+                    }),
+                );
+            }
+            return;
+        }
         ImplTrait::Inherent | ImplTrait::Other => {}
     }
     let own_impl = kind == ImplTrait::Inherent;
@@ -412,4 +430,22 @@ fn check_trait(
             TraitItemKind::Rust(_) => {}
         }
     }
+}
+
+/// パスの書き方（ジェネリクスを含む）。
+fn path_text(p: &ast::Path) -> String {
+    let mut out = String::new();
+    if p.leading_colon {
+        out.push_str("::");
+    }
+    let segs: Vec<String> = p
+        .segments
+        .iter()
+        .map(|s| match &s.args {
+            ast::GenericArgs::None => s.ident.name.clone(),
+            _ => format!("{}<..>", s.ident.name),
+        })
+        .collect();
+    out.push_str(&segs.join("::"));
+    out
 }

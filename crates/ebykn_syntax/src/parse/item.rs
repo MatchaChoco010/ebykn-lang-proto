@@ -259,6 +259,14 @@ fn check_use(tree: &syn::UseTree, prefix: &mut Vec<String>) {
                 [prefix, std::slice::from_ref(&o)].concat().join("::")
             )
         };
+        // 表（`crate::reserved`）の関数とトレイトの名前を取り込む `use` は、クレートの中の定義を
+        // 指すときだけ書ける（裸の `use requires;` は拒否、それ以外は検査が名前解決して決める）。
+        if let Some(kind) = crate::reserved::kind_of(&o)
+            && kind != crate::reserved::ReservedKind::VerusMacro
+        {
+            let segs = [prefix, std::slice::from_ref(&o)].concat();
+            super::reserved_path(&segs, false, |_| true, written.clone(), sp(orig.span()));
+        }
         if RESERVED_NAMES.contains(&n.as_str()) && !(prefix.is_empty() && o == n) {
             push(sp(name.span()), Message::ReservedRename { written });
         } else if super::tokens::VERUS_MACROS.contains(&o.as_str())

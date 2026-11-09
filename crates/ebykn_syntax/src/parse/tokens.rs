@@ -220,34 +220,8 @@ fn split_commas(tts: &[TokenTree]) -> Vec<&[TokenTree]> {
     out
 }
 
-/// Verus の構文を処理するマクロ（`verus!` と、Verus と vstd の証明用・内部用のマクロ）。
-/// `.eyk` からは呼べない。
-pub(super) const VERUS_MACROS: &[&str] = &[
-    "verus",
-    "verus_",
-    "proof",
-    "proof_decl",
-    "proof_with",
-    "calc",
-    "assert_by_contradiction",
-    "assert_seqs_equal",
-    "assert_sets_equal",
-    "assert_maps_equal",
-    "open_atomic_invariant",
-    "open_local_invariant",
-    "open_atomic_invariant_in_proof",
-    "open_local_invariant_in_proof",
-    "struct_with_invariants",
-    "atomic_with_ghost",
-    "state_machine",
-    "tokenized_state_machine",
-    "case_on_next",
-    "case_on_init",
-    "builtin_macros",
-    "verus_proof_macro_exprs",
-    "verus_exec_macro_exprs",
-    "verus_proof_expr",
-];
+/// Verus の構文を処理するマクロ。`.eyk` からは呼べない（表は [`crate::reserved`]）。
+pub(super) const VERUS_MACROS: &[&str] = crate::reserved::VERUS_MACROS;
 
 /// マクロのパス（`r#` を外した名前の列）が `.eyk` で呼べるものか（#16 の既定）。
 /// std のマクロは裸の名前か std / core / alloc から始まるパス、vstd のマクロは裸の名前だけ。
@@ -313,22 +287,41 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             Some(Message::ProofSyntax {
                 written: "proof { .. }".into(),
             })
-        } else if ["assert", "reveal", "reveal_with_fuel", "hide"].contains(&name.as_str())
-            && group(next, Delimiter::Parenthesis)
+        } else if crate::reserved::kind_of(&name).is_some_and(crate::reserved::is_call)
+            && !punct(prev, '.')
+            && !punct(next, '!')
+            // 構造体のフィールドの名前（`S { requires: 1 }`）は参照ではない。
+            && !(punct(next, ':') && !punct(tts.get(i + 2), ':'))
+            // パスの途中（`requires::x`）は最後の名前ではない。ターボフィッシュ（`requires::<T>`）は見る。
+            && !(punct(next, ':') && punct(tts.get(i + 2), ':') && !punct(tts.get(i + 3), '<'))
+            // 裸の名前の値（ローカル変数かもしれない）は見ない。呼び出しとパス付きの綴りを見る。
+            && (group(next, Delimiter::Parenthesis)
+                || punct(next, ':')
+                || (punct(prev, ':') && i >= 2 && punct(tts.get(i - 2), ':')))
         {
-            Some(Message::ProofSyntax {
-                written: format!("{name}(..)"),
-            })
-        } else if ["assume", "admit", "assume_"].contains(&name.as_str())
-            && group(next, Delimiter::Parenthesis)
-            || crate::VERUS_BUILTIN_CALLS.contains(&name.as_str())
-                && group(next, Delimiter::Parenthesis)
-                && !punct(prev, '.')
-                && !punct(prev, ':')
-        {
-            Some(Message::VerusOnly {
-                written: format!("{name}(..)"),
-            })
+            // 前の `a::b::` を集める。
+            let mut segs = vec![name.clone()];
+            let mut j = i;
+            while j >= 2 && punct(tts.get(j - 1), ':') && punct(tts.get(j - 2), ':') {
+                match j.checked_sub(3).and_then(|k| ident(tts.get(k))) {
+                    Some(n) => {
+                        segs.insert(0, n);
+                        j -= 3;
+                    }
+                    None => break,
+                }
+            }
+            let leading = j >= 2 && punct(tts.get(j - 1), ':') && punct(tts.get(j - 2), ':');
+            let written = format!("{}{}(..)", if leading { "::" } else { "" }, segs.join("::"));
+            // 中を読まないトークン列の中は名前解決しないので、どの綴りも拒否する（`OPEN.md`）。
+            super::reserved_path(
+                std::slice::from_ref(&name),
+                true,
+                crate::reserved::is_call,
+                written,
+                span,
+            );
+            None
         } else if ["forall", "exists", "choose"].contains(&name.as_str()) && punct(next, '|') {
             Some(Message::VerusOnly {
                 written: format!("{name}|x| .."),

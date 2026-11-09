@@ -732,7 +732,7 @@ fn forbidden_crates_in_use_groups_inside_macro_arguments_are_rejected() {
     );
     let src = "fn f() { println!(\"{}\", { use {vstd as v}; v::prelude::admit(); 1 }) }";
     rejects(src, &format!("cannot refer to the crate `vstd` {DIRECT}"));
-    rejects(src, "`admit(..)` is Verus syntax");
+    rejects(src, "`v::prelude::admit(..)` is Verus syntax");
     rejects(
         "fn f() { vec![{ use {self::m, builtin as b}; 1 }] }",
         &format!("cannot refer to the crate `builtin` {DIRECT}"),
@@ -766,5 +766,9 @@ fn verus_clause_builtins_are_rejected_as_calls() {
     ok(
         "mod m { pub fn requires(x: bool) {} }\npub fn f(s: &S) { m::requires(true); s.decreases(); }\npub struct S {}\nimpl S { pub fn decreases(&self) {} }",
     );
-    ok("pub fn f(x: u64) { println!(\"{}\", m::requires(x)); }");
+    // 中を読まないマクロの引数の中は名前解決しないので、パス付きでも拒否する（`OPEN.md`）。
+    rejects(
+        "pub fn f(x: u64) { println!(\"{}\", m::requires(x)); }",
+        "`m::requires(..)` is Verus syntax",
+    );
 }

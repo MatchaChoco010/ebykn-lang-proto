@@ -249,27 +249,29 @@ fn receiver_mut(p: &Param) -> bool {
 }
 
 /// 型が展開の位置の形（`T`、`&T`、`&mut T`、`Option<T>`、`Result<T, E>` とその `&` / `&mut`）なら、その形。
-/// 展開しない位置（`Vec<T>` など）に不変条件を持つ型があれば W0601 を出す。
+/// 展開しない位置（`Vec<T>` など）に不変条件を持つ型があれば W0601 を出す。型の別名は右辺の型に
+/// 置き換えてから判定する（`type O = Option<S>;` の `O` は `Option<S>` の位置）。
 fn position(cx: &SigCx, ty: &ast::Type, diags: &mut Vec<Diagnostic>) -> Option<Position> {
+    let (m, ty, site) = norm(cx, cx.module, ty, None);
     let (mutable_ref, inner) = match &ty.kind {
-        TypeKind::Ref { mutable, elem, .. } => (*mutable, &**elem),
-        _ => (false, ty),
+        TypeKind::Ref { mutable, elem, .. } => (*mutable, (**elem).clone()),
+        _ => (false, ty.clone()),
     };
-    let inner = strip_paren(inner);
-    if let Some(t) = invariant_type(cx, inner) {
-        warn_nested_args(cx, inner, diags);
+    let (m, inner, site) = norm(cx, &m, &inner, site);
+    if let Some(t) = invariant_type(cx, &m, &inner) {
+        warn_nested_args(cx, &m, &inner, site, diags);
         return Some(Position {
             mutable_ref,
             wrap: Wrap::None,
             ty: t,
         });
     }
-    if let Some((wrap, arg, rest)) = wrapper(inner) {
-        let arg = strip_paren(arg);
-        if let Some(t) = invariant_type(cx, arg) {
-            warn_nested_args(cx, arg, diags);
+    if let Some((wrap, arg, rest)) = wrapper(&inner) {
+        let (ma, arg, sa) = norm(cx, &m, arg, site);
+        if let Some(t) = invariant_type(cx, &ma, &arg) {
+            warn_nested_args(cx, &ma, &arg, sa, diags);
             for r in rest {
-                warn_nested(cx, r, diags);
+                warn_nested(cx, &m, r, site, diags);
             }
             return Some(Position {
                 mutable_ref,
@@ -278,8 +280,31 @@ fn position(cx: &SigCx, ty: &ast::Type, diags: &mut Vec<Diagnostic>) -> Option<P
             });
         }
     }
-    warn_nested(cx, inner, diags);
+    warn_nested(cx, &m, &inner, site, diags);
     None
+}
+
+/// 型の別名を右辺に置き換え、括弧を外す。置き換えたら、診断の位置を元の型（`site`）にする。
+fn norm(
+    cx: &SigCx,
+    module: &[String],
+    ty: &ast::Type,
+    site: Option<Span>,
+) -> (Vec<String>, ast::Type, Option<Span>) {
+    let mut m = module.to_vec();
+    let mut t = strip_paren(ty).clone();
+    let mut site = site;
+    for _ in 0..16 {
+        match cx.index.expand_alias(&m, &t, cx.self_ty) {
+            Some((am, at)) => {
+                site = Some(site.unwrap_or(ty.span));
+                m = am;
+                t = strip_paren(&at).clone();
+            }
+            None => break,
+        }
+    }
+    (m, t, site)
 }
 
 fn strip_paren(ty: &ast::Type) -> &ast::Type {
@@ -311,28 +336,41 @@ fn wrapper(ty: &ast::Type) -> Option<(Wrap, &ast::Type, Vec<&ast::Type>)> {
     Some((wrap, first, tys.collect()))
 }
 
-fn invariant_type(cx: &SigCx, ty: &ast::Type) -> Option<ItemPath> {
-    let p = cx.index.type_path(cx.module, ty, cx.self_ty)?;
+fn invariant_type(cx: &SigCx, module: &[String], ty: &ast::Type) -> Option<ItemPath> {
+    let p = cx.index.type_path(module, ty, cx.self_ty)?;
     cx.index.invariants.contains_key(&p).then_some(p)
 }
 
 /// `ty` の中（`ty` 自身を除く）にある不変条件を持つ型に W0601 を出す。
-fn warn_nested_args(cx: &SigCx, ty: &ast::Type, diags: &mut Vec<Diagnostic>) {
+fn warn_nested_args(
+    cx: &SigCx,
+    module: &[String],
+    ty: &ast::Type,
+    site: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+) {
     for t in child_types(ty) {
-        warn_nested(cx, t, diags);
+        warn_nested(cx, module, t, site, diags);
     }
 }
 
-/// `ty` とその中にある不変条件を持つ型に W0601 を出す。
-fn warn_nested(cx: &SigCx, ty: &ast::Type, diags: &mut Vec<Diagnostic>) {
-    if let Some(t) = invariant_type(cx, ty) {
+/// `ty` とその中にある不変条件を持つ型に W0601 を出す（型の別名は右辺をたどる）。
+fn warn_nested(
+    cx: &SigCx,
+    module: &[String],
+    ty: &ast::Type,
+    site: Option<Span>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let (m, ty, site) = norm(cx, module, ty, site);
+    if let Some(t) = invariant_type(cx, &m, &ty) {
         diags.push(Diagnostic::new(
-            ty.span,
+            site.unwrap_or(ty.span),
             Message::Check(CheckMsg::RefinementNested { ty: t.join("::") }),
         ));
     }
-    for t in child_types(ty) {
-        warn_nested(cx, t, diags);
+    for t in child_types(&ty) {
+        warn_nested(cx, &m, t, site, diags);
     }
 }
 
@@ -378,13 +416,14 @@ pub fn nested(index: &Index, ty: &ItemPath) -> Vec<(String, ItemPath, Wrap)> {
     };
     let mut out = Vec::new();
     for (name, fty) in &s.fields {
-        let fty = strip_paren(fty);
-        if let Some(t) = invariant_type(&cx, fty) {
+        let (m, fty, _) = norm(&cx, &s.module, fty, None);
+        if let Some(t) = invariant_type(&cx, &m, &fty) {
             out.push((name.clone(), t, Wrap::None));
-        } else if let Some((Wrap::Option, arg, _)) = wrapper(fty)
-            && let Some(t) = invariant_type(&cx, strip_paren(arg))
-        {
-            out.push((name.clone(), t, Wrap::Option));
+        } else if let Some((Wrap::Option, arg, _)) = wrapper(&fty) {
+            let (ma, arg, _) = norm(&cx, &m, arg, None);
+            if let Some(t) = invariant_type(&cx, &ma, &arg) {
+                out.push((name.clone(), t, Wrap::Option));
+            }
         }
     }
     out

@@ -29,18 +29,16 @@ fn requires_of(src: &str) -> Vec<String> {
 
 // ---- B1：トレイトと型の別名を索引で解決する ----
 
+/// 再レビュー：`impl Invariant for T` の 1 つの書き方だけを受理し、ほかの綴りは E0001
+/// （綴りの総当たりは `tests/reserved.rs`）。
 #[test]
-fn b1_invariant_impl_through_a_prelude_path() {
+fn b1_only_the_bare_spelling_is_the_ebykn_trait() {
     let src = format!("{S}impl ebykn_prelude::Invariant for S {INV}pub fn f(x: S) {{}}\n");
-    assert_eq!(requires_of(&src), ["S:x"]);
-}
-
-#[test]
-fn b1_invariant_impl_through_a_renamed_import() {
+    rejects(&src, "E0001", "written only as `impl Invariant for T`");
     let src = format!(
         "{S}use ebykn_prelude::Invariant as Inv;\nimpl Inv for S {INV}pub fn f(x: S) {{}}\n"
     );
-    assert_eq!(requires_of(&src), ["S:x"]);
+    assert_eq!(codes(&src), ["E0001", "E0001"]);
 }
 
 #[test]
@@ -286,5 +284,73 @@ fn permissions_in_unread_macro_arguments_are_e0003() {
     );
     accepts(&in_pool(
         "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); assert!(x > 0); println!(\"{}\", p.addr()); leak p@; }",
+    ));
+}
+
+// ---- 再レビュー ----
+
+/// (b) パスでない型の別名も、右辺を §6.4 の位置の判定に代入する。
+#[test]
+fn rereview_aliases_of_wrappers_and_references_expand() {
+    let (c, lines) = run(&format!(
+        "{S}impl Invariant for S {INV}type O = Option<S>;\npub fn f(x: O) {{}}\n"
+    ));
+    assert!(lines.is_empty(), "{lines:?}");
+    let e: Vec<_> = c.facts.expansions.values().collect();
+    assert_eq!(e[0].requires[0].wrap, Wrap::Option);
+    assert_eq!(e[0].requires[0].subject, Subject::Var("x".into()));
+    let src = format!("{S}impl Invariant for S {INV}type R<'a> = &'a S;\npub fn f(x: R) {{}}\n");
+    assert_eq!(requires_of(&src), ["S:x"]);
+    // 型の引数を代入する。
+    let src =
+        format!("{S}impl Invariant for S {INV}type W<T> = Option<T>;\npub fn f(x: W<S>) {{}}\n");
+    let (c, _) = run(&src);
+    assert_eq!(c.facts.expansions.len(), 1);
+    // 展開しない位置の別名は、使った位置に W0601。
+    let src = format!("{S}impl Invariant for S {INV}type V = Vec<S>;\npub fn f(x: V) {{}}\n");
+    let (_, lines) = run(&src);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains(":4:13: W0601"), "{}", lines[0]);
+}
+
+/// 4. グループの境界を保つ（`take(n)` は `take n` ではない）。
+#[test]
+fn rereview_macro_tokens_keep_group_boundaries() {
+    accepts(&in_pool(
+        "pub fn f(v: Vec<u64>, n: usize) { println!(\"{}\", v.iter().take(n).count()); }",
+    ));
+    accepts(&in_pool(
+        "pub fn f(x: Option<u64>) -> bool { matches!(x, Some(take) if take > 0) }",
+    ));
+    accepts(&in_pool(
+        "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); println!(\"{}\", 2 * x); leak p@; }",
+    ));
+    // 領域添字の形は今までどおり拒否する。
+    rejects(
+        &in_pool(
+            "pub fn f(&mut self, p: Ptr<Node>) { println!(\"{:?}\", { take self@nodes[p]; 1 }); }",
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
+}
+
+/// 5. 権限を作る式をマクロの引数と型の別名で隠しても E0003 / E0505。
+#[test]
+fn rereview_hidden_permission_sources() {
+    rejects(
+        &in_pool("pub fn f(n: u64) { let v = vec![Ptr::new(Node { val: n })]; }"),
+        "E0003",
+        "arguments of this macro",
+    );
+    rejects(
+        &format!(
+            "{PRELUDE}type P = Ptr<Node>;\npub fn f(n: u64) {{ P::new(Node {{ val: n }}); }}\n"
+        ),
+        "E0505",
+        "is discarded",
+    );
+    accepts(&format!(
+        "{PRELUDE}type P = Ptr<Node>;\npub fn f(n: u64) {{ let p = P::new(Node {{ val: n }}); leak p@; }}\n"
     ));
 }
