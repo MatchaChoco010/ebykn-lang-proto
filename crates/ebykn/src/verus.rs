@@ -186,6 +186,31 @@ pub struct Run {
     pub checked: Option<std::collections::BTreeSet<String>>,
 }
 
+/// 検証の要約。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Summary {
+    /// Verus が検証まで進んだ（検証した件数と、検証のエラーの数）。
+    Ran { verified: u64, errors: u64 },
+    /// コンパイルエラーなどで、Verus が検証の前に止まった（読み取ったエラーの数）。
+    Stopped { errors: usize },
+}
+
+impl Run {
+    /// Verus が失敗したのに検証のエラーが 0 件（または件数がない）なら、検証の前に止まった。
+    /// `--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出すので、件数だけでは
+    /// 見分けられない（PR #26 の確認）。
+    pub fn summary(&self) -> Summary {
+        match self.results {
+            Some((verified, errors)) if self.success || errors > 0 => {
+                Summary::Ran { verified, errors }
+            }
+            _ => Summary::Stopped {
+                errors: self.errors.len(),
+            },
+        }
+    }
+}
+
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let path = std::env::join_paths(std::iter::once(verus.dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -528,12 +553,17 @@ pub fn select(all: &[ItemStatus], items: &[&str]) -> Option<Vec<ItemStatus>> {
 }
 
 /// `verify --json` の結果（1 行）。
-pub fn status_json(items: &[ItemStatus], results: Option<(u64, u64)>, success: bool) -> String {
+pub fn status_json(items: &[ItemStatus], summary: Summary, success: bool) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
         .map(|i| serde_json::json!({"item": i.item, "status": i.status}))
         .collect();
-    let results = results.map(|(v, e)| serde_json::json!({"verified": v, "errors": e}));
+    let results = match summary {
+        Summary::Ran { verified, errors } => {
+            serde_json::json!({"ran": true, "verified": verified, "errors": errors})
+        }
+        Summary::Stopped { errors } => serde_json::json!({"ran": false, "errors": errors}),
+    };
     serde_json::json!({
         "$message_type": "ebykn-verify",
         "success": success,
@@ -544,14 +574,18 @@ pub fn status_json(items: &[ItemStatus], results: Option<(u64, u64)>, success: b
 }
 
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
-pub fn status_text(items: &[ItemStatus], results: Option<(u64, u64)>) -> String {
+pub fn status_text(items: &[ItemStatus], summary: Summary) -> String {
     let mut s = String::new();
     for i in items {
         s.push_str(&format!("{} {}\n", i.status, i.item));
     }
-    match results {
-        Some((v, e)) => s.push_str(&format!("results {v} verified, {e} errors\n")),
-        None => s.push_str("results none\n"),
+    match summary {
+        Summary::Ran { verified, errors } => {
+            s.push_str(&format!("results {verified} verified, {errors} errors\n"))
+        }
+        Summary::Stopped { errors } => s.push_str(&format!(
+            "results not verified: Verus stopped before verification ({errors} errors)\n"
+        )),
     }
     s
 }
@@ -680,7 +714,13 @@ mod tests {
             Some(1),
         );
         assert_eq!(
-            status_text(&st, Some((1, 1))),
+            status_text(
+                &st,
+                Summary::Ran {
+                    verified: 1,
+                    errors: 1
+                }
+            ),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
         // 項目に入らないエラーがあれば、失敗していない項目は unknown。
@@ -792,6 +832,70 @@ mod tests {
         assert_eq!(
             plain,
             "error: postcondition not satisfied\n  --> src/lib.rs:33:13"
+        );
+    }
+
+    /// `impl Tr for Missing`（定義のない型）の生成コードで `cargo verus focus -- --output-json` が
+    /// 出したもの。コンパイルエラーでも `verification-results` は `verified: 0, errors: 0` になる。
+    const MISSING_STDOUT: &str = "{\n  \"func-details\": {},\n  \"verification-results\": {\n    \"encountered-error\": true,\n    \"encountered-vir-error\": false,\n    \"success\": false,\n    \"verified\": 0,\n    \"errors\": 0,\n    \"is-verifying-entire-crate\": true\n  }\n}\n";
+    const MISSING_STDERR: &str = "error[E0425]: cannot find type `Missing` in this scope\n --> src/lib.rs:12:13\n   |\n12 | impl Tr for Missing {\n   |             ^^^^^^^ not found in this scope\n\nFor more information about this error, try `rustc --explain E0425`.\nerror: could not compile `envt` (lib) due to 1 previous error\n";
+
+    fn missing_run(success: bool) -> Run {
+        let j = parse_json(MISSING_STDOUT).unwrap();
+        let (text, errors) = read_diagnostics(&format!("{MISSING_STDOUT}{MISSING_STDERR}"), true);
+        Run {
+            success,
+            text,
+            results: j.results,
+            errors,
+            checked: Some(j.checked),
+        }
+    }
+
+    #[test]
+    fn compile_errors_are_reported_as_not_verified() {
+        let r = missing_run(false);
+        assert_eq!(r.results, Some((0, 0)));
+        assert_eq!(r.summary(), Summary::Stopped { errors: 1 });
+        let text = status_text(&[], r.summary());
+        assert_eq!(
+            text,
+            "results not verified: Verus stopped before verification (1 errors)\n"
+        );
+        assert!(!text.contains("0 errors"), "{text}");
+        let json = status_json(&[], r.summary(), false);
+        assert!(json.contains("\"ran\":false"), "{json}");
+        // 件数がない（Verus が JSON を出さなかった）ときも同じ。
+        let mut none = missing_run(false);
+        none.results = None;
+        assert_eq!(none.summary(), Summary::Stopped { errors: 1 });
+    }
+
+    #[test]
+    fn verification_runs_keep_their_counts() {
+        // 成功したとき、検証のエラーで失敗したときは、件数をそのまま出す。
+        let mut ok = missing_run(true);
+        ok.results = Some((3, 0));
+        assert_eq!(
+            ok.summary(),
+            Summary::Ran {
+                verified: 3,
+                errors: 0
+            }
+        );
+        let mut failed = missing_run(false);
+        failed.results = Some((1, 2));
+        assert_eq!(
+            failed.summary(),
+            Summary::Ran {
+                verified: 1,
+                errors: 2
+            }
+        );
+        let json = status_json(&[], failed.summary(), false);
+        assert!(
+            json.contains("\"ran\":true") && json.contains("\"errors\":2"),
+            "{json}"
         );
     }
 }

@@ -197,20 +197,16 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
     if !r.success {
         eprint!("{}", r.text);
     }
-    if r.results.is_none() {
-        say(
-            opts,
-            "Verus did not report verification results (see the errors above)",
-            "Verus が検証の結果を出しませんでした（上のエラーを見てください）",
-        );
-        return ExitCode::from(1);
-    }
+    let summary = r.summary();
     let all = ebykn::verus::statuses(
         &output.files,
         &output,
         &r.errors,
         r.checked.as_ref(),
-        r.results.map(|(_, e)| e),
+        match summary {
+            ebykn::verus::Summary::Ran { errors, .. } => Some(errors),
+            ebykn::verus::Summary::Stopped { .. } => None,
+        },
     );
     let Some(shown) = ebykn::verus::select(&all, items) else {
         say(
@@ -226,9 +222,20 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         .any(|s| matches!(s.status, "failed" | "unknown"))
         || !r.success;
     if opts.json {
-        println!("{}", ebykn::verus::status_json(&shown, r.results, !fails));
+        println!("{}", ebykn::verus::status_json(&shown, summary, !fails));
     } else {
-        print!("{}", ebykn::verus::status_text(&shown, r.results));
+        print!("{}", ebykn::verus::status_text(&shown, summary));
+    }
+    if let ebykn::verus::Summary::Stopped { errors } = summary {
+        say(
+            opts,
+            &format!(
+                "Verus stopped before verification (a compile error or similar; {errors} error(s) above), so nothing was verified"
+            ),
+            &format!(
+                "コンパイルエラーなどで Verus が検証の前に止まったので、何も検証していません（上のエラー {errors} 件）"
+            ),
+        );
     }
     if !unproven.is_empty() {
         say(

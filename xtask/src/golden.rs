@@ -29,6 +29,11 @@ pub fn judge(expected: &str, stdout: &str, success: bool) -> Result<(), String> 
         .and_then(|r| r.split_once(" verified, "))
         .and_then(|(_, e)| e.strip_suffix(" errors"))
         .and_then(|e| e.parse::<u64>().ok());
+    // 検証の前に止まった（`results not verified: ..`）なら、検証は成功していない。
+    let stopped = expected
+        .lines()
+        .any(|l| l.starts_with("results not verified"));
+    let errors = if stopped { Some(1) } else { errors };
     let Some(errors) = errors else {
         return Err("expected/status.txt に results の行がありません".into());
     };
@@ -172,6 +177,14 @@ mod tests {
     #[test]
     fn fails_when_unknown_items_exit_successfully() {
         let s = "unknown k::f\nresults 0 verified, 0 errors\n";
+        assert!(judge(s, s, true).is_err());
+        assert_eq!(judge(s, s, false), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_stopped_runs_exit_successfully() {
+        let s =
+            "unknown k::f\nresults not verified: Verus stopped before verification (1 errors)\n";
         assert!(judge(s, s, true).is_err());
         assert_eq!(judge(s, s, false), Ok(()));
     }
