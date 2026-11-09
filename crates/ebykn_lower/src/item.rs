@@ -938,17 +938,20 @@ fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &
             TraitItemKind::Fn(f) => {
                 let mut fc = fn_cx(&c, &f.sig, &f.contract);
                 let sig = sig_text(&mut fc, &f.sig, &f.contract, &FnExpansion::default());
+                let mut a = attrs(&ti.attrs);
                 let (body, name) = match &f.body {
                     Some(ast::FnBody::Block(b)) => {
-                        (fc.block(b), Some(c.item_path(&f.sig.ident.name)))
+                        let path = c.item_path(&f.sig.ident.name);
+                        // 既定のメソッドも、実行関数の `decreases` は任意（`fn_text` と同じ。#81）。
+                        if f.unchecked.is_none() && !is_test(&ti.attrs) {
+                            a = format!("#[verifier::exec_allows_no_decreases_clause] {a}");
+                            c.report.borrow_mut().exec.push(path.clone());
+                        }
+                        (fc.block(b), Some(path))
                     }
                     _ => (";".into(), None),
                 };
-                out.push(tokens(
-                    format!("{}{sig} {body}", attrs(&ti.attrs)),
-                    name,
-                    indent + 1,
-                ));
+                out.push(tokens(format!("{a}{sig} {body}"), name, indent + 1));
             }
             TraitItemKind::Rust(tk) => out.push(tokens(tk.tokens.to_string(), None, indent + 1)),
             // 契約のある trait は検査が E0003 にする（M4）。

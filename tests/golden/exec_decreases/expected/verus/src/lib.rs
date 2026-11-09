@@ -55,4 +55,17 @@ impl Counter {
 
 #[verifier::external_body] fn spin() { loop {} }
 
+pub trait Drain {
+    fn left(&self) -> u64;
+
+    #[verifier::exec_allows_no_decreases_clause] fn spin_down(&self) -> u64 {
+        let mut k = self.left();
+        while k > 0 {
+            k = k - 1;
+        }
+        k
+    }
+
+}
+
 } // verus!

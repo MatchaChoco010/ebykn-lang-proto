@@ -5,4 +5,5 @@ failed exec_decreases::stuck
 verified exec_decreases::tri
 verified exec_decreases::Counter::drain
 unchecked exec_decreases::spin
-results 9 verified, 1 errors
+verified exec_decreases::Drain::spin_down
+results 11 verified, 1 errors

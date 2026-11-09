@@ -1,7 +1,7 @@
 // 実行関数の `decreases` は任意（設計ノート §4.3、#81）。書き下しは、本体を検証する実行関数に
 // `#[verifier::exec_allows_no_decreases_clause]` を付ける。`decreases` のないループと再帰は停止を示さずに
 // 検証し、書いた `decreases` は確かめる（`stuck` は減らないので failed）。`spec fn` の再帰は今までどおり
-// `decreases` が要る。
+// `decreases` が要る。trait の既定のメソッドにも付ける。
 
 pub fn halve_to_zero(x: u64) -> (r: u64)
     ensures r == 0,
@@ -59,4 +59,16 @@ impl Counter {
 
 unchecked fn spin() {
     loop {}
+}
+
+pub trait Drain {
+    fn left(&self) -> u64;
+
+    fn spin_down(&self) -> u64 {
+        let mut k = self.left();
+        while k > 0 {
+            k = k - 1;
+        }
+        k
+    }
 }
