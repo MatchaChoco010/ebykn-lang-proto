@@ -153,11 +153,20 @@ pub enum LoopPoint {
     Break,
 }
 
+/// `.eykp` だけの項目の名前が何とぶつかったか（E0304）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProofOnlyClash {
+    /// `.eyk` に現れる名前か、Ebykn がソースのために使う名前。
+    Source,
+    /// 同じファイルのほかの `.eykp` だけの項目。
+    ProofOnly,
+}
+
 /// 未実装の機能（`E0003`）。各マイルストーンで実装する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unimpl {
-    /// `.eykp`（M3）。
-    Eykp,
+    /// `.eykp` があるときの `verify` / `build`（書き下しが `.eykp` を使うのは M3 の #67）。
+    EykpLowering,
     /// `props/` の性質ファイル（M5）。
     PropsDir,
     /// `Ebykn.toml` の `[props]`（M5）。
@@ -209,8 +218,12 @@ pub enum Unimpl {
 impl Unimpl {
     fn text(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Unimpl::Eykp, Lang::En) => "proof files (`.eykp`) are implemented in M3",
-            (Unimpl::Eykp, Lang::Ja) => "証明ファイル（`.eykp`）は M3 で実装します",
+            (Unimpl::EykpLowering, Lang::En) => {
+                "`verify` and `build` with proof files (`.eykp`) are implemented in M3: the lowering does not read `.eykp` yet, so it would drop the proofs written there (`check` reads `.eykp` and checks that stripping it gives the `.eyk`)"
+            }
+            (Unimpl::EykpLowering, Lang::Ja) => {
+                "証明ファイル（`.eykp`）があるときの `verify` と `build` は M3 で実装します。書き下しがまだ `.eykp` を読まないので、そこに書いた証明を捨ててしまうためです（`check` は `.eykp` を読み、剥がすと `.eyk` に一致することを確かめます）"
+            }
             (Unimpl::PropsDir, Lang::En) => "props files (`props/`) are implemented in M5",
             (Unimpl::PropsDir, Lang::Ja) => "性質ファイル（`props/`）は M5 で実装します",
             (Unimpl::PropsTable, Lang::En) => "`[props]` in `Ebykn.toml` is implemented in M5",
@@ -396,6 +409,41 @@ pub enum CheckMsg {
 
     // E0003
     Unimplemented(Unimpl),
+
+    // E0301 / E0302：証明ファイルの置き場所（仕様 §3.1）
+    /// `proof/<p>.eykp` に対応する `src/<p>.eyk` のモジュールがない。`exists` は、ファイルはあるが
+    /// クレートのモジュールとして読まれていない（`mod` で宣言していない）か。
+    ProofWithoutSource {
+        src: String,
+        exists: bool,
+    },
+    /// `proof/` の外の `.eykp`、または `proof/` の中の `.eyk`。
+    ProofMisplaced {
+        eyk: bool,
+    },
+
+    // E0304 / E0305：剥がし一致（仕様 §6.1）
+    /// `.eykp` を剥がすと `.eyk` と一致しない。`item` は最初に異なる項目（`fn f` など。項目の外なら
+    /// `None`）、`other` は `.eyk` 側の位置（`src/lib.eyk:3:5`）、`found` / `expected` は最初に異なる
+    /// トークン（`.eykp` 側 / `.eyk` 側。ファイルの終わりなら `None`）。
+    StripMismatch {
+        item: Option<String>,
+        other: String,
+        found: Option<String>,
+        expected: Option<String>,
+    },
+    /// `.eykp` だけの項目（剥がす `spec fn`・本体付きの `lemma fn`・`lemma group`）の名前が使えない。
+    /// `item` は `spec fn ok` などの表示。
+    ProofOnlyName {
+        item: String,
+        clash: ProofOnlyClash,
+    },
+    /// ループの `.eyk` 側の句（`invariant e` / `decreases e`）が、`.eykp` 側の句の列に順序を保って
+    /// 現れない。`clause` は見つからなかった `.eyk` 側の句、`other` はその位置。
+    LoopClauseNotKept {
+        clause: String,
+        other: String,
+    },
 
     // E0004
     /// `ensures` の中の、`old(..)` / `final(..)` の下にない `&mut` 引数（#10）。`written` は書いた形
@@ -613,6 +661,10 @@ impl CheckMsg {
             | ReadFailed { .. }
             | ReservedDependency { .. } => Code::E0002,
             Unimplemented(_) => Code::E0003,
+            ProofWithoutSource { .. } => Code::E0301,
+            ProofMisplaced { .. } => Code::E0302,
+            StripMismatch { .. } | ProofOnlyName { .. } => Code::E0304,
+            LoopClauseNotKept { .. } => Code::E0305,
             BareMutInEnsures { .. } | BareMutInMacro { .. } | FinalInMacro | OldFinalArg => {
                 Code::E0004
             }
@@ -725,6 +777,79 @@ impl CheckMsg {
 
             (Unimplemented(u), En) => format!("not implemented yet: {}", u.text(En)),
             (Unimplemented(u), Ja) => format!("未実装: {}", u.text(Ja)),
+
+            (ProofWithoutSource { src, exists: false }, En) => format!(
+                "this proof file has no source file `{src}`; `proof/<p>.eykp` belongs to the module in `src/<p>.eyk`"
+            ),
+            (ProofWithoutSource { src, exists: false }, Ja) => format!(
+                "この証明ファイルに対応する `{src}` がありません。`proof/<p>.eykp` は `src/<p>.eyk` のモジュールの証明です"
+            ),
+            (ProofWithoutSource { src, exists: true }, En) => format!(
+                "`{src}`, which this proof file belongs to, is not a module of the crate; declare it with `mod`"
+            ),
+            (ProofWithoutSource { src, exists: true }, Ja) => format!(
+                "この証明ファイルに対応する `{src}` は、クレートのモジュールではありません。`mod` で宣言します"
+            ),
+            (ProofMisplaced { eyk: false }, En) => {
+                "a proof file (`.eykp`) must be under `proof/`; `proof/<p>.eykp` belongs to `src/<p>.eyk`".into()
+            }
+            (ProofMisplaced { eyk: false }, Ja) => {
+                "証明ファイル（`.eykp`）は `proof/` の下に置きます。`proof/<p>.eykp` が `src/<p>.eyk` の証明です".into()
+            }
+            (ProofMisplaced { eyk: true }, En) => {
+                "a source file (`.eyk`) cannot be under `proof/`; put the source in `src/`, and the proof in `proof/` with the extension `.eykp`".into()
+            }
+            (ProofMisplaced { eyk: true }, Ja) => {
+                "`proof/` の下にソースファイル（`.eyk`）は置けません。ソースは `src/` に、証明は拡張子 `.eykp` で `proof/` に置きます".into()
+            }
+            (StripMismatch { item, other, found, expected }, En) => {
+                let at = match item {
+                    Some(i) => format!(" in `{i}`"),
+                    None => String::new(),
+                };
+                let tok = |t: &Option<String>| match t {
+                    Some(t) => format!("`{t}`"),
+                    None => "the end of the file".into(),
+                };
+                format!(
+                    "stripping the proofs from this file does not give its source{at}: here it has {}, but `{other}` has {}; the proof file may change only proofs, not the code or the contracts (run `ebykn sync` to bring changes of `src/` into the proof file)",
+                    tok(found),
+                    tok(expected)
+                )
+            }
+            (StripMismatch { item, other, found, expected }, Ja) => {
+                let at = match item {
+                    Some(i) => format!("`{i}` の"),
+                    None => String::new(),
+                };
+                let tok = |t: &Option<String>| match t {
+                    Some(t) => format!("`{t}`"),
+                    None => "ファイルの終わり".into(),
+                };
+                format!(
+                    "このファイルから証明を剥がしても、ソースと一致しません。{at}ここは {}、`{other}` は {} です。証明ファイルで変えてよいのは証明だけで、コードと契約は変えられません（`src/` の変更を証明ファイルに取り込むには `ebykn sync` を実行します）",
+                    tok(found),
+                    tok(expected)
+                )
+            }
+            (ProofOnlyName { item, clash: ProofOnlyClash::Source }, En) => format!(
+                "the proof-only item `{item}` uses a name that the source (`.eyk`) uses or that Ebykn uses for it (`invariant`, `view` and the names of `ebykn_prelude`); an item only in the proof file could hide what the source refers to (a glob import or a trait method) and change the meaning of its code and contracts, so give it another name"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::Source }, Ja) => format!(
+                "証明ファイルだけの項目 `{item}` の名前は、ソース（`.eyk`）が使う名前か、Ebykn がソースのために使う名前（`invariant`、`view`、`ebykn_prelude` の名前）です。証明ファイルだけの項目は、ソースが指すもの（glob の import やトレイトのメソッド）を覆い、コードと契約の意味を変えうるので、別の名前にします"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::ProofOnly }, En) => format!(
+                "the proof-only item `{item}` has the same name as another proof-only item in this file; give it another name"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::ProofOnly }, Ja) => format!(
+                "証明ファイルだけの項目 `{item}` の名前が、このファイルのほかの証明ファイルだけの項目と同じです。別の名前にします"
+            ),
+            (LoopClauseNotKept { clause, other }, En) => format!(
+                "the loop clause `{clause}` of the source (`{other}`) is missing here or out of order; the proof file may only add `invariant` / `decreases` clauses to a loop, keeping the source's clauses in the same order"
+            ),
+            (LoopClauseNotKept { clause, other }, Ja) => format!(
+                "ソース（`{other}`）のループの句 `{clause}` が、ここにないか、順序が違います。証明ファイルではループに `invariant` / `decreases` の句を足せるだけで、ソースの句は同じ順序で残します"
+            ),
 
             (NotARegion { name, keyword }, En) => format!(
                 "syntax error: `{name}` is not a region, so `{keyword} {name}[..]` cannot be written; a region is an `owns` field (`self@{name}`) or a variable of type `Region<..>`"

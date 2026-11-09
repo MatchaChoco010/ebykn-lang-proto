@@ -12,7 +12,7 @@ mod parse;
 pub mod reserved;
 pub mod span;
 
-pub use parse::{Parsed, parse_eyk, parse_eykp};
+pub use parse::{Parsed, is_proof_attr, parse_eyk, parse_eykp};
 pub use reserved::VERUS_BUILTIN_CALLS;
 
 /// `.eyk` で呼べるマクロ（#16 の既定）。std のマクロと、vstd の仕様用のマクロ。

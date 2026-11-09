@@ -12,6 +12,8 @@ mod hook;
 mod item;
 mod tokens;
 
+pub use tokens::is_proof_attr;
+
 use std::cell::RefCell;
 use std::str::FromStr as _;
 

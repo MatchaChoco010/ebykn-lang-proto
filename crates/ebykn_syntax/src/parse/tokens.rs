@@ -24,8 +24,8 @@ const PROOF_ATTRS: &[&str] = &[
     "memoize",
 ];
 
-/// 証明の属性（仕様 §5.7 の `ProofAttr`）の名前か。
-pub(super) fn is_proof_attr(name: &str) -> bool {
+/// 証明の属性（仕様 §5.7 の `ProofAttr`）の名前か。剥がし一致（§6.1）も使う。
+pub fn is_proof_attr(name: &str) -> bool {
     PROOF_ATTRS.contains(&name)
 }
 

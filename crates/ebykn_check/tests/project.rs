@@ -153,7 +153,6 @@ fn rejects_unimplemented_files_and_tables() {
                 ),
             ),
             ("src/lib.eyk", ""),
-            ("proof/lib.eykp", ""),
             ("props/rayon.eyk", ""),
             // 生成物は見ない。
             ("build/verus/x.eykp", ""),
@@ -165,10 +164,80 @@ fn rejects_unimplemented_files_and_tables() {
         [
             "Ebykn.toml:9:2: E0003: not implemented yet: `[props]` in `Ebykn.toml` is implemented in M5",
             "Ebykn.toml:12:2: E0003: not implemented yet: `[ebykn-dependencies]` in `Ebykn.toml` is implemented in M5",
-            "proof/lib.eykp:1:1: E0003: not implemented yet: proof files (`.eykp`) are implemented in M3",
             "props/rayon.eyk:1:1: E0003: not implemented yet: props files (`props/`) are implemented in M5",
         ]
     );
+}
+
+/// 証明ファイルは `src/` の対応するモジュールと組にして読む（仕様 §3.1）。
+#[test]
+fn proof_files_belong_to_source_modules() {
+    let t = project(
+        "proofs",
+        &[
+            ("Ebykn.toml", MANIFEST),
+            ("src/lib.eyk", "mod a;\nmod b;\n"),
+            ("src/a.eyk", "pub fn f() {}\n"),
+            ("src/b/mod.eyk", ""),
+            ("src/orphan.eyk", ""),
+            ("proof/lib.eykp", "mod a;\nmod b;\n"),
+            ("proof/a.eykp", "pub fn f() { proof { } }\n"),
+            ("proof/b/mod.eykp", ""),
+            // 対応する .eyk がない、またはモジュールでない。
+            ("proof/c.eykp", ""),
+            ("proof/b.eykp", ""),
+            ("proof/orphan.eykp", ""),
+            // proof/ の外の .eykp と、proof/ の中の .eyk。
+            ("src/a.eykp", ""),
+            ("other/x.eykp", ""),
+            ("proof/x.eyk", ""),
+            // 隠しディレクトリと生成物は見ない。
+            (".ebykn/sync/x.eykp", ""),
+            ("build/verus/x.eykp", ""),
+        ],
+    );
+    let (p, d) = load(&t.0);
+    let lines: Vec<String> = d
+        .iter()
+        .map(|d| d.render(p.file(d.span.file), Lang::En))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "other/x.eykp:1:1: E0302: a proof file (`.eykp`) must be under `proof/`; `proof/<p>.eykp` belongs to `src/<p>.eyk`",
+            "proof/b.eykp:1:1: E0301: this proof file has no source file `src/b.eyk`; `proof/<p>.eykp` belongs to the module in `src/<p>.eyk`",
+            "proof/c.eykp:1:1: E0301: this proof file has no source file `src/c.eyk`; `proof/<p>.eykp` belongs to the module in `src/<p>.eyk`",
+            "proof/orphan.eykp:1:1: E0301: `src/orphan.eyk`, which this proof file belongs to, is not a module of the crate; declare it with `mod`",
+            "proof/x.eyk:1:1: E0302: a source file (`.eyk`) cannot be under `proof/`; put the source in `src/`, and the proof in `proof/` with the extension `.eykp`",
+            "src/a.eykp:1:1: E0302: a proof file (`.eykp`) must be under `proof/`; `proof/<p>.eykp` belongs to `src/<p>.eyk`",
+        ]
+    );
+    let pairs: Vec<(String, String, String)> = p
+        .proofs
+        .iter()
+        .map(|x| {
+            (
+                x.rel.clone(),
+                p.file(x.src).path.clone(),
+                x.module.join("::"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("proof/a.eykp".into(), "src/a.eyk".into(), "a".into()),
+            (
+                "proof/b/mod.eykp".into(),
+                "src/b/mod.eyk".into(),
+                "b".into()
+            ),
+            ("proof/lib.eykp".into(), "src/lib.eyk".into(), "".into()),
+        ]
+    );
+    // `.eykp` は §5.7 の証明構文を読む。
+    let a = p.proofs.iter().find(|x| x.rel == "proof/a.eykp").unwrap();
+    assert!(p.parsed_ok[a.file.0 as usize]);
 }
 
 #[test]
