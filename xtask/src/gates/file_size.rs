@@ -10,6 +10,14 @@ pub const EXEMPT: &[&str] = &[
     "docs/ebykn-spec.md",
     "docs/ebykn-design-notes.md",
 ];
+/// 対象外のディレクトリ。外部から取り込んだコードで、上流のまま置く（AGENTS.md「外部から取り込むコード」）。
+pub const EXEMPT_DIRS: &[&str] = &["vendor/verus_syn"];
+
+fn in_exempt_dir(f: &str) -> bool {
+    EXEMPT_DIRS
+        .iter()
+        .any(|d| f.strip_prefix(d).is_some_and(|rest| rest.starts_with('/')))
+}
 
 pub fn run(repo: &Repo) -> Report {
     let mut r = Report::default();
@@ -20,12 +28,31 @@ pub fn run(repo: &Repo) -> Report {
             ));
         }
     }
+    for d in EXEMPT_DIRS {
+        if !repo.files.iter().any(|f| f.starts_with(&format!("{d}/"))) {
+            r.errors.push(format!(
+                "対象外リストのディレクトリ {d}/ がありません。リストから消してください"
+            ));
+        }
+    }
     r.notes
         .push(format!("対象外（明示）: {}", EXEMPT.join(", ")));
+    let skipped = repo.files.iter().filter(|f| in_exempt_dir(f)).count();
+    r.notes.push(format!(
+        "対象外のディレクトリ（明示）: {}（{skipped} ファイル）",
+        EXEMPT_DIRS
+            .iter()
+            .map(|d| format!("{d}/"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
     let mut checked = 0;
     for f in &repo.files {
         let ext = f.rsplit_once('.').map(|(_, e)| e);
-        if !ext.is_some_and(|e| EXTENSIONS.contains(&e)) || EXEMPT.contains(&f.as_str()) {
+        if !ext.is_some_and(|e| EXTENSIONS.contains(&e))
+            || EXEMPT.contains(&f.as_str())
+            || in_exempt_dir(f)
+        {
             continue;
         }
         checked += 1;
@@ -59,6 +86,9 @@ mod tests {
         for e in EXEMPT {
             t.write(e, "# 正典\n");
         }
+        for d in EXEMPT_DIRS {
+            t.write(&format!("{d}/Cargo.toml"), "[package]\n");
+        }
     }
 
     #[test]
@@ -81,6 +111,36 @@ mod tests {
         let mut t = TempRepo::new();
         t.write("README.md", &real("README.md"));
         assert_fails(&t.run(run), EXEMPT[0]);
+    }
+
+    #[test]
+    fn fails_when_an_exempt_dir_is_gone() {
+        let mut t = TempRepo::new();
+        for e in EXEMPT {
+            t.write(e, "# 正典\n");
+        }
+        assert_fails(&t.run(run), EXEMPT_DIRS[0]);
+    }
+
+    #[test]
+    fn fails_for_a_long_file_next_to_an_exempt_dir() {
+        // 対象外は `<ディレクトリ>/` の下だけで、名前が同じ接頭辞の兄弟には及ばない。
+        let mut t = TempRepo::new();
+        with_exempt(&mut t);
+        let sibling = format!("{}_extra/lib.rs", EXEMPT_DIRS[0]);
+        t.write(&sibling, &"x\n".repeat(LIMIT + 1));
+        assert_fails(&t.run(run), &sibling);
+    }
+
+    #[test]
+    fn passes_for_a_long_file_in_an_exempt_dir() {
+        let mut t = TempRepo::new();
+        with_exempt(&mut t);
+        t.write(
+            &format!("{}/src/expr.rs", EXEMPT_DIRS[0]),
+            &"x\n".repeat(LIMIT + 1),
+        );
+        assert_passes(&t.run(run));
     }
 
     #[test]

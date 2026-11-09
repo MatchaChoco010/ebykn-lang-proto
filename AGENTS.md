@@ -191,4 +191,17 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 
 ## ファイルの大きさ
 
-ソースファイル（追跡されている `.rs` / `.md` / `.toml` / `.yml` / `.sh`）は 1 ファイル 2000 行までに保つ。`check-file-size` が検査する。対象外は `docs/ebykn-*.md` の 3 文書だけで、`xtask/src/gates/file_size.rs` の `EXEMPT` に明示してある。
+ソースファイル（追跡されている `.rs` / `.md` / `.toml` / `.yml` / `.sh`）は 1 ファイル 2000 行までに保つ。`check-file-size` が検査する。対象外は `docs/ebykn-*.md` の 3 文書と、`vendor/` の下の取り込んだコードだけで、`xtask/src/gates/file_size.rs` の `EXEMPT` と `EXEMPT_DIRS` に明示してある。
+
+## 外部から取り込むコード
+
+外部のコードは `vendor/<名前>/` に、上流のコミットを記録して、編集せずそのまま取り込む。取り込みは取り込みだけのコミットにし、その時点で中身を上流と同じにする（ファイルを消さない、整形しない）。
+
+| 置き場 | 上流 | コミット |
+| --- | --- | --- |
+| `vendor/verus_syn/` | [verus-lang/verus](https://github.com/verus-lang/verus) の `dependencies/syn` | `8bf68ee741df833ea5d0fe6a2255126fdea87e47`（`release/0.2026.11.02.8bf68ee`） |
+
+- `vendor/` は Cargo のワークスペースのメンバーにしない（`exclude`）。path 依存で使う。`cargo fmt` と `clippy --workspace` は `vendor/` を整形・検査しない。
+- `vendor/` は行数のゲートの対象外。ディレクトリ単位で `EXEMPT_DIRS` に明示する。
+- フォークとして手を入れる場合は、取り込みとは別のコミットで、必要な箇所だけにする。変更した箇所には `EBYKN:` で始まるコメントを付ける。上流を取り込み直すときは、取り込みのコミットとの差分を当て直す。
+- 自分たちの部分は、できるだけ `vendor/` の外に置く（`verus_syn` なら `crates/ebykn_syntax`）。
