@@ -20,4 +20,6 @@ verified lowering::all_pos
 verified lowering::some_pos
 verified lowering::Bag::with_node
 verified lowering::wrap
-results 18 verified, 0 errors
+verified lowering::set_owned
+verified lowering::set_and_put
+results 20 verified, 0 errors

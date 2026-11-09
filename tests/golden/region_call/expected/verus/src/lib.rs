@@ -194,7 +194,7 @@ ensures n == g.index(a).out, {
 fn into_graph(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked < Region < Ptr < Vertex >>>) -> (__eyk_r: Graph)
 requires g.contains(a), g.contains(b),
 ensures __eyk_r.invariant(), {
-    #[allow(unused_mut)] let tracked mut g = g;
+    let tracked mut g = g;
     Graph { a, b, verts: Tracked(g) }
 }
 

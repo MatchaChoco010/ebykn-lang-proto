@@ -147,7 +147,7 @@ pub struct Bag { items: Tracked < Region < Ptr < Node >>>, }
 impl Bag {
     fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
     ensures (forall | q | r.contains(q) ==> b.items@.contains(q)), {
-        #[allow(unused_mut)] let tracked mut r = r;
+        let tracked mut r = r;
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
             r.insert(__eyk_perm_p);
@@ -158,8 +158,27 @@ impl Bag {
 }
 
 pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
-    #[allow(unused_mut)] let tracked mut items = items;
+    let tracked mut items = items;
     Bag { items: Tracked(items) }
+}
+
+fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)
+requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
+ensures v == 1, {
+    let tracked mut __eyk_perm_p = __eyk_perm_p;
+    p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1;
+    let n = p.free(Tracked(__eyk_perm_p));
+    n.val
+}
+
+fn set_and_put(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(), __eyk_perm_p.pptr() == p,
+ensures final(r).contains(p), final(r).index(p).val == 2, {
+    let tracked mut __eyk_perm_p = __eyk_perm_p;
+    p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 2;
+    proof {
+        r.insert(__eyk_perm_p);
+    }
 }
 
 } // verus!
