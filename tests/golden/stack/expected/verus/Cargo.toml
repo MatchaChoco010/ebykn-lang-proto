@@ -10,6 +10,9 @@ ebykn_prelude = { path = "../../../../../crates/ebykn_prelude" }
 [package.metadata.verus]
 verify = true
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
+
 [profile.dev]
 panic = "abort"
 

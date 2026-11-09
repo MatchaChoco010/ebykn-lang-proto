@@ -414,3 +414,118 @@ fn duplicate_definitions_are_e0003() {
     // 名前空間が違えば重複ではない（Rust と同じ）。
     accepts("pub mod g {}\npub fn g() {}\n");
 }
+
+// ---- PR #26 のレビュー ----
+
+#[test]
+fn nested_assumptions_are_e0003() {
+    // B2：関数の本体の中の unchecked fn / lemma fn は、verify が一覧に出せない。
+    rejects(
+        "pub fn outer(x: u32) -> (r: u32) ensures r == 7, { unchecked fn liar(y: u32) -> (z: u32) ensures z == 7, { y } liar(x) }",
+        "E0003",
+        "inside a function body are not supported yet, because `verify`",
+    );
+    rejects(
+        "pub fn outer() { lemma fn l() ensures false; }",
+        "E0003",
+        "`unchecked fn` and `lemma fn`",
+    );
+    accepts("pub fn outer() { fn helper() {} helper(); }");
+}
+
+#[test]
+fn first_last_in_logical_macro_tokens_are_e0003() {
+    // B5：#11 の置き換えはトークンのまま持つマクロの引数に届かない。
+    rejects(
+        "spec fn nonempty(s: Seq<Option<int>>) -> bool = matches!(s.first(), Some(_));",
+        "E0003",
+        "`.first()` / `.last()`",
+    );
+    // 実行文脈の `Vec::first` はそのまま。
+    accepts("pub fn f(v: Vec<u64>) -> bool { matches!(v.first(), Some(_)) }");
+}
+
+// ---- PR #26 の再レビュー：関数の中の条件付きコンパイル（#27 の既定 B） ----
+
+#[test]
+fn cfg_inside_functions_is_e0003() {
+    for src in [
+        "pub fn f(x: u32) -> (r: u32) ensures r == 0, { if cfg!(verus_keep_ghost) { 0 } else { 1 } }",
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { #[cfg(not(verus_keep_ghost))] return 1; 0 }",
+        "pub fn h() -> u32 { #[cfg_attr(test, cfg(test))] let y = 1; y }",
+        "pub fn k(x: u32) -> u32 { match x { #[cfg(test)] 0 => 1, _ => 2 } }",
+        "pub struct P { a: u32 }\npub fn m() -> P { P { #[cfg(test)] a: 1 } }",
+        "pub fn n(#[cfg(test)] x: u32) {}",
+        "pub fn o() { #[cfg(test)] fn inner() {} }",
+    ] {
+        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
+    // 本体の中で定義した構造体・列挙の欄と列挙子（PR #26 の 3 回目の確認）。
+    for src in [
+        "pub fn p() { struct T { #[cfg(test)] a: u32, b: u32 } }",
+        "pub fn q() { struct T(#[cfg(test)] u32, u32); }",
+        "pub fn s() { enum E { #[cfg(test)] A, B } }",
+        "pub fn t() { enum E { A { #[cfg(test)] a: u32 }, B } }",
+    ] {
+        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
+    // 項目に付ける #[cfg] と、cfg を含まない cfg_attr は今のまま。
+    accepts("#[cfg(test)]\npub fn f() {}");
+    accepts("pub fn f() { #[cfg_attr(test, inline)] let y = 1; }");
+}
+
+/// std のマクロの引数はトークンのまま持つので、その中の属性はどれも E0003（PR #26 の 3 回目の確認、#28）。
+#[test]
+fn attributes_inside_std_macro_arguments_are_e0003() {
+    for src in [
+        "pub fn f() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }",
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
+        "pub fn h() { assert!({ #[inline] let y = 1; y == 1 }); }",
+        "pub fn k() { assert!({ #![allow(unused)] true }); }",
+    ] {
+        rejects(
+            src,
+            "E0003",
+            "attributes (`#[..]`) inside the arguments of this macro",
+        );
+    }
+    // 属性でない `#` は今のまま（文字列の中や、`[` の続かない `#`）。
+    accepts("pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }");
+}
+
+/// コンパイル時の環境変数と `file!` は、Verus の実行と素のビルドで値が違いうるので、`unchecked fn` の
+/// 本体の外ではどこに書いても E0003（PR #26 の 4 回目の確認、#27 の既定）。
+#[test]
+fn env_and_file_macros_outside_unchecked_fn_are_e0003() {
+    let env = "`env!` / `option_env!` outside the body of an `unchecked fn`";
+    for src in [
+        "pub fn h8() -> (r: u32) ensures r == 0, { if option_env!(\"CARGO_TERM_COLOR\").is_some() { 0 } else { 1 } }",
+        "pub const C: Option<&str> = option_env!(\"X\");",
+        "pub static D: &str = std::env!(\"CARGO_PKG_NAME\");",
+        "#[doc = env!(\"CARGO_PKG_NAME\")]\npub fn a() {}",
+        "pub fn b() -> usize { let v = vec![core::option_env!(\"X\")]; v.len() }",
+        "pub fn c() -> usize { concat!(env!(\"X\")).len() }",
+        "pub struct S { a: u32 }\nimpl S { pub fn m(&self) -> bool { option_env!(\"X\").is_some() } }",
+        "unchecked fn u() { fn inner() -> bool { option_env!(\"X\").is_some() } }",
+    ] {
+        rejects(src, "E0003", env);
+    }
+    rejects(
+        "pub fn n() -> usize { file!().len() }",
+        "E0003",
+        "`file!` outside the body of an `unchecked fn`",
+    );
+    rejects(
+        "pub fn n() -> usize { core::file!().len() }",
+        "E0003",
+        "`file!` outside the body of an `unchecked fn`",
+    );
+    // `unchecked fn` の本体では許す（証明なしの前提として verify が一覧に出す）。
+    accepts("unchecked fn u() -> (r: bool) { option_env!(\"X\").is_some() }");
+    accepts("unchecked fn u() -> usize { let v = vec![env!(\"X\")]; v.len() + file!().len() }");
+    // `env` という名前の変数と `!=` は今のまま。
+    accepts("pub fn e() -> bool { let env = 1u32; env != 2 }");
+    // 素のビルドと Verus で同じ値になるもの（生成コードの位置とモジュールのパス）は今のまま。
+    accepts("pub fn l() -> u32 { line!() + column!() }");
+    accepts("pub fn p() -> usize { module_path!().len() }");
+}

@@ -1,0 +1,96 @@
+// 書き下し（仕様 §7.3、§7.2）の形を一通り使う例。stack にない形（`*p` の読み書き、`uses &mut p@` /
+// `uses &p@`、`gives`、`borrow` / `borrow mut`、領域変数、純粋関数、本体のない `lemma fn`、
+// `unchecked fn`、`impl View`、ループ句、量化子）を書き下し、生成した Verus がそのまま検証を通ることを
+// CI で確かめる（`expected/status.txt`）。
+pub struct Node { pub val: u64, pub next: Option<Ptr<Node>> }
+
+pub fn set_val(p: Ptr<Node>, v: u64) uses &mut p@
+    requires p@.is_init(),
+    ensures (*p).val == v, p@.is_init(),
+{
+    (*p).val = v;
+}
+
+pub fn get_val(p: Ptr<Node>) -> u64 uses &p@
+    requires p@.is_init(),
+{
+    (*p).val
+}
+
+pub fn mk(v: u64) -> (q: Ptr<Node>) gives q@
+    ensures q@.is_init(), (*q).val == v,
+{
+    let q = Ptr::new(Node { val: v, next: None });
+    q
+}
+
+pub fn use_it() -> u64 {
+    let q = mk(3);
+    set_val(q, 4);
+    let x = get_val(q);
+    let n = q.free();
+    x
+}
+
+pub fn double(x: u32) -> u32 requires x < 100, = x * 2;
+
+lemma fn helper(x: u64) ensures x + 0 == x;
+
+unchecked fn ffi(x: u64) -> u64 { x }
+
+pub struct Pool { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl View for Pool {
+    type V = Seq<Ptr<Node>>;
+    closed spec fn view(&self) -> Seq<Ptr<Node>> = self@order;
+}
+
+impl Pool {
+    pub fn new() -> Self { Pool { len: 0, @nodes: Region::empty(), @order: Seq::empty() } }
+
+    fn add(&mut self, v: u64) -> (p: Ptr<Node>)
+        ensures self@nodes.contains(p),
+    {
+        let p = Ptr::new(Node { val: v, next: None });
+        put self@nodes[p];
+        self@order = self@order.push(p);
+        p
+    }
+
+    fn bump(&mut self, p: Ptr<Node>)
+        requires old(self)@nodes.contains(p),
+    {
+        borrow mut self@nodes[p] { (*p).val = 0; }
+    }
+
+    fn peek(&self, p: Ptr<Node>) -> u64
+        requires self@nodes.contains(p),
+    {
+        borrow self@nodes[p] { (*p).val }
+    }
+
+}
+
+pub fn with_region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires old(r).contains(p),
+{
+    take r[p];
+    put r[p];
+}
+
+pub fn total(v: Vec<u64>) -> u64 {
+    let mut s: u64 = 0;
+    let mut i = 0;
+    while i < v.len()
+        invariant i <= v.len(),
+        decreases v.len() - i,
+    {
+        s = if s < 1000 { s + 1 } else { s };
+        i = i + 1;
+    }
+    s
+}
+
+pub fn quant(s: Seq<u64>) -> bool = true;
+pub spec fn all_pos(s: Seq<int>) -> bool = forall i in 0..s.len(), s[i] > 0;
+pub spec fn some_pos(s: Seq<int>) -> bool = exists x in s, or { x == 1, x == 2 };

@@ -121,6 +121,9 @@ impl<'a> Walker<'a> {
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
         for p in &sig.params {
+            let (ast::Param::Typed { attrs, span, .. } | ast::Param::Receiver { attrs, span, .. }) =
+                p;
+            self.no_cfg(attrs, *span);
             if let ast::Param::Typed { pat, ty, .. } = p {
                 if let Some(i) = pat_ident(pat) {
                     self.var_types.insert(i.name.clone(), ty.clone());
@@ -157,9 +160,21 @@ impl<'a> Walker<'a> {
         let prev = std::mem::replace(&mut self.logic, true);
         for c in &contract.clauses {
             match &c.kind {
-                ast::ClauseKind::Requires(es)
-                | ast::ClauseKind::Ensures(es)
-                | ast::ClauseKind::Decreases(es) => {
+                ast::ClauseKind::Ensures(es) => {
+                    // `ensures` では `gives q@` の `q@` も持っている（戻り値の権限）。
+                    let saved = self.env.clone();
+                    for g in &self.cx.gives {
+                        self.env.entry(g.clone()).or_insert(Perm {
+                            state: PermState::Owned,
+                            block: false,
+                        });
+                    }
+                    for e in es {
+                        self.expr(e);
+                    }
+                    self.env = saved;
+                }
+                ast::ClauseKind::Requires(es) | ast::ClauseKind::Decreases(es) => {
                     for e in es {
                         self.expr(e);
                     }
@@ -496,6 +511,16 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 関数の中の `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は E0003（#27 の既定 B）。
+    fn no_cfg(&mut self, attrs: &[ast::Attr], span: Span) {
+        if crate::index::has_cfg(attrs) {
+            self.diags.push(
+                span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::CfgInBody)),
+            );
+        }
+    }
+
     // ---- ブロックと文 ----
 
     /// ブロック。発散するなら `true`。
@@ -516,6 +541,31 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
+                self.no_cfg(&item.attrs, item.span);
+                // 本体の中で定義した構造体・列挙の欄と列挙子の `#[cfg]` も同じ（PR #26 の 3 回目の確認）。
+                let mut fields: Vec<&ast::Field> = Vec::new();
+                match &item.kind {
+                    ast::ItemKind::Struct(st) => {
+                        if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &st.fields {
+                            fields.extend(fs);
+                        }
+                        for sec in [&st.owns, &st.spec].into_iter().flatten() {
+                            fields.extend(&sec.fields);
+                        }
+                    }
+                    ast::ItemKind::Enum(en) => {
+                        for v in &en.variants {
+                            self.no_cfg(&v.attrs, v.span);
+                            if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &v.fields {
+                                fields.extend(fs);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                for f in fields {
+                    self.no_cfg(&f.attrs, f.span);
+                }
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -590,6 +640,35 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 式の型が `Map<..>` と書いてあるか（型を書いた変数・引数、型を書いた消去フィールド）。
+    fn is_map(&self, e: &Expr) -> bool {
+        let map = |t: &ast::Type| {
+            let t = match &t.kind {
+                ast::TypeKind::Ref { elem, .. } => elem,
+                _ => t,
+            };
+            matches!(&t.kind, ast::TypeKind::Path { path, .. } if path.segments.last().is_some_and(|s| s.ident.is("Map")))
+        };
+        match &e.kind {
+            ExprKind::Paren(x) => self.is_map(x),
+            ExprKind::Path { qself: None, path } => path
+                .as_ident()
+                .and_then(|i| self.var_types.get(&i.name))
+                .is_some_and(map),
+            ExprKind::Erased { base, field } => {
+                let info = if is_self(base) {
+                    self.self_struct()
+                } else {
+                    ident_of(base)
+                        .and_then(|i| self.var_types.get(&i.name))
+                        .and_then(|t| self.struct_of_type(t))
+                };
+                info.and_then(|s| s.erased_ty(&field.name)).is_some_and(map)
+            }
+            _ => false,
+        }
+    }
+
     fn struct_of_type(&self, ty: &ast::Type) -> Option<&'a StructInfo> {
         let ty = match &ty.kind {
             ast::TypeKind::Ref { elem, .. } => elem,
@@ -603,6 +682,7 @@ impl<'a> Walker<'a> {
     }
 
     fn local(&mut self, l: &ast::Local, span: Span) -> bool {
+        self.no_cfg(&l.attrs, span);
         let mut diverges = false;
         if let Some(init) = &l.init {
             let prev = self.bound_source.take();
@@ -737,7 +817,12 @@ impl<'a> Walker<'a> {
                 let mut rest = false;
                 for f in fields {
                     match f {
-                        FieldPat::Field { pat, .. } => self.bind(pat),
+                        FieldPat::Field {
+                            attrs, pat, span, ..
+                        } => {
+                            self.no_cfg(attrs, *span);
+                            self.bind(pat)
+                        }
                         FieldPat::Erased { ident, .. } => {
                             named.insert(ident.name.clone());
                             match info.and_then(|s| s.erased_kind(&ident.name)) {
@@ -822,6 +907,7 @@ impl<'a> Walker<'a> {
 
     /// 式。発散するなら `true`。
     fn expr(&mut self, e: &Expr) -> bool {
+        self.no_cfg(&e.attrs, e.span);
         match &e.kind {
             ExprKind::Array(es) | ExprKind::Tuple(es) => self.exprs(es),
             ExprKind::Repeat { expr, len } => self.expr(expr) | self.expr(len),
@@ -930,6 +1016,9 @@ impl<'a> Walker<'a> {
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
                         self.expr(x);
+                        if self.is_map(x) {
+                            self.facts.map_binders.insert(x.span.into());
+                        }
                     }
                 }
                 self.expr(body);
@@ -1218,7 +1307,18 @@ impl<'a> Walker<'a> {
     }
 
     fn closure(&mut self, c: &ast::Closure) {
-        // クロージャの中では Γ と R を空にする（仕様 §6.2、E0512）。
+        // 論理文脈のクロージャ（`s.map(|p| self@nodes[p].val)` など、spec のクロージャ）は実行されず、
+        // 権限を使わない。Γ と R はそのまま見える（領域添字を認識する）。
+        if self.logic {
+            let saved = self.save_scope();
+            for p in &c.params {
+                self.bind(p);
+            }
+            self.expr(&c.body);
+            self.restore_scope(saved);
+            return;
+        }
+        // 実行文脈のクロージャの中では Γ と R を空にする（仕様 §6.2、E0512）。
         let prev_outer = self.closure_outer.clone();
         let outer = match prev_outer.clone() {
             Some((mut env, mut regions)) => {
@@ -1303,6 +1403,7 @@ impl<'a> Walker<'a> {
         for arm in arms {
             self.env = start.clone();
             let saved = self.save_scope();
+            self.no_cfg(&arm.attrs, arm.span);
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
                 self.expr(g);
@@ -1496,6 +1597,12 @@ impl<'a> Walker<'a> {
     /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
     /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
+        if self.logic && first_last_in_tokens(m.tokens.clone()) {
+            self.diags.push(
+                m.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::MacroFirstLast)),
+            );
+        }
         if self.perm_in_tokens(m.tokens.clone()) {
             self.diags.push(
                 m.span,
@@ -1616,6 +1723,7 @@ impl<'a> Walker<'a> {
         let mut d = false;
         let mut given = BTreeSet::new();
         for f in &lit.fields {
+            self.no_cfg(&f.attrs, f.span);
             if f.erased {
                 let name = match &f.member {
                     Member::Named(i) => i.name.clone(),
@@ -1660,6 +1768,21 @@ impl<'a> Walker<'a> {
         }
         d
     }
+}
+
+/// トークン列に `.first()` / `.last()`（引数なし）があるか。
+fn first_last_in_tokens(ts: proc_macro2::TokenStream) -> bool {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.into_iter().collect();
+    tts.iter().enumerate().any(|(i, t)| match t {
+        TokenTree::Group(g) => first_last_in_tokens(g.stream()),
+        TokenTree::Ident(id) => {
+            (id == "first" || id == "last")
+                && matches!(i.checked_sub(1).and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.')
+                && matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().is_empty())
+        }
+        _ => false,
+    })
 }
 
 fn is_compound_assign(op: ast::BinOp) -> bool {

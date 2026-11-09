@@ -16,9 +16,9 @@ Ebykn: .eyk / .eykp を Verus のソースに書き下すトランスパイラ
 
 サブコマンド:
   init <name>   雛形を <name>/ に作る
-  check         §6 の検査（M2 ではここまで。書き下しと verus --no-verify は次の段で足す）
-  verify        check と Verus による検証（未実装）
-  build         check と cargo verus build（未実装）
+  check         §6 の検査、build/verus/ への書き下し（§7）、verus --no-verify
+  verify [item] check と Verus による検証。項目ごとの状態と、証明なしの前提（admit / unchecked）を出す
+  build         check と cargo verus build（--verified は M5）
   sync          証明ファイルの追従（M3 で実装）
   status        検証の状態（M5 で実装）
 
@@ -79,11 +79,21 @@ fn main() -> ExitCode {
             }
         },
         ["init", ..] => usage("init には名前を一つ指定します"),
-        ["check"] => check(&opts),
+        ["check"] => run(&opts, Step::Check, &[]),
         ["check", "--base", _] => not_yet(&opts, "check --base", "M3"),
         ["check", ..] => usage("check の引数が違います"),
-        ["verify", ..] => not_yet(&opts, "verify", "M2 の次の段"),
-        ["build", ..] => not_yet(&opts, "build", "M2 の次の段"),
+        ["verify", items @ ..] => run(&opts, Step::Verify, items),
+        ["build"] => run(&opts, Step::Build, &[]),
+        ["build", "--verified"] => {
+            // `--verified` は `status`（M5）が要る。黙って `--verified` なしの build にしない。
+            let m =
+                ebykn_syntax::diag::Message::Check(ebykn_syntax::diag::CheckMsg::Unimplemented(
+                    ebykn_syntax::diag::Unimpl::BuildVerified,
+                ));
+            eprintln!("error[E0003]: {}", m.text(opts.lang));
+            ExitCode::from(1)
+        }
+        ["build", ..] => usage("build の引数が違います"),
         ["sync", ..] => not_yet(&opts, "sync", "M3"),
         ["status", ..] => not_yet(&opts, "status", "M5"),
         _ => usage(&format!("不明な引数です: {}", opts.rest.join(" "))),
@@ -99,7 +109,172 @@ fn not_yet(opts: &Opts, what: &str, milestone: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn check(opts: &Opts) -> ExitCode {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Check,
+    Verify,
+    Build,
+}
+
+fn say(opts: &Opts, en: &str, ja: &str) {
+    match opts.lang {
+        Lang::En => eprintln!("ebykn: {en}"),
+        Lang::Ja => eprintln!("ebykn: {ja}"),
+    }
+}
+
+/// `check`（§6 → §7 → `verus --no-verify`）、`verify`（`check` ＋ 検証）、`build`（`check` ＋ `cargo verus build`）。
+fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
+    let report = match check(opts) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let output = match ebykn::lower_report(&report) {
+        Some(Ok(o)) => o,
+        Some(Err(e)) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+        None => return ExitCode::from(1),
+    };
+    let build = match ebykn::verus::write_build(&report.project, &output) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let verus = match ebykn::verus::find(opts.lang) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mode = match step {
+        Step::Check => ebykn::verus::Mode::NoVerify,
+        Step::Verify => ebykn::verus::Mode::Verify,
+        Step::Build => ebykn::verus::Mode::Build,
+    };
+    let r = match ebykn::verus::run(&verus, &build, mode) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    if step == Step::Check {
+        if !r.success {
+            eprint!("{}", r.text);
+            say(
+                opts,
+                "`verus --no-verify` failed on the generated Verus",
+                "生成した Verus の `verus --no-verify` が失敗しました",
+            );
+            return ExitCode::from(1);
+        }
+        say(
+            opts,
+            &format!(
+                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3)",
+                build.display()
+            ),
+            &format!(
+                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します）",
+                build.display()
+            ),
+        );
+        return ExitCode::SUCCESS;
+    }
+    if step == Step::Build {
+        if !r.success {
+            eprint!("{}", r.text);
+            return ExitCode::from(1);
+        }
+        return ExitCode::SUCCESS;
+    }
+    // verify：Verus の診断、項目ごとの状態、未証明の前提（admit と unchecked）を必ず出す。
+    if !r.success {
+        eprint!("{}", r.text);
+    }
+    let summary = r.summary();
+    let all = ebykn::verus::statuses(
+        &output.files,
+        &output,
+        &r.errors,
+        r.checked.as_ref(),
+        match summary {
+            ebykn::verus::Summary::Ran { errors, .. } => Some(errors),
+            ebykn::verus::Summary::Stopped { .. } => None,
+        },
+    );
+    let Some(shown) = ebykn::verus::select(&all, items) else {
+        say(
+            opts,
+            "no item matches the given paths",
+            "指定したパスに当たる項目がありません",
+        );
+        return ExitCode::from(2);
+    };
+    let unproven: Vec<_> = all.iter().filter(|s| ebykn::verus::assumed(s)).collect();
+    let fails = shown
+        .iter()
+        .any(|s| matches!(s.status, "failed" | "unknown"))
+        || !r.success;
+    if opts.json {
+        println!("{}", ebykn::verus::status_json(&shown, summary, !fails));
+    } else {
+        print!("{}", ebykn::verus::status_text(&shown, summary));
+    }
+    if let ebykn::verus::Summary::Stopped { errors } = summary {
+        say(
+            opts,
+            &format!(
+                "Verus stopped before verification (a compile error or similar; {errors} error(s) above), so nothing was verified"
+            ),
+            &format!(
+                "コンパイルエラーなどで Verus が検証の前に止まったので、何も検証していません（上のエラー {errors} 件）"
+            ),
+        );
+    }
+    if !unproven.is_empty() {
+        say(
+            opts,
+            &format!(
+                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): {}",
+                unproven.len(),
+                unproven
+                    .iter()
+                    .map(|s| format!("{} ({})", s.item, s.status))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            &format!(
+                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]）: {}",
+                unproven.len(),
+                unproven
+                    .iter()
+                    .map(|s| format!("{}（{}）", s.item, s.status))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ),
+        );
+    }
+    if shown.iter().any(|s| s.status == "unknown") {
+        say(
+            opts,
+            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), or an error could not be attributed to an item",
+            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、どの項目のものか決められないエラーがあります",
+        );
+    }
+    if fails {
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+/// §6 の検査。エラーがあれば診断を出して終了コードを返す。
+fn check(opts: &Opts) -> Result<ebykn::CheckReport, ExitCode> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let Some(root) = find_root(&cwd) else {
         if opts.json {
@@ -113,7 +288,7 @@ fn check(opts: &Opts) -> ExitCode {
                 }),
             );
             println!("{}", d.to_json(&file, opts.lang));
-            return ExitCode::from(1);
+            return Err(ExitCode::from(1));
         }
         match opts.lang {
             Lang::En => eprintln!(
@@ -125,7 +300,7 @@ fn check(opts: &Opts) -> ExitCode {
                 cwd.display()
             ),
         }
-        return ExitCode::from(1);
+        return Err(ExitCode::from(1));
     };
     let report = check_project(&root);
     if opts.json {
@@ -151,16 +326,7 @@ fn check(opts: &Opts) -> ExitCode {
                 Lang::Ja => eprintln!("ebykn: 検査が {errors} 件のエラーで失敗しました"),
             }
         }
-        return ExitCode::from(1);
+        return Err(ExitCode::from(1));
     }
-    if !opts.json {
-        let n = report.project.modules.len();
-        match opts.lang {
-            Lang::En => eprintln!("ebykn: check passed ({n} file(s); not yet lowered to Verus)"),
-            Lang::Ja => eprintln!(
-                "ebykn: 検査を通りました（{n} ファイル。Verus への書き下しはまだしていません）"
-            ),
-        }
-    }
-    ExitCode::SUCCESS
+    Ok(report)
 }

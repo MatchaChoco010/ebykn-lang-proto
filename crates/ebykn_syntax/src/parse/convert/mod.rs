@@ -260,6 +260,16 @@ pub(super) fn mac(m: &syn::Macro) -> ast::Macro {
         spec_macro_args(&last, m)
     } else {
         super::tokens::scan_opaque(&m.tokens);
+        // std のマクロの引数はトークンのまま持つので、その中の属性（`#[cfg(..)]` など）を検査できない。
+        // どの属性も拒否する（PR #26 の 3 回目の確認。根本の対策は #28）。
+        if has_attribute(&m.tokens) {
+            push(
+                span,
+                Message::Check(crate::diag::CheckMsg::Unimplemented(
+                    crate::diag::Unimpl::AttrInMacro,
+                )),
+            );
+        }
         ast::MacroArgs::Tokens
     };
     ast::Macro {
@@ -273,6 +283,22 @@ pub(super) fn mac(m: &syn::Macro) -> ast::Macro {
         args,
         span,
     }
+}
+
+/// トークン列に属性（`#[..]`、`#![..]`）があるか（グループの中を含む）。
+fn has_attribute(ts: &proc_macro2::TokenStream) -> bool {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let bracket = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket);
+    tts.iter().enumerate().any(|(i, t)| match t {
+        TokenTree::Group(g) => has_attribute(&g.stream()),
+        TokenTree::Punct(p) if p.as_char() == '#' => {
+            bracket(tts.get(i + 1))
+                || (matches!(tts.get(i + 1), Some(TokenTree::Punct(q)) if q.as_char() == '!')
+                    && bracket(tts.get(i + 2)))
+        }
+        _ => false,
+    })
 }
 
 /// `seq![a, b]` / `set![a, b]` / `map![k => v]` の引数を Ebykn の式として読む。

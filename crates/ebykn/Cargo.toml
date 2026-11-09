@@ -13,5 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 ebykn_check = { path = "../ebykn_check" }
+ebykn_lower = { path = "../ebykn_lower" }
 ebykn_syntax = { path = "../ebykn_syntax" }
 toml = { version = "0.9", default-features = false, features = ["parse", "std"] }
+serde_json = "1"
+
+[dev-dependencies]
+ebykn_lower = { path = "../ebykn_lower" }
+proc-macro2 = { version = "1.0.101", default-features = false }

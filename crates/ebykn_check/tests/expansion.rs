@@ -162,3 +162,14 @@ fn perm_derefs_and_extra_call_arguments() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0][0].var, "p");
 }
+
+#[test]
+fn region_indexes_inside_spec_closures() {
+    // 付録 A の `view`：論理文脈のクロージャの中の `self@nodes[p]` も領域添字。
+    let src = format!(
+        "{PRELUDE}impl Pool {{ pub closed spec fn vals(&self) -> Seq<u64> = self@order.map(|i: int, p: Ptr<Node>| self@nodes[p].val); }}"
+    );
+    let (c, lines) = run(&src);
+    assert!(lines.is_empty(), "{lines:?}");
+    assert_eq!(c.facts.region_index.len(), 1);
+}

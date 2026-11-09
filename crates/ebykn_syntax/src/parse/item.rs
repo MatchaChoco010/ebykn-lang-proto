@@ -532,7 +532,11 @@ fn fn_item(
     let sig = signature(input, q)?;
     let contract = contract::contract(input)?;
     let body = if input.peek(syn::token::Brace) {
-        Some(ast::FnBody::Block(block(input.parse()?)))
+        // 入れ子の `fn` は自分の `unchecked` で決め直す。
+        let saved = super::set_unchecked_body(unchecked.is_some());
+        let b = input.parse().map(block);
+        super::set_unchecked_body(saved);
+        Some(ast::FnBody::Block(b?))
     } else if peek_eq(input) {
         let eq: Token![=] = input.parse()?;
         let e = expr(input.parse()?);

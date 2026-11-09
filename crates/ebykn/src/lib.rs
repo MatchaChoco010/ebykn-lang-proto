@@ -7,6 +7,8 @@ use ebykn_check::project::{self, Project};
 use ebykn_check::{Checked, sort_diags};
 use ebykn_syntax::diag::{Diagnostic, Lang};
 
+pub mod verus;
+
 /// `ebykn check` の §6 までの結果。
 pub struct CheckReport {
     pub project: Project,
@@ -84,11 +86,7 @@ fn pin_mismatches(project: &Project) -> Vec<Diagnostic> {
 }
 
 /// `check` がまだ実行しない段階（仕様 §9 の `check` のうち、M2 の後半と M3 で足すもの）。
-pub const CHECK_SKIPPED: &[&str] = &[
-    "lower (§7)",
-    "verus --no-verify",
-    "self-contained check (§6.6)",
-];
+pub const CHECK_SKIPPED: &[&str] = &["self-contained check (§6.6)"];
 
 impl CheckReport {
     /// `--json` の最後に出す 1 行：結果の件数と、実行しなかった段階。
@@ -107,11 +105,23 @@ impl CheckReport {
     }
 }
 
+/// 検査を通ったプロジェクトを書き下す（§7）。検査にエラーがあれば `None`。
+pub fn lower_report(report: &CheckReport) -> Option<Result<ebykn_lower::Output, String>> {
+    if report.has_errors() {
+        return None;
+    }
+    let checked = report.checked.as_ref()?;
+    Some(ebykn_lower::lower(&report.project, checked))
+}
+
 /// 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）。`init` が `Ebykn.toml` に書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerusPin {
     pub release: String,
     pub commit: String,
+    pub version: String,
+    pub toolchain: String,
+    pub vstd: String,
 }
 
 const WORKSPACE_TOML: &str = include_str!("../../../Cargo.toml");
@@ -138,6 +148,9 @@ fn read_pin(text: &str) -> Option<VerusPin> {
     Some(VerusPin {
         release: s("release")?,
         commit: s("commit")?,
+        version: s("version")?,
+        toolchain: s("toolchain")?,
+        vstd: s("vstd")?,
     })
 }
 
@@ -209,7 +222,10 @@ mod tests {
         };
         let j = r.summary_json();
         assert!(j.contains("\"success\":true"), "{j}");
-        assert!(j.contains("\"skipped\":[\"lower (§7)\""), "{j}");
+        assert!(
+            j.contains("\"skipped\":[\"self-contained check (§6.6)\""),
+            "{j}"
+        );
     }
 
     #[test]

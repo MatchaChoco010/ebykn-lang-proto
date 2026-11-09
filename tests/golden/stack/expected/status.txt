@@ -1,0 +1,5 @@
+verified stack::Stack::invariant
+verified stack::Stack::new
+failed stack::Stack::push
+failed stack::Stack::pop
+results 1 verified, 2 errors

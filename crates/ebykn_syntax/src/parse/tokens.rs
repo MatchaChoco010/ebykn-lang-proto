@@ -367,6 +367,32 @@ pub(super) fn macro_call_message(names: &[String]) -> Option<Message> {
         Some(Message::VerusOnly {
             written: format!("{last}!"),
         })
+    } else if last == "cfg"
+        && matches!(
+            names.first().map(String::as_str),
+            Some("cfg" | "std" | "core")
+        )
+    {
+        // `cfg!` は Verus のときと Verus なしのときで違う値になり、検証したコードとビルドするコードが
+        // 食い違う（#27 の既定 B）。
+        Some(Message::Check(crate::diag::CheckMsg::Unimplemented(
+            crate::diag::Unimpl::CfgInBody,
+        )))
+    } else if matches!(last.as_str(), "env" | "option_env" | "file")
+        && matches!(
+            names.first().map(String::as_str),
+            Some("env" | "option_env" | "file" | "std" | "core")
+        )
+    {
+        // コンパイル時の環境変数と、cargo が rustc に渡すファイルのパスは、Verus の実行と素のビルドで
+        // 値が違いうる（#27 の既定）。証明なしの前提として一覧に出る `unchecked fn` の本体でだけ許す。
+        let u = if last == "file" {
+            crate::diag::Unimpl::FileMacro
+        } else {
+            crate::diag::Unimpl::EnvMacro
+        };
+        (!super::in_unchecked_body())
+            .then_some(Message::Check(crate::diag::CheckMsg::Unimplemented(u)))
     } else if macro_allowed(names).is_none() {
         Some(Message::MacroNotAllowed {
             name: names.join("::"),

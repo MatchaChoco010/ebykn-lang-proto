@@ -9,14 +9,11 @@ use std::process::Command;
 
 use crate::fetch;
 
-/// Verus で検証するクレート（prelude、手書きの stack、§6.2 の参照モデル）。`verus-verify` は各クレートを
-/// Verus で検証し、Verus なしの cargo でもビルドする。
-/// vstd に依存するクレートはすべてここに載せ、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
-pub const CRATES: &[&str] = &[
-    "crates/ebykn_prelude",
-    "tests/golden/stack/expected/verus",
-    "formal/linearity",
-];
+/// Verus で検証するクレート（prelude、§6.2 の参照モデル）。`verus-verify` は各クレートを Verus で検証し、
+/// Verus なしの cargo でもビルドする。vstd に依存するクレートは、ここに載せるか golden の期待
+/// （`tests/golden/<名前>/expected/verus`。`golden-verify` が `ebykn verify` の結果を `expected/status.txt` と
+/// 比べる）にし、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
+pub const CRATES: &[&str] = &["crates/ebykn_prelude", "formal/linearity"];
 
 /// リリースの zip を展開してできるディレクトリ。
 const UNPACKED: &str = "verus-x86-linux";

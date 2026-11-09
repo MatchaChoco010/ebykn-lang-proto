@@ -153,7 +153,17 @@ pub fn check_nested_items(
             ItemKind::Mod(_) => true,
             _ => false,
         };
-        if ebykn {
+        let assumption = match &item.kind {
+            ItemKind::Fn(f) => f.unchecked.is_some(),
+            ItemKind::LemmaFn(_) => true,
+            _ => false,
+        };
+        if assumption {
+            diags.push(
+                item.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::NestedAssumption)),
+            );
+        } else if ebykn {
             diags.push(
                 item.span,
                 Message::Check(CheckMsg::Unimplemented(Unimpl::NestedItem)),

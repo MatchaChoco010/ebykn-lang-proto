@@ -6,6 +6,7 @@ pub mod file_size;
 pub mod formal_oracle;
 pub mod gate_tests;
 pub mod md_links;
+pub mod prelude_exports;
 pub mod verus_pin;
 pub mod verus_probes;
 
@@ -37,6 +38,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-verus-pin",
         run: verus_pin::run,
+    },
+    Gate {
+        name: "check-prelude-exports",
+        run: prelude_exports::run,
     },
 ];
 
