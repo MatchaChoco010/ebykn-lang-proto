@@ -1,0 +1,13 @@
+/// `x` の 2 倍。
+fn double(x: u32) -> (r: u32)
+    requires x <= 1000,
+    ensures r == 2 * x,
+{
+    2 * x
+}
+
+fn main() {
+    let y = double(21);
+    // 検証で y == 42 が示されるので、実行してもこの assert! は外れない。
+    assert!(y == 42);
+}

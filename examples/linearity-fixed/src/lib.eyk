@@ -1,0 +1,22 @@
+// ../linearity-broken/ の 2 つの誤りを直した版。
+
+pub struct Node { pub val: u64 }
+
+/// `v` を入れた節点を作り、値を読んでから解放する。
+pub fn read_then_free(v: u64) -> (r: u64)
+    ensures r == v,
+{
+    let p = Ptr::new(Node { val: v });
+    let r = (*p).val;
+    let n = p.free();
+    r
+}
+
+/// `v` を入れた節点を作り、1 回だけ解放する。
+pub fn free_once(v: u64) -> (r: u64)
+    ensures r == v,
+{
+    let p = Ptr::new(Node { val: v });
+    let n = p.free();
+    n.val
+}

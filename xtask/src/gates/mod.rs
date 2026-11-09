@@ -2,6 +2,7 @@
 //! `fails_` で始まるテストで示す（`check-gate-tests` が検査する）。
 
 pub mod book;
+pub mod examples;
 pub mod file_size;
 pub mod formal_oracle;
 pub mod gate_tests;
@@ -48,6 +49,10 @@ pub const ALL: &[Gate] = &[
         name: "check-prelude-exports",
         run: prelude_exports::run,
     },
+    Gate {
+        name: "check-examples",
+        run: examples::run_static,
+    },
 ];
 
 /// 固定した Verus か、vstd のビルドが要るゲート。`gates` には入れず、CI の Verus のジョブで走らせる。
@@ -59,6 +64,10 @@ pub const VERUS: &[Gate] = &[
     Gate {
         name: "formal-oracle",
         run: formal_oracle::run,
+    },
+    Gate {
+        name: "examples-verify",
+        run: examples::run,
     },
 ];
 

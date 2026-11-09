@@ -34,6 +34,10 @@ impl TempRepo {
         self
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn run(&self, gate: fn(&Repo) -> Report) -> Report {
         self.run_ref(gate)
     }
