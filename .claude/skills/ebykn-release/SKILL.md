@@ -9,7 +9,7 @@ description: ebykn-lang-proto でリリースを切る手順。ワークツリ�
 
 - この手順で「止まって報告する」は、手順 9 の「止まったとき」の形でコーディネーターの Run に知らせて終わること。作者には報告しない。レビューや確認を催促しない。結果は Release と、リリースの PR の本文とコメントに残す。
 - 取り消せない操作（タグの push、Release、`release` の早送り）は、確認と PDF が済んでから手順 4〜6 でまとめて行う。手順 1〜3 で止まっても、リモートには何も残らない。
-- `release` は早送りだけで進める。force push しない。直接コミットしない。`release` の先頭は、いつも Release のある報告済みのタグにする。
+- `release` は早送りだけで進める。force push しない。直接コミットしない。`release` の ruleset が削除と force push を拒み、早送りの push だけを通す（AGENTS.md の「作業の場所」）。`release` の先頭は、いつも Release のある報告済みのタグにする。
 - 押したタグと Release は消さない。手順 6 までのどこかで止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。手順 7 以降で止まったら、その手順からやり直す（`release` はもうタグまで進んでいるので、手順 1 は新しいリリースとみなす）。止まった点ごとの続け方は「止まった回を続ける」。
 - どの手順でも、コマンドが権限の判定で拒否されたり確認を求められたりしたら、そこで止まる。別の方法で回り込まない。取り消せない操作（タグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）だけでなく、手順 0〜3 で使うもの（スライドの道具のダウンロード、`git worktree add`、yomiyasu など）も同じ。手順 9 の「止まったとき」の形で、止まった手順・`$dir`・PDF のパス（まだなければ「なし」）を知らせる。残りの手順は、コーディネーターが「止まった回を続ける」の表に従って行う。コーディネーターは、同じマシンの `$dir` を読める。
 - 例外は、見つけた問題の `gh issue create` が拒否されたとき。作る予定だった Issue の題と本文を `$dir/pending-issues/<番号>.md`（1 から数える）に残し、手順 9 の知らせに書く。リリースは止めない。
@@ -85,6 +85,11 @@ while [ -n "$latest" ]; do
   latest=$(git tag --list 'report/*' --sort=-v:refname | head -n1)
 done
 
+# 報告済みのタグがあるのに release がなければ止まる（「作者が main にマージしたあと」）
+if [ -n "$latest" ] && ! git rev-parse --verify -q refs/remotes/origin/release > /dev/null; then
+  echo "止まる：report/* のタグがあるのに origin/release がない"; exit 1
+fi
+
 # 止まったリリースがあれば、同じ識別子で再開する
 mode=new
 if [ -n "$latest" ]; then
@@ -128,8 +133,9 @@ EOF
 
 - 「止まる」が出たら（`exit 1` で終わる）、そこで止まって報告する。`develop` が進んでいなければ、リリースは切らない。これは失敗ではなく、何もすることがなかったという結果として手順 9 で知らせる。
 - 既定のブランチが `develop` でなければ止まる。GitHub の `commits/<sha>/pulls` は、既定のブランチの上のコミットにしか、マージ済みの PR を返さない。既定のブランチが変わると、手順 2 で範囲のすべてのコミットが「PR のないコミット」に見える。
-- 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。次の PR の差分に同じ変更がもう一度出る。作者の操作が要るが、この時点ではリリースの PR がない（前回の PR は閉じ、今回の PR はまだ作っていない）ので、手順 9 の知らせにだけ書く。コーディネーターは、作者が次に話しかけたときに伝える（催促はしない）。
+- 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。`main` の ruleset はマージコミットだけを許すのでふつうは起きないが、ruleset が変わったときのために確かめる。次の PR の差分に同じ変更がもう一度出る。作者の操作が要るが、この時点ではリリースの PR がない（前回の PR は閉じ、今回の PR はまだ作っていない）ので、手順 9 の知らせにだけ書く。コーディネーターは、作者が次に話しかけたときに伝える（催促はしない）。
 - 手元にだけある `report/*` のタグ（`git ls-remote --exit-code` が 2 で終わる）は消す。手順 4 の push が失敗したか、権限で止まった回のタグで、リモートには何も残っていない。そのまま残すと、`git fetch --prune --tags` でも消えず、次の回の手順 1 が `resume-release` を選び、手順 5 の `--verify-tag` で毎回止まる。`ls-remote` がほかの理由で失敗したら（通信など）、消さずに止まる。
+- 報告済みのタグがあるのに `origin/release` がなければ止まる。ruleset が削除を禁じているので、ふつうは起きない。作り直し方は「作者が main にマージしたあと」。
 - `gh release view` の失敗は、`release not found` のときだけ Release がないとみなす。通信の失敗などほかのエラーでは止まり、再開と取り違えない。
 - 新しく切るとき（`mode=new`）は、作業用のフォルダを消してから作る。前に手順 3 までで止まった回の出力を使わないため。
 - `mode` で、どこから進めるかが決まる。
@@ -161,7 +167,7 @@ EOF
 | `cancelled` | 新しい push で取り消された。手順 1 からやり直す（`$dir` を消してよい。リモートには何も残っていない） |
 | それ以外（`failure` など） | 止まって報告する。直す PR を `develop` に積み、緑になってから切る |
 
-PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していないので、この確認を飛ばさない。
+`develop` の ruleset は strict なので、PR の CI は `develop` の先頭との組み合わせを試している。それでも、マージしたあとの先頭そのものが緑であることを、タグを付ける前にここで確かめる。この確認を飛ばさない。
 
 ## 2. 範囲の PR と Issue を集める
 
@@ -298,7 +304,7 @@ EOF
 
 - `release` がなければ（初回）、`ls-remote` が 2 で終わり、`push` が `release` を作る。
 - `release` が今回のコミットの祖先でなければ、誰かが `release` に直接書いた。push せず止まって報告する。
-- `--force` は付けない。早送りでない push はサーバーが拒否する。
+- `--force` は付けない。早送りでない push は、`release` の ruleset が拒否する。
 
 ## 7. release のワークスペースを進める
 
@@ -515,6 +521,8 @@ EOF
 
 GitHub の画面でマージするときは、PR の先頭のコミットがこの sha であることを確かめます。
 
+画面に「Update branch」のボタンが出ても、押しません（`main` に一度マージすると出ます）。押すと `main` のマージコミットが `release` に入り、`release` の先頭が報告済みのタグではなくなって、次のリリースが止まります。`release` は force push できないので、戻しにくくなります。
+
 ## 判断待ちの Issue
 
 - #<番号> <題>
@@ -569,7 +577,9 @@ gh pr checks <PR 番号> --watch
 EOF
 ```
 
-`release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから手順 9 に進む。
+`release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから手順 9 に進む。`main` の ruleset は `ci-required` を必須にしている（strict ではない）ので、緑でなければ作者もマージできない。
+
+この PR では update-branch（GitHub の「Update branch」）を使わない。`main` のマージコミットが `release` に入り、`release` の先頭が報告済みのタグではなくなる。
 
 本文とコメントは作者があとで読むためのもの。作者に読むよう促す言葉（「ご確認ください」など）は書かない。
 
@@ -707,6 +717,16 @@ AGENTS.md の「見つけた問題」のとおり扱う。
 ## 作者が main にマージしたあと
 
 - リリースの PR は閉じる。次のリリースの手順 8 では開いた PR がないので、新しく作る。
+- マージした PR の head のブランチは GitHub が自動で消す設定だが、`release` は ruleset が削除を禁じているので残る。
+- まだ実際には確かめていないので、保険として、`release` が消えていたら（`git ls-remote --exit-code origin refs/heads/release` が 2 で終わる）、次の回の前に最新のタグから作り直す。手順 1 は、`report/*` のタグがあるのに `origin/release` がなければ止まる。
+
+```bash
+bash -euo pipefail <<'EOF'
+git fetch origin --prune --tags
+latest=$(git tag --list 'report/*' --sort=-v:refname | head -n1)
+git push origin "$(git rev-parse "${latest}^{commit}"):refs/heads/release"
+EOF
+```
 - 新しい PR の「確認待ちのリリース」には、`main` に入っていないタグだけが載る。
 - 次のリリースの手順 1 で、前回の PR がマージコミットで入ったことを確かめる。
 
