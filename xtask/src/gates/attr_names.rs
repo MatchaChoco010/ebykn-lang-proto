@@ -10,7 +10,19 @@
 //! もので、表を読めなければ失敗にする。
 //!
 //! - `.is("名前")`
-//! - 同じ行の `Ident(x)` で束縛した `x` と `"名前"` の `==`（`TokenTree::Ident(i) => i == "repr"`）
+//! - 1 行の中の、トークンの識別子と `"名前"` の `==` / `!=`（左右どちらでも）。トークンの識別子は、
+//!   同じ行の `Ident(x)` で束縛した `x`（`TokenTree::Ident(i) => i == "repr"`）か、`.to_string()`
+//!   （`.as_str()` 付きも）で終わる式（`i.to_string() == "cfg"`）。
+//!
+//! 次の形は捕まえない（今のコードにはない）。
+//!
+//! - 名前を変数で渡す `.is(name)`（`Attr::is_builtin` の本体を戻す形）と、名前を変数に入れてから比べる形
+//! - `matches!(i.to_string().as_str(), "cfg" | ..)`、`match` の腕の `"cfg" =>`、`.eq("cfg")`
+//! - 括弧で包んだ `"cfg" == (i.to_string())`
+//! - 前の行で束縛した `Ident(i)` の `i == "cfg"` と、rustfmt が改行した `==`
+//!
+//! これらの形は、raw の綴りのテスト（`crates/ebykn_check/tests/review.rs` などの `r#cfg`）が落ちることで
+//! 見つける。
 
 use super::{Repo, Report};
 
@@ -49,13 +61,11 @@ pub fn run(repo: &Repo) -> Report {
                         i + 1
                     ));
                 }
-                for var in ident_bindings(line) {
-                    if line.contains(&format!("{var} == \"{name}\"")) {
-                        r.errors.push(format!(
-                            "{f}:{}: トークンの識別子 `{var}` を属性の名前 `\"{name}\"` と `==` で比べています。raw の綴り（`r#{name}`）を見逃すので、`macros::token_is_name` で比べてください",
-                            i + 1
-                        ));
-                    }
+                for what in token_comparisons(line, name) {
+                    r.errors.push(format!(
+                        "{f}:{}: トークンの識別子を属性の名前 `\"{name}\"` と {what} で比べています。raw の綴り（`r#{name}`）を見逃すので、`macros::token_is_name` で比べてください",
+                        i + 1
+                    ));
                 }
             }
         }
@@ -106,6 +116,57 @@ fn table(src: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// 行の中で、トークンの識別子を `"name"` と `==` / `!=` で比べている箇所（左右どちらでも）。比べる側は、
+/// 同じ行の `Ident(x)` で束縛した `x` か、`.to_string()`（`.as_str()` 付きも）で終わる式。トークンを
+/// 文字列にすると raw の綴りは `r#` が付いたままなので、どちらも `r#name` を見逃す。
+fn token_comparisons(line: &str, name: &str) -> Vec<String> {
+    const TO_STRING: &[&str] = &[".to_string().as_str()", ".to_string()"];
+    let lit = format!("\"{name}\"");
+    let vars = ident_bindings(line);
+    let mut out = Vec::new();
+    for op in ["==", "!="] {
+        // 左が比べる側：`x == "name"`、`i.to_string() == "name"`。
+        for (at, _) in line.match_indices(&format!(" {op} {lit}")) {
+            let left = &line[..at];
+            if let Some(v) = vars.iter().find(|v| ends_with_word(left, v)) {
+                out.push(format!("`{v} {op}`"));
+            } else if TO_STRING.iter().any(|t| left.ends_with(t)) {
+                out.push(format!("`to_string()` の `{op}`"));
+            }
+        }
+        // 右が比べる側：`"name" == x`、`"name" == i.to_string()`。
+        for (at, m) in line.match_indices(&format!("{lit} {op} ")) {
+            let right = &line[at + m.len()..];
+            let operand: String = right
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || "_.&*()".contains(*c))
+                .collect();
+            if let Some(v) = vars.iter().find(|v| operand == **v) {
+                out.push(format!("`{v} {op}`"));
+            } else if TO_STRING.iter().any(|t| {
+                // `unraw(&i.to_string())` のように、関数の引数の中の `to_string()` は除く。
+                operand.find(t).is_some_and(|k| {
+                    let head = &operand[..k];
+                    head.matches('(').count() == head.matches(')').count()
+                })
+            }) {
+                out.push(format!("`to_string()` の `{op}`"));
+            }
+        }
+    }
+    out
+}
+
+/// `s` が語 `w` で終わるか（`w` の前が識別子の文字でない）。
+fn ends_with_word(s: &str, w: &str) -> bool {
+    s.strip_suffix(w).is_some_and(|head| {
+        !head
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// 行の中の `Ident(x)` の `x`（識別子だけ）。
@@ -175,8 +236,50 @@ mod tests {
         t.write(INDEX, &broken);
         assert_fails(
             &t.run(run),
-            "`i` を属性の名前 `\"cfg\"` と `==` で比べています",
+            "トークンの識別子を属性の名前 `\"cfg\"` と `i ==` で比べています",
         );
+    }
+
+    #[test]
+    fn fails_when_a_token_is_compared_through_to_string() {
+        let mut t = TempRepo::new();
+        with_table(&mut t);
+        let broken = mutate(
+            &real(INDEX),
+            "ebykn_syntax::macros::token_is_name(&i, \"cfg\")",
+            "i.to_string() == \"cfg\"",
+        );
+        t.write(INDEX, &broken);
+        assert_fails(
+            &t.run(run),
+            "トークンの識別子を属性の名前 `\"cfg\"` と `to_string()` の `==` で比べています",
+        );
+    }
+
+    #[test]
+    fn finds_token_comparisons() {
+        for (line, want) in [
+            ("TokenTree::Ident(i) => i != \"repr\",", "`i !=`"),
+            ("TokenTree::Ident(i) => \"repr\" == i,", "`i ==`"),
+            (
+                "t.to_string().as_str() == \"repr\"",
+                "`to_string()` の `==`",
+            ),
+            ("if \"repr\" != tok.to_string() {", "`to_string()` の `!=`"),
+            ("\"repr\" == x.ident().to_string()", "`to_string()` の `==`"),
+        ] {
+            assert_eq!(token_comparisons(line, "repr"), [want], "{line}");
+        }
+        // `r#` を外した文字列や、トークンでない文字列どうしの比較は正しい。
+        for line in [
+            "TokenTree::Ident(i) => unraw(&i.to_string()) == \"repr\",",
+            "\"repr\" == unraw(&i.to_string())",
+            "TokenTree::Ident(i) => first == \"repr\",",
+            "TokenTree::Ident(i) => xi == \"repr\",",
+            "name == \"repr\"",
+        ] {
+            assert!(token_comparisons(line, "repr").is_empty(), "{line}");
+        }
     }
 
     #[test]
