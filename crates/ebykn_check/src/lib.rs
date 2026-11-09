@@ -6,6 +6,7 @@
 //! `E0003`（未実装）にする。
 
 pub mod body;
+pub mod ensures;
 pub mod facts;
 pub mod index;
 pub mod names;
@@ -205,6 +206,7 @@ fn check_fn(
     facts: &mut Facts,
 ) {
     sig::check_perm_targets(&f.sig, &f.contract, &mut diags.list);
+    ensures::check(&f.sig, &f.contract, &mut diags.list);
     let scx = SigCx {
         index,
         module,
@@ -288,6 +290,7 @@ fn check_lemma_fn(
     facts: &mut Facts,
 ) {
     sig::check_perm_targets(&f.sig, &f.contract, &mut diags.list);
+    ensures::check(&f.sig, &f.contract, &mut diags.list);
     let mut w = Walker::new(logic_cx(index, module, self_ty, &f.sig), diags, facts);
     w.enter(&f.sig, &f.contract);
     w.contract(&f.contract);

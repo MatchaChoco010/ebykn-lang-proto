@@ -10,7 +10,7 @@ mod item;
 pub mod print;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use ebykn_check::Checked;
@@ -81,15 +81,12 @@ pub(crate) struct Cx<'a> {
     pub self_struct: Option<&'a StructInfo>,
     /// 権限の変数の種類（関数の中で、文の順に更新する）。
     pub perms: BTreeMap<String, PermKind>,
-    /// `ensures` で `final(..)` で包む名前（`self`、`x: &mut T`、`uses &mut p@` の `__eyk_perm_p`）。
-    pub mut_params: BTreeSet<String>,
     /// `ensures` で付け替える名前（`gives` の戻り値）。
     pub rename: BTreeMap<String, String>,
     /// `gives q@` の `q`（本体の末尾と `return` に権限を付ける）。
     pub gives: Option<String>,
     pub logic: bool,
     pub ensures: bool,
-    pub under_old_final: bool,
     pub report: &'a RefCell<Report>,
 }
 
@@ -184,12 +181,10 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
             foreign_impl: None,
             self_struct: None,
             perms: BTreeMap::new(),
-            mut_params: BTreeSet::new(),
             rename: BTreeMap::new(),
             gives: None,
             logic: false,
             ensures: false,
-            under_old_final: false,
             report: &report,
         };
         let mut pieces = Vec::new();

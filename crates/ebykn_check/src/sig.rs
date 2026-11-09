@@ -2,7 +2,7 @@
 //!
 //! 展開の対象は `impl Invariant for T` の `T` だけ。部分集合型は M4 で、`E0003` にする
 //! （[`crate::check_crate`]）。展開した契約は [`FnExpansion`] として返し、書き下し（M2 の
-//! `ebykn_lower`）が Verus の式にする。#10 の既定どおり、`&mut` の位置は
+//! `ebykn_lower`）が Verus の式にする。#10 の決定どおり、`&mut` の位置は
 //! `requires P[old(x)]`、`ensures P[final(x)]`。
 
 use ebykn_syntax::ast::{self, GenericArg, GenericArgs, Param, TypeKind, UsesItem};
@@ -21,7 +21,7 @@ pub enum Subject {
     Var(String),
     /// `old(x)`。
     Old(String),
-    /// `final(x)`（#10 の既定）。
+    /// `final(x)`（#10 の決定）。
     Final(String),
 }
 

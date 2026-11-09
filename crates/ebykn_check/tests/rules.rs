@@ -197,3 +197,89 @@ fn invariant_impl_shape() {
         "impl Invariant for T",
     );
 }
+
+#[test]
+fn e0004_bare_mut_parameters_in_ensures() {
+    // #10 の決定（案 B）：`ensures` の `&mut` 引数は `final(..)` か `old(..)` で書く。
+    let mut_self = "`self` is a `&mut` argument, so `ensures` must say which value it means: write `final(self)` for the value after the call or `old(self)` for the value at entry";
+    rejects(
+        &in_pool("fn f(&mut self) ensures self.len == old(self).len, { }"),
+        "E0004",
+        mut_self,
+    );
+    rejects(
+        &in_pool("fn f(self: &mut Self) ensures self.len == 0, { }"),
+        "E0004",
+        "write `final(self)`",
+    );
+    rejects(
+        &in_pool("fn f(&mut self) ensures self@order.len() == 0, { }"),
+        "E0004",
+        "write `final(self)`",
+    );
+    rejects(
+        &in_pool("fn f(&mut self, p: Ptr<Node>) ensures self@nodes[p].val == 0, { }"),
+        "E0004",
+        "write `final(self)`",
+    );
+    rejects(
+        &in_pool("fn f(&mut self) ensures self.view() == old(self).view(), { }"),
+        "E0004",
+        "write `final(self)`",
+    );
+    rejects(
+        &format!("{PRELUDE}fn f(x: &mut u64) ensures *x == 1, {{ }}"),
+        "E0004",
+        "write `final(x)` for the value after the call or `old(x)`",
+    );
+    rejects(
+        &format!("{PRELUDE}fn f(p: Ptr<Node>) uses &mut p@ ensures p@.is_init(), {{ }}"),
+        "E0004",
+        "`p@` refers to the permission borrowed with `uses &mut p@`, so `ensures` must say which value it means: write `final(p@)`",
+    );
+    rejects(
+        &format!("{PRELUDE}fn f(p: Ptr<Node>) uses &mut p@ ensures (*p).val == 1, {{ }}"),
+        "E0004",
+        "write `final(*p)` for the value after the call or `old(*p)`",
+    );
+    rejects(
+        &format!(
+            "{PRELUDE}fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures r.contains(p), {{ }}"
+        ),
+        "E0004",
+        "write `final(r)`",
+    );
+    rejects(
+        &format!("{PRELUDE}lemma fn l(x: &mut u64) ensures *x == 1;"),
+        "E0004",
+        "write `final(x)`",
+    );
+    // 一つの `ensures` に二つあれば二つ。
+    assert_eq!(
+        codes(&in_pool(
+            "fn f(&mut self) ensures self.len == 0, self@order.len() == 0, { }"
+        )),
+        ["E0004", "E0004"]
+    );
+}
+
+#[test]
+fn e0004_accepts_old_final_requires_and_rebinding() {
+    accepts(&in_pool(
+        "fn f(&mut self, p: Ptr<Node>) requires self.len == 0, old(self)@nodes.contains(p), ensures final(self).len == old(self).len, final(self)@order.len() == 0, final(self)@nodes[p].val == 0, old(self@nodes)[p].val == 0, { }",
+    ));
+    accepts(&format!(
+        "{PRELUDE}fn f(x: &mut u64, p: Ptr<Node>) uses &mut p@ requires *x == 0, p@.is_init(), ensures *final(x) == 1, final(p@).is_init(), final(*p).val == old(*p).val, {{ }}"
+    ));
+    accepts(&format!(
+        "{PRELUDE}fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures final(r).contains(p), final(r)[p].val == old(r)[p].val, {{ }}"
+    ));
+    // 束縛し直した同じ名前は外の引数を隠す。
+    accepts(&format!(
+        "{PRELUDE}fn f(x: &mut u64, s: Seq<u64>, o: Option<u64>) ensures forall x: u64, x >= 0, s.map(|i: int, x: u64| x) == s, match o {{ Some(x) => x > 0, None => true }}, {{ }}"
+    ));
+    // `&self` と値の `self`、`&T` の引数は対象外。
+    accepts(&in_pool(
+        "fn f(&self, x: &u64) ensures self.len == 0, *x == 0, { }",
+    ));
+}

@@ -464,15 +464,6 @@ impl Cx<'_> {
         }
     }
 
-    /// `ensures` の中の、`old` / `final` の下にない `&mut` 引数を `final(..)` で包む（#10 の既定）。
-    fn wrap_final(&self, name: &str, s: String) -> String {
-        if self.ensures && !self.under_old_final && self.mut_params.contains(name) {
-            format!("final({s})")
-        } else {
-            s
-        }
-    }
-
     fn path_expr(&mut self, q: Option<&ast::QSelf>, p: &ast::Path) -> String {
         if q.is_none()
             && let Some(i) = p.as_ident()
@@ -482,7 +473,7 @@ impl Cx<'_> {
             {
                 return r.clone();
             }
-            return self.wrap_final(&i.name, ident(i));
+            return ident(i);
         }
         self.qpath(q, p)
     }
@@ -496,7 +487,7 @@ impl Cx<'_> {
         format!("*{x}.read({})", self.perm_shared(x))
     }
 
-    /// 論理文脈の `p@`（`ensures` の `&mut` は `final`、`gives` の戻り値は名前を付け替える）。
+    /// 論理文脈の `p@`（`ensures` の `gives` の戻り値は名前を付け替える）。
     fn perm_term(&self, x: &str) -> String {
         let v = perm_var(x);
         if self.ensures
@@ -504,7 +495,7 @@ impl Cx<'_> {
         {
             return r.clone();
         }
-        self.wrap_final(&v, v.clone())
+        v
     }
 
     /// 代入（`=`、`+=` など）。左辺が権限付きの `*X` なら `write` / `borrow_mut` にする。
@@ -571,24 +562,17 @@ impl Cx<'_> {
     }
 
     fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr]) -> String {
-        // `old(e)` / `final(e)`：中は包まない。`old(*p)` は `old(p@).value()`。
+        // `old(*p)` / `final(*p)` は `old(p@).value()` / `final(p@).value()`。
         if let ExprKind::Path { qself: None, path } = &func.kind
             && let Some(f) = path.as_ident()
             && (f.is("old") || f.is("final"))
-            && args.len() == 1
+            && let [arg] = args
+            && let ExprKind::Unary {
+                op: UnOp::Deref, ..
+            } = &arg.kind
+            && let Some(x) = self.facts.derefs.get(&SpanKey::from(arg.span)).cloned()
         {
-            let prev = std::mem::replace(&mut self.under_old_final, true);
-            let s = match &args[0].kind {
-                ExprKind::Unary {
-                    op: UnOp::Deref, ..
-                } if self.facts.derefs.contains_key(&SpanKey::from(args[0].span)) => {
-                    let x = self.facts.derefs[&SpanKey::from(args[0].span)].clone();
-                    format!("{}({}).value()", f.name, perm_var(&x))
-                }
-                _ => format!("{}({})", f.name, self.expr(&args[0])),
-            };
-            self.under_old_final = prev;
-            return s;
+            return format!("{}({}).value()", f.name, perm_var(&x));
         }
         let f = self.expr(func);
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
@@ -635,11 +619,10 @@ impl Cx<'_> {
 
     fn closure(&mut self, c: &ast::Closure) -> String {
         let params: Vec<String> = c.params.iter().map(|p| self.pat(p)).collect();
-        let saved = (self.rename.clone(), self.mut_params.clone());
+        let saved = self.rename.clone();
         for p in &c.params {
             if let Some(i) = ebykn_check::index::pat_ident(p) {
                 self.rename.remove(&i.name);
-                self.mut_params.remove(&i.name);
             }
         }
         let ret = c
@@ -657,7 +640,7 @@ impl Cx<'_> {
             params.join(", "),
             self.expr(&c.body)
         );
-        (self.rename, self.mut_params) = saved;
+        self.rename = saved;
         s
     }
 
@@ -764,8 +747,8 @@ impl Cx<'_> {
         let prev = std::mem::replace(&mut self.logic, true);
         let mut names = Vec::new();
         let mut conds = Vec::new();
-        // 束縛した名前は、外の `gives` の付け替えと `final` の包みを隠す（シャドウ）。
-        let saved = (self.rename.clone(), self.mut_params.clone());
+        // 束縛した名前は、外の `gives` の付け替えを隠す（シャドウ）。
+        let saved = self.rename.clone();
         for b in binders {
             let n = ident(&b.ident);
             match &b.kind {
@@ -781,10 +764,9 @@ impl Cx<'_> {
                 }
             }
             self.rename.remove(&b.ident.name);
-            self.mut_params.remove(&b.ident.name);
         }
         let body_s = self.expr(body);
-        (self.rename, self.mut_params) = saved;
+        self.rename = saved;
         self.logic = prev;
         let low = |e: &Expr, ops: &[BinOp]| matches!(&e.kind, ExprKind::Binary { op, .. } if ops.contains(op));
         let q = match kind {
@@ -844,8 +826,15 @@ impl Cx<'_> {
     /// 論理文脈の領域（`self.r@` / 領域変数）。
     fn region_logic(&self, r: &RegionRef) -> String {
         match r {
-            RegionRef::SelfField(f) => format!("{}.{f}@", self.wrap_final("self", "self".into())),
+            RegionRef::SelfField(f) => format!("self.{f}@"),
             RegionRef::Var(v) => v.clone(),
+            RegionRef::At { old, region } => {
+                let at = if *old { "old" } else { "final" };
+                match &**region {
+                    RegionRef::SelfField(f) => format!("{at}(self).{f}@"),
+                    r => format!("{at}({})", self.region_logic(r)),
+                }
+            }
         }
     }
 
@@ -856,6 +845,9 @@ impl Cx<'_> {
                 format!("self.{f}.{}()", if write { "borrow_mut" } else { "borrow" })
             }
             RegionRef::Var(v) => v.clone(),
+            // `old` / `final` を付けた領域は論理文脈の添字にしか現れない（`take` などの文は
+            // `self@x` か領域変数だけを受け付ける）。
+            RegionRef::At { region, .. } => self.region_exec(region, write),
         }
     }
 

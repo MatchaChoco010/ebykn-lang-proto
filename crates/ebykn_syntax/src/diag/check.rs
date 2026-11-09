@@ -331,6 +331,14 @@ pub enum CheckMsg {
     // E0003
     Unimplemented(Unimpl),
 
+    // E0004
+    /// `ensures` の中の、`old(..)` / `final(..)` の下にない `&mut` 引数（#10）。`written` は書いた形
+    /// （`self`、`x`、`p@`、`*p`）。`perm` は `uses &mut p@` の権限なら `Some(p)`。
+    BareMutInEnsures {
+        written: String,
+        perm: Option<String>,
+    },
+
     // E0001
     /// `take` / `put` / `borrow` の後の `x[..]` の `x` が領域でない。
     NotARegion {
@@ -486,6 +494,7 @@ impl CheckMsg {
             | VerusPinMismatch { .. }
             | ReadFailed { .. } => Code::E0002,
             Unimplemented(_) => Code::E0003,
+            BareMutInEnsures { .. } => Code::E0004,
             NotARegion { .. } | InvariantImplShape | ViewImplShape | EbyknTraitSpelling { .. } => {
                 Code::E0001
             }
@@ -847,6 +856,27 @@ impl CheckMsg {
             (AssignOwnsField { field }, Ja) => format!(
                 "`owns` フィールド `{field}` には代入できません。領域は `take`・`put`・`borrow` で変えます"
             ),
+
+            (BareMutInEnsures { written, perm }, En) => {
+                let what = match perm {
+                    Some(p) => format!(
+                        "`{written}` refers to the permission borrowed with `uses &mut {p}@`"
+                    ),
+                    None => format!("`{written}` is a `&mut` argument"),
+                };
+                format!(
+                    "{what}, so `ensures` must say which value it means: write `final({written})` for the value after the call or `old({written})` for the value at entry"
+                )
+            }
+            (BareMutInEnsures { written, perm }, Ja) => {
+                let what = match perm {
+                    Some(p) => format!("`{written}` は `uses &mut {p}@` で借りた権限を指すので"),
+                    None => format!("`{written}` は `&mut` の引数なので"),
+                };
+                format!(
+                    "{what}、`ensures` ではどちらの値かを書きます。呼び出しの後の値なら `final({written})`、入口の値なら `old({written})` と書きます"
+                )
+            }
 
             (RefinementNested { ty }, En) => format!(
                 "the invariant of `{ty}` is not added to contracts at this position; only `T`, `&T`, `&mut T`, `Option<T>` and `Result<T, E>` are expanded"

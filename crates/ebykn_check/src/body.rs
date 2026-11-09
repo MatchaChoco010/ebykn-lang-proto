@@ -1150,9 +1150,35 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// 論理の領域添字 `r[p]` の `r`（`self@x` の `x` が `owns`、または領域変数）。
+    /// 論理の領域添字 `r[p]` の `r`（`self@x` の `x` が `owns`、または領域変数）。`old(self)@x`、
+    /// `final(self)@x`、`old(r)`、`final(r)`、`old(self@x)` なども領域として読む（#10）。
     fn logical_region(&mut self, base: &Expr) -> Option<RegionRef> {
+        if let Some((old, inner)) = old_or_final(base) {
+            let region = self.logical_region(inner)?;
+            return Some(RegionRef::At {
+                old,
+                region: Box::new(region),
+            });
+        }
         match &base.kind {
+            ExprKind::Erased { base: b, field }
+                if old_or_final(b).is_some_and(|(_, x)| is_self(x)) =>
+            {
+                let (old, _) = old_or_final(b)?;
+                if !self.cx.has_self {
+                    self.push(b.span, CheckMsg::SelfErasedWithoutSelf);
+                    return None;
+                }
+                if self.closure_use_region_self(field, base.span) {
+                    return None;
+                }
+                (self.self_struct()?.erased_kind(&field.name)? == ErasedKind::Owns).then(|| {
+                    RegionRef::At {
+                        old,
+                        region: Box::new(RegionRef::SelfField(field.name.clone())),
+                    }
+                })
+            }
             ExprKind::Erased { base: b, field } if is_self(b) => {
                 if !self.cx.has_self {
                     self.push(b.span, CheckMsg::SelfErasedWithoutSelf);
@@ -1779,6 +1805,20 @@ fn is_compound_assign(op: ast::BinOp) -> bool {
             | ShlAssign
             | ShrAssign
     )
+}
+
+/// `old(e)` / `final(e)` なら（`old` か、`e`）。
+fn old_or_final(e: &Expr) -> Option<(bool, &Expr)> {
+    match &e.kind {
+        ExprKind::Call { func, args } if args.len() == 1 => match &func.kind {
+            ExprKind::Path { qself: None, path } => {
+                let f = path.as_ident()?;
+                (f.is("old") || f.is("final")).then(|| (f.is("old"), &args[0]))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn is_self(e: &Expr) -> bool {

@@ -71,26 +71,71 @@ fn header_imports_names_explicitly() {
     has("pub fn f() {}", "use ebykn_prelude::*; verus!");
 }
 
+/// 検査の誤りを見ずに書き下す（検査が拒む入力で、書き下しが何をするかを確かめる）。
+fn lowered_ignoring_errors(src: &str) -> String {
+    let (p, d) = project::single(src);
+    assert!(d.is_empty(), "{d:?}");
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    squash(&out.files[0].text)
+}
+
 #[test]
-fn bare_mut_parameters_in_ensures_are_final() {
-    // #10 の既定：`ensures` の `old` / `final` の下にない `&mut` 引数を `final(..)` で包む。
+fn ensures_of_mut_parameters_are_written_as_is() {
+    // #10 の決定（案 B）：`ensures` の `&mut` 引数は利用者が `final(..)` / `old(..)` を書き、
+    // 書き下しはそのまま写す。
     let src = format!(
-        "{PRE}impl P {{ fn f(&mut self, x: &mut u64) ensures self.a == old(self).a, *x == 1, {{ }} }}"
+        "{PRE}impl P {{ fn f(&mut self, x: &mut u64) ensures final(self).a == old(self).a, *final(x) == 1, {{ }} }}"
     );
     has(
         &src,
         "ensures final(self).a == old(self).a, *final(x) == 1,",
     );
-    // `requires` では包まない。
+    // `requires` の裸の `x` は入口の値（Verus と同じ）。
     let src = format!("{PRE}impl P {{ fn f(&mut self) requires self.a > 0, {{ }} }}");
     has(&src, "requires self.a > 0,");
-    // `uses &mut p@` の権限も。
-    let src = format!("{PRE}fn f(p: Ptr<Node>) uses &mut p@ ensures p@.is_init(), {{ }}");
+    // `uses &mut p@` の権限：`final(p@)` と `final(*p)`。Ebykn が足す `pptr` の `ensures` は `final`。
+    let src = format!(
+        "{PRE}fn f(p: Ptr<Node>) uses &mut p@ ensures final(p@).is_init(), final(*p).val == 1, old(*p).val == 0, {{ }}"
+    );
     has(&src, "Tracked(__eyk_perm_p): Tracked<&mut PointsTo<Node>>");
     has(
         &src,
-        "requires __eyk_perm_p.pptr() == p, ensures final(__eyk_perm_p).is_init(), final(__eyk_perm_p).pptr() == p,",
+        "requires __eyk_perm_p.pptr() == p, ensures final(__eyk_perm_p).is_init(), final(__eyk_perm_p).value().val == 1, old(__eyk_perm_p).value().val == 0, final(__eyk_perm_p).pptr() == p,",
     );
+    // 領域：`final(self)@r[p]`、`old(self@r)[p]`、`final(r)[p]`。
+    let src = format!(
+        "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>) ensures final(self)@r[p].val == 1, old(self@r)[p].val == 0, final(self)@q.len() == 0, {{ }} }}"
+    );
+    has(
+        &src,
+        "ensures final(self).r@.index(p).val == 1, old(self).r@.index(p).val == 0, final(self).q@.len() == 0,",
+    );
+    let src = format!(
+        "{PRE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures final(r)[p].val == old(r)[p].val, {{ }}"
+    );
+    has(
+        &src,
+        "ensures final(r).index(p).val == old(r).index(p).val,",
+    );
+}
+
+#[test]
+fn lowering_does_not_add_final_to_bare_mut_parameters() {
+    // 裸の `&mut` 引数は検査が E0004 にする。書き下しは `final(..)` を足さない（M2 で入れた #10 の
+    // 旧既定 A の暗黙の変換を戻すと、ここで落ちる）。
+    let src = format!(
+        "{PRE}impl P {{ fn f(&mut self, x: &mut u64, p: Ptr<Node>) uses &mut p@ ensures self.a == 1, *x == 1, p@.is_init(), self@r[p].val == 1, {{ }} }}"
+    );
+    let got = lowered_ignoring_errors(&src);
+    let want = squash(
+        "ensures self.a == 1, *x == 1, __eyk_perm_p.is_init(), self.r@.index(p).val == 1, final(__eyk_perm_p).pptr() == p,",
+    );
+    assert!(got.contains(&want), "{want:?} がない:\n{got}");
+    let src = format!(
+        "{PRE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures r.contains(p), {{ }}"
+    );
+    assert!(lowered_ignoring_errors(&src).contains(&squash("ensures r.contains(p),")));
 }
 
 #[test]
@@ -309,11 +354,12 @@ fn map_membership_uses_dom() {
 
 #[test]
 fn old_of_a_permission_read() {
-    let src =
-        format!("{PRE}fn f(p: Ptr<Node>) uses &mut p@ ensures (*p).val == old(*p).val + 1, {{ }}");
+    let src = format!(
+        "{PRE}fn f(p: Ptr<Node>) uses &mut p@ ensures final(*p).val == old(*p).val + 1, {{ }}"
+    );
     has(
         &src,
-        "ensures (final(__eyk_perm_p).value()).val == old(__eyk_perm_p).value().val + 1,",
+        "ensures final(__eyk_perm_p).value().val == old(__eyk_perm_p).value().val + 1,",
     );
 }
 
@@ -371,15 +417,6 @@ fn typed_lets_keep_their_annotation() {
         src,
         "let (c, Tracked(__eyk_perm_c)): (Cell<u8>, Tracked<_>) = Cell::new(1);",
     );
-}
-
-#[test]
-fn named_mut_regions_are_final_in_ensures() {
-    // S3：`uses r: &mut Region<..>` も #10 の既定で `final(r)`。
-    let src = format!(
-        "{PRE}fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures r.contains(p), {{ }}"
-    );
-    has(&src, "ensures final(r).contains(p),");
 }
 
 #[test]

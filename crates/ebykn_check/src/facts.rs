@@ -27,6 +27,9 @@ pub enum RegionRef {
     SelfField(String),
     /// 領域変数。
     Var(String),
+    /// 論理文脈の、`old(..)` / `final(..)` を付けた領域（`old(self)@x[p]`、`final(r)[p]`）。
+    /// `old` なら `true`。
+    At { old: bool, region: Box<RegionRef> },
 }
 
 /// 呼び出しの末尾に足す権限の引数（callee の `uses` の宣言順）。

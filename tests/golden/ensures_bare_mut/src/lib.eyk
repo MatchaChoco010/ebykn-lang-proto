@@ -1,0 +1,39 @@
+// `ensures` の `&mut` 引数は `final(..)`（呼び出しの後）か `old(..)`（入口）で書く（#10 の決定）。
+// 裸で書いたものは E0004。`requires` の裸の `x` は入口の値なので通す（Verus と同じ）。
+pub struct Node { pub val: u64 }
+
+pub struct Log { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl View for Log {
+    type V = Seq<Ptr<Node>>;
+    closed spec fn view(&self) -> Seq<Ptr<Node>> = self@order;
+}
+
+impl Log {
+    // 付録 A.1 の形（裸の `self` を事後の値と読む）は拒む。
+    fn push(&mut self, p: Ptr<Node>)
+        requires self.len < 10,
+        ensures self.view() == old(self).view().push(p),
+    { }
+
+    // 消去フィールドと領域添字の `self` も同じ。
+    fn erased(&mut self, p: Ptr<Node>)
+        ensures self@order.len() > 0, self@nodes[p].val == 0,
+    { }
+
+    // `final(..)` / `old(..)` の下と、束縛し直した名前は通す。
+    fn ok(&mut self, p: Ptr<Node>)
+        ensures final(self).view() == old(self).view().push(p), final(self)@nodes[p].val == 0,
+            forall self: int, self >= 0,
+    { }
+}
+
+pub fn set(x: &mut u64, p: Ptr<Node>) uses &mut p@
+    requires *x == 0, p@.is_init(),
+    ensures *x == 1, p@.is_init(), (*p).val == 1,
+{ }
+
+pub fn region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires r.contains(p),
+    ensures r.contains(p), r[p].val == 0,
+{ }

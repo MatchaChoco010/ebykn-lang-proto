@@ -1,12 +1,13 @@
 // 書き下し（仕様 §7.3、§7.2）の形を一通り使う例。stack にない形（`*p` の読み書き、`uses &mut p@` /
 // `uses &p@`、`gives`、`borrow` / `borrow mut`、領域変数、純粋関数、本体のない `lemma fn`、
-// `unchecked fn`、`impl View`、ループ句、量化子）を書き下し、生成した Verus がそのまま検証を通ることを
-// CI で確かめる（`expected/status.txt`）。
+// `unchecked fn`、`impl View`、ループ句、量化子、`ensures` の `final(..)` / `old(..)`）を書き下し、生成した
+// Verus がそのまま検証を通ることを CI で確かめる（`expected/status.txt`）。`ensures` の `&mut` 引数は
+// `final(..)`（呼び出しの後）か `old(..)`（入口）で書く（#10）。
 pub struct Node { pub val: u64, pub next: Option<Ptr<Node>> }
 
 pub fn set_val(p: Ptr<Node>, v: u64) uses &mut p@
     requires p@.is_init(),
-    ensures (*p).val == v, p@.is_init(),
+    ensures final(*p).val == v, final(p@).is_init(),
 {
     (*p).val = v;
 }
@@ -49,7 +50,8 @@ impl Pool {
     pub fn new() -> Self { Pool { len: 0, @nodes: Region::empty(), @order: Seq::empty() } }
 
     fn add(&mut self, v: u64) -> (p: Ptr<Node>)
-        ensures self@nodes.contains(p),
+        ensures final(self)@nodes.contains(p), final(self)@nodes[p].val == v,
+            final(self).view() == old(self).view().push(p),
     {
         let p = Ptr::new(Node { val: v, next: None });
         put self@nodes[p];
@@ -73,6 +75,7 @@ impl Pool {
 
 pub fn with_region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
     requires old(r).contains(p),
+    ensures final(r).contains(p), final(r)[p] == old(r)[p],
 {
     take r[p];
     put r[p];

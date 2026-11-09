@@ -152,11 +152,11 @@ fn stack_facts_for_lowering() {
 #[test]
 fn perm_derefs_and_extra_call_arguments() {
     let src = format!(
-        "{PRELUDE}fn set(p: Ptr<Node>, v: u64) uses &mut p@ ensures (*p).val == v {{ (*p).val = v; }}\nfn f(q: u64) -> u64 {{ let p = Ptr::new(Node {{ val: 1 }}); set(p, 2); let n = p.free(); *q2(q) }}\nfn q2(x: u64) -> &'static u64 {{ &0 }}\n"
+        "{PRELUDE}fn set(p: Ptr<Node>, v: u64) uses &mut p@ ensures final(*p).val == v {{ (*p).val = v; }}\nfn f(q: u64) -> u64 {{ let p = Ptr::new(Node {{ val: 1 }}); set(p, 2); let n = p.free(); *q2(q) }}\nfn q2(x: u64) -> &'static u64 {{ &0 }}\n"
     );
     let (c, lines) = run(&src);
     assert!(lines.is_empty(), "{lines:?}");
-    // ensures の `*p`、本体の `(*p).val = v` の `*p`。f の `*q2(q)` は Rust の `*`。
+    // ensures の `final(*p)` の `*p`、本体の `(*p).val = v` の `*p`。f の `*q2(q)` は Rust の `*`。
     assert_eq!(c.facts.derefs.values().collect::<Vec<_>>(), ["p", "p"]);
     let calls: Vec<_> = c.facts.calls.values().cloned().collect();
     assert_eq!(calls.len(), 1);
