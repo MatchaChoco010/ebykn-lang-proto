@@ -25,8 +25,13 @@ pub struct Ctx {
     /// 今の本体（関数かクロージャ）の `gives`。
     pub gives: Option<usize>,
     pub lp: LoopCtx,
-    /// 最も内側のループに入ってから `borrow` ブロックに入った。
-    pub crossed: bool,
+    /// 最も内側のループに入ってから開いた `borrow` の `p` の印（`Absent` でない欄）。`break` /
+    /// `continue` で抜ける点で Γ から消す（[`release`]。#21 の既定 D）。
+    pub opened: Env,
+    /// 今の本体で `borrow mut` の中にいる（`?` の E0003 を見る）。
+    pub bm: bool,
+    /// 関数の戻り値の型を `Option` / `Result` と書いた（[`Program::try_shape`]）。
+    pub try_shape: bool,
     /// クロージャの本体の中（R が空）。
     pub closure: bool,
 }
@@ -65,6 +70,23 @@ pub open spec fn blk_slot(mutable: bool) -> Slot {
         Slot::BlkMut
     } else {
         Slot::BlkShared
+    }
+}
+
+/// `borrow` ブロックの本体の文脈：`x` に印を付ける。
+pub open spec fn borrow_ctx(c: Ctx, x: usize, mutable: bool) -> Ctx {
+    Ctx { opened: set(c.opened, x as nat, Slot::Owned), bm: c.bm || mutable, ..c }
+}
+
+/// クロージャの本体の文脈（`gives`、ループ、開いた `borrow` を持ち込まない）。
+pub open spec fn closure_ctx(c: Ctx) -> Ctx {
+    Ctx {
+        gives: None,
+        lp: LoopCtx::NoLoop,
+        opened: Env::Nil,
+        bm: false,
+        try_shape: c.try_shape,
+        closure: true,
     }
 }
 
@@ -131,7 +153,9 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
         } else {
             err(Code::E0505, at)
         },
-        Op::Try => if exit_ok(e, c.gives) {
+        Op::Try => if c.bm && !c.try_shape {
+            err(Code::E0003, at)
+        } else if exit_ok(e, c.gives) {
             ok(e, brk)
         } else {
             err(Code::E0505, at)
@@ -139,29 +163,26 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
         Op::Diverge => div(brk),
         // ループの外の `break` / `continue` は Rust が拒む形で、整形式（`sem::wf`）に入らない。
         // 検査は止まる文として扱うだけで、定理はこの形について何も述べない。
+        // 抜ける点で、行き先のループに入ってから開いた `borrow` の `p` を消し、消したあとの Γ で比べる。
         Op::Break => match c.lp {
             LoopCtx::NoLoop => div(brk),
-            LoopCtx::While(entry) => if c.crossed || e != entry {
+            LoopCtx::While(entry) => if release(e, c.opened) != entry {
                 err(Code::E0511, at)
             } else {
                 div(brk)
             },
-            LoopCtx::Loop(_) => if c.crossed {
-                err(Code::E0511, at)
-            } else {
-                match brk {
-                    None => div(Some(e)),
-                    Some(b) => if e == b {
-                        div(brk)
-                    } else {
-                        err(Code::E0511, at)
-                    },
-                }
+            LoopCtx::Loop(_) => match brk {
+                None => div(Some(release(e, c.opened))),
+                Some(b) => if release(e, c.opened) == b {
+                    div(brk)
+                } else {
+                    err(Code::E0511, at)
+                },
             },
         },
         Op::Continue => match c.lp {
             LoopCtx::NoLoop => div(brk),
-            _ => if c.crossed || e != entry_of(c.lp) {
+            _ => if release(e, c.opened) != entry_of(c.lp) {
                 err(Code::E0511, at)
             } else {
                 div(brk)
@@ -188,7 +209,7 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
             *body,
             e,
             None,
-            Ctx { lp: LoopCtx::While(e), crossed: false, ..c },
+            Ctx { lp: LoopCtx::While(e), opened: clear(e), ..c },
         ) {
             Res::Err { code, pos } => err(code, pos),
             Res::Ok { fall, .. } => match fall {
@@ -204,7 +225,7 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
             *body,
             e,
             None,
-            Ctx { lp: LoopCtx::Loop(e), crossed: false, ..c },
+            Ctx { lp: LoopCtx::Loop(e), opened: clear(e), ..c },
         ) {
             Res::Err { code, pos } => err(code, pos),
             Res::Ok { fall, brk: b2 } => match fall {
@@ -224,7 +245,7 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
                     *body,
                     set(e, x as nat, blk_slot(mutable)),
                     brk,
-                    Ctx { crossed: true, ..c },
+                    borrow_ctx(c, x, mutable),
                 ) {
                     Res::Err { code, pos } => err(code, pos),
                     Res::Ok { fall, brk: b2 } => match fall {
@@ -240,7 +261,7 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
             *body,
             capture(e),
             None,
-            Ctx { gives: None, lp: LoopCtx::NoLoop, crossed: false, closure: true },
+            closure_ctx(c),
         ) {
             Res::Err { code, pos } => err(code, pos),
             Res::Ok { fall, .. } => match fall {
@@ -268,7 +289,14 @@ pub open spec fn chk_block(b: Block, e: Env, brk: Option<Env>, c: Ctx) -> Res
 }
 
 pub open spec fn ctx0(p: Program) -> Ctx {
-    Ctx { gives: p.gives, lp: LoopCtx::NoLoop, crossed: false, closure: false }
+    Ctx {
+        gives: p.gives,
+        lp: LoopCtx::NoLoop,
+        opened: Env::Nil,
+        bm: false,
+        try_shape: p.try_shape,
+        closure: false,
+    }
 }
 
 /// 関数の判定。本体の末尾で普通に終わるなら、末尾の規則（E0505、位置は `End(0)`）も見る。
@@ -309,13 +337,17 @@ pub struct Rules {
     pub closure_reset: bool,
     /// `?` を `return` として扱う。
     pub try_return: bool,
-    /// `borrow` ブロックを `break` / `continue` で抜けることを拒む。
-    pub cross: bool,
+    /// `break` / `continue` で抜ける点で、開いた `borrow` の `p` を Γ から消す（#21 の既定 D）。
+    pub release: bool,
+    /// 戻り値の型を `Option` / `Result` と書いていない関数の `borrow mut` の中の `?` を拒む（E0003）。
+    pub try_shape: bool,
+    /// ループに入るときに、開いた `borrow` の印を空にする（外のループの中のループで、外の印を引き継がない）。
+    pub loop_clear: bool,
 }
 
 pub open spec fn full(r: Rules) -> bool {
     r.join && r.borrow_consume && r.cont && r.brk && r.loop_end && r.closure_reset && r.try_return
-        && r.cross
+        && r.release && r.try_shape && r.loop_clear
 }
 
 impl Rules {
@@ -331,7 +363,9 @@ impl Rules {
             loop_end: true,
             closure_reset: true,
             try_return: true,
-            cross: true,
+            release: true,
+            try_shape: true,
+            loop_clear: true,
         }
     }
 }
@@ -428,43 +462,54 @@ fn check_atom(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -> (
         } else {
             r_err(Code::E0505, at)
         },
-        Op::Try => if !rules.try_return || ex_exit_ok(e, c.gives) {
+        Op::Try => if rules.try_shape && c.bm && !c.try_shape {
+            r_err(Code::E0003, at)
+        } else if !rules.try_return || ex_exit_ok(e, c.gives) {
             r_ok(ex_copy(e), ex_copy_opt(brk))
         } else {
             r_err(Code::E0505, at)
         },
         Op::Diverge => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
-        Op::Break => match &c.lp {
-            LoopCtx::NoLoop => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
-            LoopCtx::While(entry) => if (rules.cross && c.crossed) || (rules.brk && !ex_eq(
-                e,
-                entry,
-            )) {
-                r_err(Code::E0511, at)
+        Op::Break => {
+            let out = if rules.release {
+                ex_release(e, &c.opened)
             } else {
-                Res::Ok { fall: None, brk: ex_copy_opt(brk) }
-            },
-            LoopCtx::Loop(_) => if rules.cross && c.crossed {
-                r_err(Code::E0511, at)
-            } else {
-                match brk {
-                    None => Res::Ok { fall: None, brk: Some(ex_copy(e)) },
-                    Some(b) => if !rules.brk || ex_eq(e, b) {
+                ex_copy(e)
+            };
+            match &c.lp {
+                LoopCtx::NoLoop => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
+                LoopCtx::While(entry) => if rules.brk && !ex_eq(&out, entry) {
+                    r_err(Code::E0511, at)
+                } else {
+                    Res::Ok { fall: None, brk: ex_copy_opt(brk) }
+                },
+                LoopCtx::Loop(_) => match brk {
+                    None => Res::Ok { fall: None, brk: Some(out) },
+                    Some(b) => if !rules.brk || ex_eq(&out, b) {
                         Res::Ok { fall: None, brk: ex_copy_opt(brk) }
                     } else {
                         r_err(Code::E0511, at)
                     },
-                }
-            },
+                },
+            }
         },
-        Op::Continue => match &c.lp {
-            LoopCtx::NoLoop => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
-            LoopCtx::While(entry) | LoopCtx::Loop(entry) => if (rules.cross && c.crossed) || (
-            rules.cont && !ex_eq(e, entry)) {
-                r_err(Code::E0511, at)
+        Op::Continue => {
+            let out = if rules.release {
+                ex_release(e, &c.opened)
             } else {
-                Res::Ok { fall: None, brk: ex_copy_opt(brk) }
-            },
+                ex_copy(e)
+            };
+            match &c.lp {
+                LoopCtx::NoLoop => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
+                LoopCtx::While(entry) | LoopCtx::Loop(entry) => if rules.cont && !ex_eq(
+                    &out,
+                    entry,
+                ) {
+                    r_err(Code::E0511, at)
+                } else {
+                    Res::Ok { fall: None, brk: ex_copy_opt(brk) }
+                },
+            }
         },
         _ => r_err(Code::E0503, at),
     }
@@ -526,7 +571,13 @@ fn check_while(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -> 
             let c2 = Ctx {
                 gives: c.gives,
                 lp: LoopCtx::While(ex_copy(e)),
-                crossed: false,
+                // 壊した検査（`no-loop-clear`）は、外のループの中のループで外の印を引き継ぐ。
+                opened: match (&c.lp, rules.loop_clear) {
+                    (LoopCtx::While(_) | LoopCtx::Loop(_), false) => ex_copy(&c.opened),
+                    _ => ex_clear(e),
+                },
+                bm: c.bm,
+                try_shape: c.try_shape,
                 closure: c.closure,
             };
             match check_block(body, e, &None, &c2, rules) {
@@ -557,7 +608,13 @@ fn check_loop(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -> (
             let c2 = Ctx {
                 gives: c.gives,
                 lp: LoopCtx::Loop(ex_copy(e)),
-                crossed: false,
+                // 壊した検査（`no-loop-clear`）は、外のループの中のループで外の印を引き継ぐ。
+                opened: match (&c.lp, rules.loop_clear) {
+                    (LoopCtx::While(_) | LoopCtx::Loop(_), false) => ex_copy(&c.opened),
+                    _ => ex_clear(e),
+                },
+                bm: c.bm,
+                try_shape: c.try_shape,
                 closure: c.closure,
             };
             match check_block(body, e, &None, &c2, rules) {
@@ -601,7 +658,9 @@ fn check_borrow(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) ->
                             LoopCtx::While(x) => LoopCtx::While(ex_copy(x)),
                             LoopCtx::Loop(x) => LoopCtx::Loop(ex_copy(x)),
                         },
-                        crossed: true,
+                        opened: ex_set(&c.opened, *x, Slot::Owned),
+                        bm: c.bm || *mutable,
+                        try_shape: c.try_shape,
                         closure: c.closure,
                     };
                     match check_block(body, &ex_set(e, *x, k), brk, &c2, rules) {
@@ -627,11 +686,16 @@ fn check_closure(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -
         full(*rules) ==> r == chk_stmt(*s, *e, *brk, *c),
     decreases s, 0nat,
 {
-    // `c` は事後条件だけで使う（クロージャの本体は新しい文脈で検査する）。
-    let _ = c;
     match &s.op {
         Op::Closure { body } => {
-            let c2 = Ctx { gives: None, lp: LoopCtx::NoLoop, crossed: false, closure: true };
+            let c2 = Ctx {
+                gives: None,
+                lp: LoopCtx::NoLoop,
+                opened: Env::Nil,
+                bm: false,
+                try_shape: c.try_shape,
+                closure: true,
+            };
             let start = if rules.closure_reset {
                 ex_capture(e)
             } else {
@@ -675,7 +739,14 @@ pub fn check_with(p: &Program, rules: &Rules) -> (r: Verdict)
     if p.unchecked {
         return Verdict::Accept;
     }
-    let c = Ctx { gives: p.gives, lp: LoopCtx::NoLoop, crossed: false, closure: false };
+    let c = Ctx {
+        gives: p.gives,
+        lp: LoopCtx::NoLoop,
+        opened: Env::Nil,
+        bm: false,
+        try_shape: p.try_shape,
+        closure: false,
+    };
     match check_block(&p.body, &p.params, &None, &c, rules) {
         Res::Err { code, pos } => Verdict::Reject { code, pos },
         Res::Ok { fall, .. } => match fall {

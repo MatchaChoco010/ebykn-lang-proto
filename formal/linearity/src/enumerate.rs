@@ -49,6 +49,8 @@ pub struct Header {
     pub params: Vec<Slot>,
     pub gives: Option<usize>,
     pub unchecked: bool,
+    /// 戻り値の型を `Option<..>` と書く（`false` なら型の別名 `Alias` と書く。`borrow mut` の中の `?` が E0003）。
+    pub try_shape: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +81,7 @@ fn h(params: &[Slot], gives: Option<usize>) -> Header {
         params: params.to_vec(),
         gives,
         unchecked: false,
+        try_shape: true,
     }
 }
 
@@ -268,7 +271,110 @@ fn unchecked_headers() -> Vec<Header> {
         params: vec![Slot::Owned],
         gives: None,
         unchecked: true,
+        try_shape: true,
     }]
+}
+
+fn exit_atoms() -> Vec<A> {
+    vec![
+        A::Take(P),
+        A::BorrowArg(P, true),
+        A::Write(P),
+        A::Break,
+        A::Continue,
+    ]
+}
+
+fn exit_c1() -> Vec<C1> {
+    vec![
+        C1::While,
+        C1::Loop,
+        C1::Borrow(P, false),
+        C1::Borrow(P, true),
+    ]
+}
+
+fn no_branch() -> Vec<BranchKind> {
+    Vec::new()
+}
+
+fn exit_headers() -> Vec<Header> {
+    vec![h(&[Slot::Absent], None)]
+}
+
+/// 大きさがちょうど 4 で、ループの中の `borrow` から、そのループへ `break` / `continue` で抜けるか、
+/// ループの中の `borrow` の中のループを抜ける（`borrow` の中で閉じる）もの（#21 の案 D。抜けた後の Γ を
+/// 見る文まで書ける大きさ）。
+fn keep_exit(_: &Header, body: &[S]) -> bool {
+    /// この高さの `break` / `continue`（`borrow` の中を含み、内側のループは数えない）。
+    fn jumps(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::Atom(A::Break | A::Continue) => true,
+            S::Borrow(_, _, x) => jumps(x),
+            _ => false,
+        })
+    }
+    /// `borrow` の中から抜ける。
+    fn from_borrow(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::Borrow(_, _, x) => jumps(x) || from_borrow(x),
+            _ => false,
+        })
+    }
+    fn crosses(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::While(x) | S::Loop(x) => from_borrow(x) || crosses(x),
+            S::Borrow(_, _, x) => crosses(x),
+            _ => false,
+        })
+    }
+    /// `borrow` の中で閉じるループの脱出（`borrow` の中の、ループの中の `break` / `continue`）。
+    fn inner(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::While(x) | S::Loop(x) => jumps(x),
+            S::Borrow(_, _, x) => inner(x),
+            _ => false,
+        })
+    }
+    fn borrow_inner(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::Borrow(_, _, x) => inner(x) || borrow_inner(x),
+            _ => false,
+        })
+    }
+    /// ループ → `borrow` → 内側のループで抜ける（内側のループに入るときに印を空にするか）。
+    fn nested(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::While(x) | S::Loop(x) => borrow_inner(x) || nested(x),
+            S::Borrow(_, _, x) => nested(x),
+            _ => false,
+        })
+    }
+    size(body) == 4 && (crosses(body) || nested(body))
+}
+
+/// 戻り値の型を別名で書いた関数（`borrow mut` の中の `?` が E0003。#21）。
+fn alias_headers() -> Vec<Header> {
+    [Slot::Absent, Slot::Owned]
+        .into_iter()
+        .map(|s| Header {
+            try_shape: false,
+            ..h(&[s], None)
+        })
+        .collect()
+}
+
+/// 本体に `?` がある（クロージャの中は数えない。ほかは `core` と同じ）。
+fn keep_try(_: &Header, body: &[S]) -> bool {
+    fn has(b: &[S]) -> bool {
+        b.iter().any(|s| match s {
+            S::Atom(a) => *a == A::Try,
+            S::Branch(_, a, b) => has(a) || has(b),
+            S::While(b) | S::Loop(b) | S::Borrow(_, _, b) => has(b),
+            S::Closure(_) => false,
+        })
+    }
+    has(body)
 }
 
 pub const TIERS: &[Tier] = &[
@@ -311,6 +417,26 @@ pub const TIERS: &[Tier] = &[
         c2: if_else,
         headers: two_headers,
         keep: keep_two,
+    },
+    Tier {
+        name: "exit",
+        vars: 1,
+        max_size: 4,
+        atoms: exit_atoms,
+        c1: exit_c1,
+        c2: no_branch,
+        headers: exit_headers,
+        keep: keep_exit,
+    },
+    Tier {
+        name: "alias",
+        vars: 1,
+        max_size: 2,
+        atoms: core_atoms,
+        c1: core_c1,
+        c2: if_else,
+        headers: alias_headers,
+        keep: keep_try,
     },
     Tier {
         name: "unchecked",

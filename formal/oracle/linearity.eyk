@@ -17,6 +17,8 @@ fn fallible() -> Option<u32> {
     None
 }
 
+type Alias = Option<()>;
+
 fn other() -> Ptr<u32> {
     let p = Ptr::new(0);
     leak p@;
@@ -76481,93 +76483,3269 @@ fn c09229(p: Ptr<u32>) -> (q: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> gives 
     q
 }
 
+// p=- { take p; while { borrow p { break } } }
+fn c09230(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { take p; loop { borrow p { break } } }
+fn c09231(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { take p; while { borrow mut p { break } } }
+fn c09232(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { take p; loop { borrow mut p { break } } }
+fn c09233(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { take p; while { borrow p { continue } } }
+fn c09234(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { take p; loop { borrow p { continue } } }
+fn c09235(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { take p; while { borrow mut p { continue } } }
+fn c09236(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { take p; loop { borrow mut p { continue } } }
+fn c09237(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { update p; while { borrow p { break } } }
+fn c09238(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { update p; loop { borrow p { break } } }
+fn c09239(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { update p; while { borrow mut p { break } } }
+fn c09240(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { update p; loop { borrow mut p { break } } }
+fn c09241(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { update p; while { borrow p { continue } } }
+fn c09242(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { update p; loop { borrow p { continue } } }
+fn c09243(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { update p; while { borrow mut p { continue } } }
+fn c09244(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { update p; loop { borrow mut p { continue } } }
+fn c09245(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { write p; while { borrow p { break } } }
+fn c09246(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { write p; loop { borrow p { break } } }
+fn c09247(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { write p; while { borrow mut p { break } } }
+fn c09248(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { write p; loop { borrow mut p { break } } }
+fn c09249(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { write p; while { borrow p { continue } } }
+fn c09250(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { write p; loop { borrow p { continue } } }
+fn c09251(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { write p; while { borrow mut p { continue } } }
+fn c09252(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { write p; loop { borrow mut p { continue } } }
+fn c09253(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while {}; while { borrow p { break } } }
+fn c09254(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while {}; loop { borrow p { break } } }
+fn c09255(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while {}; while { borrow mut p { break } } }
+fn c09256(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while {}; loop { borrow mut p { break } } }
+fn c09257(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while {}; while { borrow p { continue } } }
+fn c09258(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while {}; loop { borrow p { continue } } }
+fn c09259(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while {}; while { borrow mut p { continue } } }
+fn c09260(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while {}; loop { borrow mut p { continue } } }
+fn c09261(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow p {}; while { borrow p { break } } }
+fn c09262(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow p {}; loop { borrow p { break } } }
+fn c09263(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow p {}; while { borrow mut p { break } } }
+fn c09264(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow p {}; loop { borrow mut p { break } } }
+fn c09265(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow p {}; while { borrow p { continue } } }
+fn c09266(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow p {}; loop { borrow p { continue } } }
+fn c09267(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow p {}; while { borrow mut p { continue } } }
+fn c09268(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow p {}; loop { borrow mut p { continue } } }
+fn c09269(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; while { borrow p { break } } }
+fn c09270(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; loop { borrow p { break } } }
+fn c09271(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; while { borrow mut p { break } } }
+fn c09272(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; loop { borrow mut p { break } } }
+fn c09273(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; while { borrow p { continue } } }
+fn c09274(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; loop { borrow p { continue } } }
+fn c09275(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    loop {
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; while { borrow mut p { continue } } }
+fn c09276(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { borrow mut p {}; loop { borrow mut p { continue } } }
+fn c09277(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    loop {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { break } }; take p }
+fn c09278(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    take r[p];
+}
+
+// p=- { while { borrow p { break } }; update p }
+fn c09279(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    update(p);
+}
+
+// p=- { while { borrow p { break } }; write p }
+fn c09280(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { while { borrow p { break } }; while {} }
+fn c09281(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { while { borrow p { break } }; loop {} }
+fn c09282(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { while { borrow p { break } }; borrow p {} }
+fn c09283(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { while { borrow p { break } }; borrow mut p {} }
+fn c09284(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            break;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { loop { borrow p { break } }; take p }
+fn c09285(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    take r[p];
+}
+
+// p=- { loop { borrow p { break } }; update p }
+fn c09286(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    update(p);
+}
+
+// p=- { loop { borrow p { break } }; write p }
+fn c09287(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { loop { borrow p { break } }; while {} }
+fn c09288(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { loop { borrow p { break } }; loop {} }
+fn c09289(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { loop { borrow p { break } }; borrow p {} }
+fn c09290(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { loop { borrow p { break } }; borrow mut p {} }
+fn c09291(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            break;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { while { borrow mut p { break } }; take p }
+fn c09292(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    take r[p];
+}
+
+// p=- { while { borrow mut p { break } }; update p }
+fn c09293(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    update(p);
+}
+
+// p=- { while { borrow mut p { break } }; write p }
+fn c09294(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { while { borrow mut p { break } }; while {} }
+fn c09295(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { while { borrow mut p { break } }; loop {} }
+fn c09296(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { while { borrow mut p { break } }; borrow p {} }
+fn c09297(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { while { borrow mut p { break } }; borrow mut p {} }
+fn c09298(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { loop { borrow mut p { break } }; take p }
+fn c09299(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    take r[p];
+}
+
+// p=- { loop { borrow mut p { break } }; update p }
+fn c09300(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    update(p);
+}
+
+// p=- { loop { borrow mut p { break } }; write p }
+fn c09301(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { loop { borrow mut p { break } }; while {} }
+fn c09302(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { loop { borrow mut p { break } }; loop {} }
+fn c09303(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { loop { borrow mut p { break } }; borrow p {} }
+fn c09304(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { loop { borrow mut p { break } }; borrow mut p {} }
+fn c09305(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            break;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { while { borrow p { continue } }; take p }
+fn c09306(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    take r[p];
+}
+
+// p=- { while { borrow p { continue } }; update p }
+fn c09307(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    update(p);
+}
+
+// p=- { while { borrow p { continue } }; write p }
+fn c09308(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { while { borrow p { continue } }; while {} }
+fn c09309(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { while { borrow p { continue } }; loop {} }
+fn c09310(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { while { borrow p { continue } }; borrow p {} }
+fn c09311(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { while { borrow p { continue } }; borrow mut p {} }
+fn c09312(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            continue;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { while { borrow mut p { continue } }; take p }
+fn c09313(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    take r[p];
+}
+
+// p=- { while { borrow mut p { continue } }; update p }
+fn c09314(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    update(p);
+}
+
+// p=- { while { borrow mut p { continue } }; write p }
+fn c09315(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    *p = 1;
+}
+
+// p=- { while { borrow mut p { continue } }; while {} }
+fn c09316(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    while cond() {
+    }
+}
+
+// p=- { while { borrow mut p { continue } }; loop {} }
+fn c09317(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    loop {
+    }
+}
+
+// p=- { while { borrow mut p { continue } }; borrow p {} }
+fn c09318(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    borrow r[p] {
+    }
+}
+
+// p=- { while { borrow mut p { continue } }; borrow mut p {} }
+fn c09319(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            continue;
+        }
+    }
+    borrow mut r[p] {
+    }
+}
+
+// p=- { while { take p; borrow p { break } } }
+fn c09320(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        take r[p];
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { take p; borrow p { break } } }
+fn c09321(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        take r[p];
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { take p; borrow mut p { break } } }
+fn c09322(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        take r[p];
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { take p; borrow mut p { break } } }
+fn c09323(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        take r[p];
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { take p; borrow p { continue } } }
+fn c09324(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        take r[p];
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { take p; borrow p { continue } } }
+fn c09325(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        take r[p];
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { take p; borrow mut p { continue } } }
+fn c09326(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        take r[p];
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { take p; borrow mut p { continue } } }
+fn c09327(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        take r[p];
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { update p; borrow p { break } } }
+fn c09328(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        update(p);
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { update p; borrow p { break } } }
+fn c09329(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        update(p);
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { update p; borrow mut p { break } } }
+fn c09330(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        update(p);
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { update p; borrow mut p { break } } }
+fn c09331(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        update(p);
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { update p; borrow p { continue } } }
+fn c09332(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        update(p);
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { update p; borrow p { continue } } }
+fn c09333(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        update(p);
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { update p; borrow mut p { continue } } }
+fn c09334(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        update(p);
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { update p; borrow mut p { continue } } }
+fn c09335(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        update(p);
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { write p; borrow p { break } } }
+fn c09336(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        *p = 1;
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { write p; borrow p { break } } }
+fn c09337(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        *p = 1;
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { write p; borrow mut p { break } } }
+fn c09338(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        *p = 1;
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { write p; borrow mut p { break } } }
+fn c09339(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        *p = 1;
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { write p; borrow p { continue } } }
+fn c09340(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        *p = 1;
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { write p; borrow p { continue } } }
+fn c09341(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        *p = 1;
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { write p; borrow mut p { continue } } }
+fn c09342(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        *p = 1;
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { write p; borrow mut p { continue } } }
+fn c09343(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        *p = 1;
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { while {}; borrow p { break } } }
+fn c09344(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { while {}; borrow p { break } } }
+fn c09345(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { while {}; borrow mut p { break } } }
+fn c09346(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { while {}; borrow mut p { break } } }
+fn c09347(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { while {}; borrow p { continue } } }
+fn c09348(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { while {}; borrow p { continue } } }
+fn c09349(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { while {}; borrow mut p { continue } } }
+fn c09350(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { while {}; borrow mut p { continue } } }
+fn c09351(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p {}; borrow p { break } } }
+fn c09352(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p {}; borrow p { break } } }
+fn c09353(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p {}; borrow mut p { break } } }
+fn c09354(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p {}; borrow mut p { break } } }
+fn c09355(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p {}; borrow p { continue } } }
+fn c09356(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p {}; borrow p { continue } } }
+fn c09357(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p {}; borrow mut p { continue } } }
+fn c09358(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p {}; borrow mut p { continue } } }
+fn c09359(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p {}; borrow p { break } } }
+fn c09360(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p {}; borrow p { break } } }
+fn c09361(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+        }
+        borrow r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p {}; borrow mut p { break } } }
+fn c09362(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p {}; borrow mut p { break } } }
+fn c09363(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+        }
+        borrow mut r[p] {
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p {}; borrow p { continue } } }
+fn c09364(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p {}; borrow p { continue } } }
+fn c09365(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+        }
+        borrow r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p {}; borrow mut p { continue } } }
+fn c09366(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p {}; borrow mut p { continue } } }
+fn c09367(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+        }
+        borrow mut r[p] {
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { take p; break } } }
+fn c09368(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            take r[p];
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { take p; break } } }
+fn c09369(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            take r[p];
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { take p; break } } }
+fn c09370(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            take r[p];
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { take p; break } } }
+fn c09371(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            take r[p];
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { take p; continue } } }
+fn c09372(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            take r[p];
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { take p; continue } } }
+fn c09373(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            take r[p];
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { take p; continue } } }
+fn c09374(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            take r[p];
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { take p; continue } } }
+fn c09375(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            take r[p];
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { update p; break } } }
+fn c09376(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            update(p);
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { update p; break } } }
+fn c09377(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            update(p);
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { update p; break } } }
+fn c09378(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            update(p);
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { update p; break } } }
+fn c09379(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            update(p);
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { update p; continue } } }
+fn c09380(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            update(p);
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { update p; continue } } }
+fn c09381(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            update(p);
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { update p; continue } } }
+fn c09382(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            update(p);
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { update p; continue } } }
+fn c09383(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            update(p);
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { write p; break } } }
+fn c09384(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            *p = 1;
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { write p; break } } }
+fn c09385(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            *p = 1;
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { write p; break } } }
+fn c09386(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            *p = 1;
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { write p; break } } }
+fn c09387(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            *p = 1;
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { write p; continue } } }
+fn c09388(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            *p = 1;
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { write p; continue } } }
+fn c09389(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            *p = 1;
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { write p; continue } } }
+fn c09390(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            *p = 1;
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { write p; continue } } }
+fn c09391(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            *p = 1;
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { while {}; break } } }
+fn c09392(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            while cond() {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { while {}; break } } }
+fn c09393(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            while cond() {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { while {}; break } } }
+fn c09394(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            while cond() {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { while {}; break } } }
+fn c09395(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            while cond() {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { while {}; continue } } }
+fn c09396(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            while cond() {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { while {}; continue } } }
+fn c09397(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            while cond() {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { while {}; continue } } }
+fn c09398(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            while cond() {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { while {}; continue } } }
+fn c09399(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            while cond() {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow p {}; break } } }
+fn c09400(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow p {}; break } } }
+fn c09401(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow p {}; break } } }
+fn c09402(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow p {}; break } } }
+fn c09403(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow p {}; continue } } }
+fn c09404(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow p {}; continue } } }
+fn c09405(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow p {}; continue } } }
+fn c09406(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow p {}; continue } } }
+fn c09407(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow mut p {}; break } } }
+fn c09408(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow mut r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow mut p {}; break } } }
+fn c09409(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow mut r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow mut p {}; break } } }
+fn c09410(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow mut r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow mut p {}; break } } }
+fn c09411(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow mut r[p] {
+            }
+            break;
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow mut p {}; continue } } }
+fn c09412(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow mut r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow mut p {}; continue } } }
+fn c09413(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow mut r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow mut p {}; continue } } }
+fn c09414(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow mut r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow mut p {}; continue } } }
+fn c09415(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow mut r[p] {
+            }
+            continue;
+        }
+    }
+}
+
+// p=- { while { borrow p { while { break } } } }
+fn c09416(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            while cond() {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { while { break } } } }
+fn c09417(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            while cond() {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { while { break } } } }
+fn c09418(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            while cond() {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { while { break } } } }
+fn c09419(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            while cond() {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { loop { break } } } }
+fn c09420(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            loop {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { loop { break } } } }
+fn c09421(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            loop {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { loop { break } } } }
+fn c09422(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            loop {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { loop { break } } } }
+fn c09423(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            loop {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { while { borrow p { break } } } }
+fn c09424(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { while { borrow p { break } } } }
+fn c09425(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { while { borrow p { break } } } }
+fn c09426(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        while cond() {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { while { borrow p { break } } } }
+fn c09427(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        while cond() {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { loop { borrow p { break } } } }
+fn c09428(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        loop {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { loop { borrow p { break } } } }
+fn c09429(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        loop {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { loop { borrow p { break } } } }
+fn c09430(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        loop {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { loop { borrow p { break } } } }
+fn c09431(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        loop {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow p { break } } } }
+fn c09432(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow p { break } } } }
+fn c09433(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow p { break } } } }
+fn c09434(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow p { break } } } }
+fn c09435(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { while { borrow mut p { break } } } }
+fn c09436(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { while { borrow mut p { break } } } }
+fn c09437(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { while { borrow mut p { break } } } }
+fn c09438(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        while cond() {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { while { borrow mut p { break } } } }
+fn c09439(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        while cond() {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { loop { borrow mut p { break } } } }
+fn c09440(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        loop {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { loop { borrow mut p { break } } } }
+fn c09441(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        loop {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { loop { borrow mut p { break } } } }
+fn c09442(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        loop {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { loop { borrow mut p { break } } } }
+fn c09443(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        loop {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow mut p { break } } } }
+fn c09444(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow mut p { break } } } }
+fn c09445(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow mut p { break } } } }
+fn c09446(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow mut p { break } } } }
+fn c09447(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow mut r[p] {
+                break;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { while { continue } } } }
+fn c09448(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            while cond() {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { while { continue } } } }
+fn c09449(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            while cond() {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { while { continue } } } }
+fn c09450(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            while cond() {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { while { continue } } } }
+fn c09451(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            while cond() {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { loop { continue } } } }
+fn c09452(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            loop {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { loop { continue } } } }
+fn c09453(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            loop {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { loop { continue } } } }
+fn c09454(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            loop {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { loop { continue } } } }
+fn c09455(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            loop {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { while { borrow p { continue } } } }
+fn c09456(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { while { borrow p { continue } } } }
+fn c09457(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { while { borrow p { continue } } } }
+fn c09458(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        while cond() {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { while { borrow p { continue } } } }
+fn c09459(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        while cond() {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { loop { borrow p { continue } } } }
+fn c09460(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        loop {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { loop { borrow p { continue } } } }
+fn c09461(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        loop {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { loop { borrow p { continue } } } }
+fn c09462(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        loop {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { loop { borrow p { continue } } } }
+fn c09463(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        loop {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow p { continue } } } }
+fn c09464(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow p { continue } } } }
+fn c09465(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow p { continue } } } }
+fn c09466(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow p { continue } } } }
+fn c09467(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { while { borrow mut p { continue } } } }
+fn c09468(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        while cond() {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { while { borrow mut p { continue } } } }
+fn c09469(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        while cond() {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { while { borrow mut p { continue } } } }
+fn c09470(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        while cond() {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { while { borrow mut p { continue } } } }
+fn c09471(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        while cond() {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { loop { borrow mut p { continue } } } }
+fn c09472(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        loop {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { loop { borrow mut p { continue } } } }
+fn c09473(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        loop {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow p { loop { borrow mut p { continue } } } }
+fn c09474(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        loop {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { borrow mut p { loop { borrow mut p { continue } } } }
+fn c09475(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        loop {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow p { borrow mut p { continue } } } }
+fn c09476(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow r[p] {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow p { borrow mut p { continue } } } }
+fn c09477(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow r[p] {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { while { borrow mut p { borrow mut p { continue } } } }
+fn c09478(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        borrow mut r[p] {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- { loop { borrow mut p { borrow mut p { continue } } } }
+fn c09479(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
+    loop {
+        borrow mut r[p] {
+            borrow mut r[p] {
+                continue;
+            }
+        }
+    }
+}
+
+// p=- ret=alias { ? }
+fn c09480(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { new p; ? }
+fn c09481(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    let p = Ptr::new(0);
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { take p; ? }
+fn c09482(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    take r[p];
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { free p; ? }
+fn c09483(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    p.free();
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { inspect p; ? }
+fn c09484(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    inspect(p);
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { update p; ? }
+fn c09485(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    update(p);
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { write p; ? }
+fn c09486(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { assign p; ? }
+fn c09487(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    p = other();
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { ?; new p }
+fn c09488(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    let p = Ptr::new(0);
+    Some(())
+}
+
+// p=- ret=alias { ?; take p }
+fn c09489(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    take r[p];
+    Some(())
+}
+
+// p=- ret=alias { ?; free p }
+fn c09490(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    p.free();
+    Some(())
+}
+
+// p=- ret=alias { ?; inspect p }
+fn c09491(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    inspect(p);
+    Some(())
+}
+
+// p=- ret=alias { ?; update p }
+fn c09492(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    update(p);
+    Some(())
+}
+
+// p=- ret=alias { ?; write p }
+fn c09493(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    *p = 1;
+    Some(())
+}
+
+// p=- ret=alias { ?; assign p }
+fn c09494(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    p = other();
+    Some(())
+}
+
+// p=- ret=alias { ?; return }
+fn c09495(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    return None;
+}
+
+// p=- ret=alias { ?; ? }
+fn c09496(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { ?; panic }
+fn c09497(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    panic!();
+}
+
+// p=- ret=alias { ?; while {} }
+fn c09498(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    while cond() {
+    }
+    Some(())
+}
+
+// p=- ret=alias { ?; loop {} }
+fn c09499(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    loop {
+    }
+}
+
+// p=- ret=alias { ?; borrow p {} }
+fn c09500(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    borrow r[p] {
+    }
+    Some(())
+}
+
+// p=- ret=alias { ?; borrow mut p {} }
+fn c09501(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    borrow mut r[p] {
+    }
+    Some(())
+}
+
+// p=- ret=alias { ?; closure {} }
+fn c09502(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    let f = || {
+    };
+    Some(())
+}
+
+// p=- ret=alias { ?; if {} else {} }
+fn c09503(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    if cond() {
+    }
+    Some(())
+}
+
+// p=- ret=alias { while {}; ? }
+fn c09504(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { borrow p {}; ? }
+fn c09505(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { borrow mut p {}; ? }
+fn c09506(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { closure {}; ? }
+fn c09507(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    let f = || {
+    };
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { if {} else {}; ? }
+fn c09508(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    if cond() {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=- ret=alias { while { ? } }
+fn c09509(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    while cond() {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=- ret=alias { loop { ? } }
+fn c09510(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    loop {
+        fallible()?;
+    }
+}
+
+// p=- ret=alias { borrow p { ? } }
+fn c09511(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=- ret=alias { borrow mut p { ? } }
+fn c09512(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=- ret=alias { if {} else { ? } }
+fn c09513(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    if cond() {
+    } else {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=- ret=alias { if { ? } else {} }
+fn c09514(p: Ptr<u32>) -> Alias uses r: &mut Region<Ptr<u32>> {
+    if cond() {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=own ret=alias { ? }
+fn c09515(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { new p; ? }
+fn c09516(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    let p = Ptr::new(0);
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { take p; ? }
+fn c09517(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    take r[p];
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { free p; ? }
+fn c09518(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    p.free();
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { inspect p; ? }
+fn c09519(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    inspect(p);
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { update p; ? }
+fn c09520(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    update(p);
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { write p; ? }
+fn c09521(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    *p = 1;
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { assign p; ? }
+fn c09522(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    p = other();
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { ?; new p }
+fn c09523(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    let p = Ptr::new(0);
+    Some(())
+}
+
+// p=own ret=alias { ?; take p }
+fn c09524(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    take r[p];
+    Some(())
+}
+
+// p=own ret=alias { ?; free p }
+fn c09525(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    p.free();
+    Some(())
+}
+
+// p=own ret=alias { ?; inspect p }
+fn c09526(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    inspect(p);
+    Some(())
+}
+
+// p=own ret=alias { ?; update p }
+fn c09527(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    update(p);
+    Some(())
+}
+
+// p=own ret=alias { ?; write p }
+fn c09528(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    *p = 1;
+    Some(())
+}
+
+// p=own ret=alias { ?; assign p }
+fn c09529(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    p = other();
+    Some(())
+}
+
+// p=own ret=alias { ?; return }
+fn c09530(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    return None;
+}
+
+// p=own ret=alias { ?; ? }
+fn c09531(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { ?; panic }
+fn c09532(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    panic!();
+}
+
+// p=own ret=alias { ?; while {} }
+fn c09533(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    while cond() {
+    }
+    Some(())
+}
+
+// p=own ret=alias { ?; loop {} }
+fn c09534(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    loop {
+    }
+}
+
+// p=own ret=alias { ?; borrow p {} }
+fn c09535(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    borrow r[p] {
+    }
+    Some(())
+}
+
+// p=own ret=alias { ?; borrow mut p {} }
+fn c09536(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    borrow mut r[p] {
+    }
+    Some(())
+}
+
+// p=own ret=alias { ?; closure {} }
+fn c09537(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    let f = || {
+    };
+    Some(())
+}
+
+// p=own ret=alias { ?; if {} else {} }
+fn c09538(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    fallible()?;
+    if cond() {
+    }
+    Some(())
+}
+
+// p=own ret=alias { while {}; ? }
+fn c09539(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    while cond() {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { borrow p {}; ? }
+fn c09540(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { borrow mut p {}; ? }
+fn c09541(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { closure {}; ? }
+fn c09542(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    let f = || {
+    };
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { if {} else {}; ? }
+fn c09543(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    if cond() {
+    }
+    fallible()?;
+    Some(())
+}
+
+// p=own ret=alias { while { ? } }
+fn c09544(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    while cond() {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=own ret=alias { loop { ? } }
+fn c09545(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    loop {
+        fallible()?;
+    }
+}
+
+// p=own ret=alias { borrow p { ? } }
+fn c09546(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    borrow r[p] {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=own ret=alias { borrow mut p { ? } }
+fn c09547(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    borrow mut r[p] {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=own ret=alias { if {} else { ? } }
+fn c09548(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    if cond() {
+    } else {
+        fallible()?;
+    }
+    Some(())
+}
+
+// p=own ret=alias { if { ? } else {} }
+fn c09549(p: Ptr<u32>) -> Alias uses p@, r: &mut Region<Ptr<u32>> {
+    if cond() {
+        fallible()?;
+    }
+    Some(())
+}
+
 // p=own unchecked {}
-unchecked fn c09230(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09550(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 }
 
 // p=own unchecked { new p }
-unchecked fn c09231(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09551(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let p = Ptr::new(0);
 }
 
 // p=own unchecked { take p }
-unchecked fn c09232(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09552(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     take r[p];
 }
 
 // p=own unchecked { free p }
-unchecked fn c09233(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09553(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     p.free();
 }
 
 // p=own unchecked { inspect p }
-unchecked fn c09234(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09554(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     inspect(p);
 }
 
 // p=own unchecked { update p }
-unchecked fn c09235(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09555(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     update(p);
 }
 
 // p=own unchecked { write p }
-unchecked fn c09236(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09556(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     *p = 1;
 }
 
 // p=own unchecked { assign p }
-unchecked fn c09237(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09557(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     p = other();
 }
 
 // p=own unchecked { return }
-unchecked fn c09238(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09558(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     return;
 }
 
 // p=own unchecked { ? }
-unchecked fn c09239(p: Ptr<u32>) -> Option<()> uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09559(p: Ptr<u32>) -> Option<()> uses p@, r: &mut Region<Ptr<u32>> {
     fallible()?;
     Some(())
 }
 
 // p=own unchecked { panic }
-unchecked fn c09240(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09560(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     panic!();
 }
 
 // p=own unchecked { while {} }
-unchecked fn c09241(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09561(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     while cond() {
     }
 }
 
 // p=own unchecked { loop {} }
-unchecked fn c09242(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09562(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     loop {
     }
 }
 
 // p=own unchecked { borrow p {} }
-unchecked fn c09243(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09563(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow r[p] {
     }
 }
 
 // p=own unchecked { borrow mut p {} }
-unchecked fn c09244(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09564(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow mut r[p] {
     }
 }
 
 // p=own unchecked { closure {} }
-unchecked fn c09245(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09565(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let f = || {
     };
 }
 
 // p=own unchecked { if {} else {} }
-unchecked fn c09246(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
+unchecked fn c09566(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if cond() {
     }
 }

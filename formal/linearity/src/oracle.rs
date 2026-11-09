@@ -84,6 +84,7 @@ pub fn to_program(c: &Case) -> Program {
         params,
         gives: c.header.gives,
         unchecked: c.header.unchecked,
+        try_shape: c.header.try_shape,
         body: to_block(&c.body, &mut next),
     }
 }
@@ -111,6 +112,9 @@ pub fn header_text(h: &Header) -> String {
     }
     if h.unchecked {
         parts.push("unchecked".to_string());
+    }
+    if !h.try_shape {
+        parts.push("ret=alias".to_string());
     }
     parts.join(" ")
 }
@@ -192,6 +196,8 @@ fn maybe() -> Option<u32> {
 fn fallible() -> Option<u32> {
     None
 }
+
+type Alias = Option<()>;
 
 fn other() -> Ptr<u32> {
     let p = Ptr::new(0);
@@ -387,6 +393,7 @@ fn write_case(o: &mut Out, fname: &str, c: &Case) {
     let sig_ret = match ret {
         Ret::Unit => String::new(),
         Ret::Gives(g) => format!(" -> ({}: Ptr<u32>)", name(g)),
+        Ret::Opt if !h.try_shape => " -> Alias".to_string(),
         Ret::Opt => " -> Option<()>".to_string(),
     };
     if let Ret::Gives(g) = ret {
@@ -411,6 +418,7 @@ fn write_case(o: &mut Out, fname: &str, c: &Case) {
 
 fn code_text(c: Code) -> &'static str {
     match c {
+        Code::E0003 => "E0003",
         Code::E0503 => "E0503",
         Code::E0504 => "E0504",
         Code::E0505 => "E0505",
@@ -489,9 +497,28 @@ pub fn mutants() -> Vec<(&'static str, &'static str, Rules)> {
             },
         ),
         (
-            "no-cross",
-            "borrow ブロックを break / continue で抜けることを拒まない（§6.2 の文言どおり）",
-            Rules { cross: false, ..f },
+            "no-release",
+            "break / continue で抜ける点で borrow ブロックの p を Γ から消さない（#21）",
+            Rules {
+                release: false,
+                ..f
+            },
+        ),
+        (
+            "no-loop-clear",
+            "ループの中のループに入るときに、外のループに入ってから開いた borrow の印を引き継ぐ（#21）",
+            Rules {
+                loop_clear: false,
+                ..f
+            },
+        ),
+        (
+            "no-try-shape",
+            "戻り値の型を Option / Result と書いていない関数の borrow mut の中の ? を通す（E0003。#21）",
+            Rules {
+                try_shape: false,
+                ..f
+            },
         ),
     ]
 }

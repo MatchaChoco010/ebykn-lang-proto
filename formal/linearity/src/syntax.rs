@@ -125,11 +125,16 @@ pub struct Program {
     pub gives: Option<usize>,
     /// `unchecked fn`。本体を検査しない。
     pub unchecked: bool,
+    /// 戻り値の型を `Option<..>` / `Result<..>` と書いた（`borrow mut` の中の `?` を書き下しで展開できる。
+    /// 書いていなければ E0003。#21）。
+    pub try_shape: bool,
     pub body: Block,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
 pub enum Code {
+    /// 未実装（ここでは、戻り値の型を `Option` / `Result` と書いていない関数の `borrow mut` の中の `?`）。
+    E0003,
     E0503,
     E0504,
     E0505,
@@ -207,6 +212,48 @@ pub open spec fn capture(e: Env) -> Env
                 Slot::Captured
             },
             Box::new(capture(*t)),
+        ),
+    }
+}
+
+/// 同じ長さで、すべて `Absent` の Γ（ループに入った時点の、開いた `borrow` の印）。
+pub open spec fn clear(e: Env) -> Env
+    decreases e,
+{
+    match e {
+        Env::Nil => Env::Nil,
+        Env::Cons(_, t) => Env::Cons(Slot::Absent, Box::new(clear(*t))),
+    }
+}
+
+pub open spec fn head(m: Env) -> Slot {
+    match m {
+        Env::Nil => Slot::Absent,
+        Env::Cons(s, _) => s,
+    }
+}
+
+pub open spec fn tail(m: Env) -> Env {
+    match m {
+        Env::Nil => Env::Nil,
+        Env::Cons(_, t) => *t,
+    }
+}
+
+/// `break` / `continue` で抜ける点の Γ：印 `m` の付いた変数（行き先のループに入ってから開いた
+/// `borrow` の `p`）を消す。ブロックの終わりと同じ扱い（#21 の既定 D）。
+pub open spec fn release(e: Env, m: Env) -> Env
+    decreases e,
+{
+    match e {
+        Env::Nil => Env::Nil,
+        Env::Cons(s, t) => Env::Cons(
+            if head(m) is Absent {
+                s
+            } else {
+                Slot::Absent
+            },
+            Box::new(release(*t, tail(m))),
         ),
     }
 }
@@ -305,6 +352,38 @@ pub fn ex_set(e: &Env, x: usize, v: Slot) -> (r: Env)
             Env::Cons(v, Box::new(ex_copy(t)))
         } else {
             Env::Cons(*s, Box::new(ex_set(t, x - 1, v)))
+        },
+    }
+}
+
+pub fn ex_clear(e: &Env) -> (r: Env)
+    ensures
+        r == clear(*e),
+    decreases e,
+{
+    match e {
+        Env::Nil => Env::Nil,
+        Env::Cons(_, t) => Env::Cons(Slot::Absent, Box::new(ex_clear(t))),
+    }
+}
+
+pub fn ex_release(e: &Env, m: &Env) -> (r: Env)
+    ensures
+        r == release(*e, *m),
+    decreases e,
+{
+    match e {
+        Env::Nil => Env::Nil,
+        Env::Cons(s, t) => {
+            let (h, mt) = match m {
+                Env::Nil => (Slot::Absent, Env::Nil),
+                Env::Cons(x, u) => (*x, ex_copy(u)),
+            };
+            let v = match h {
+                Slot::Absent => *s,
+                _ => Slot::Absent,
+            };
+            Env::Cons(v, Box::new(ex_release(t, &mt)))
         },
     }
 }

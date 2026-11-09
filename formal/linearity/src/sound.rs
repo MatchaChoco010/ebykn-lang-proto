@@ -105,17 +105,68 @@ pub open spec fn brk_target(c: Ctx, r: Res) -> Env {
     }
 }
 
-pub open spec fn post(out: Out, r: Res, c: Ctx, st: St, fr: Frame) -> bool {
+// ---- 抜ける点で終わる `borrow`（#21 の既定 D） ----
+//
+// `break` / `continue` で抜けるとき、検査は行き先のループに入ってから開いた `borrow` の `p` を Γ から
+// 消す（[`release`]）。実行では、抜ける途中の各 `borrow` が `p` の束縛を入る前に戻す（[`restore`]）。
+// 抜ける文の点ではまだ戻していないので、`post` は「印の付いた変数の束縛を入る前（`olds`）に戻した
+// 状態」（[`restore_mask`]）で不変条件を述べる。
+
+pub open spec fn marked(m: Env, y: nat) -> bool {
+    !(get(m, y) is Absent)
+}
+
+pub open spec fn blk(s: Slot) -> bool {
+    s is BlkShared || s is BlkMut
+}
+
+/// 印の付いた変数の束縛を `olds` に戻した状態。
+pub open spec fn restore_mask(s: St, m: Env, olds: Seq<Option<nat>>) -> St {
+    St {
+        bind: Seq::new(
+            s.bind.len(),
+            |i: int|
+                if marked(m, i as nat) {
+                    olds[i]
+                } else {
+                    s.bind[i]
+                },
+        ),
+        toks: s.toks,
+    }
+}
+
+/// `borrow` に入る前の束縛：札がないか、消費された札。
+pub open spec fn old_ok(b: Option<nat>, st: St, fr: Frame) -> bool {
+    &&& bound_ok(b, fr.base, st.toks.len())
+    &&& b matches Some(t) ==> st.toks[t as int] is Dead
+}
+
+/// 印の付いた変数は `borrow` の `p` で、入る前の束縛を `olds` に持っている。
+pub open spec fn pend_ok(e: Env, m: Env, olds: Seq<Option<nat>>, st: St, fr: Frame) -> bool {
+    &&& olds.len() == st.bind.len()
+    &&& forall|y: nat| #[trigger] marked(m, y) ==> blk(get(e, y)) && old_ok(olds[y as int], st, fr)
+}
+
+/// ループの中なら、印の Γ は変数の数と同じ長さ（`borrow` で印を付けられる）。
+pub open spec fn mask_ok(c: Ctx, st: St) -> bool {
+    !(c.lp is NoLoop) ==> len(c.opened) == st.bind.len()
+}
+
+pub open spec fn post(out: Out, r: Res, c: Ctx, st: St, fr: Frame, olds: Seq<Option<nat>>) -> bool {
     match out {
         Out::Bad(_) => false,
         Out::Normal(s2) => res_fall(r) is Some && inv(res_fall(r).unwrap(), s2, fr) && ext(st, s2, fr),
-        Out::Brk(s2) => !(c.lp is NoLoop) && !c.crossed && (c.lp is Loop ==> res_brk(r) is Some)
-            && inv(brk_target(c, r), s2, fr) && ext(st, s2, fr),
-        Out::Cont(s2) => !(c.lp is NoLoop) && !c.crossed && inv(entry_of(c.lp), s2, fr) && ext(
-            st,
-            s2,
+        Out::Brk(s2) => !(c.lp is NoLoop) && (c.lp is Loop ==> res_brk(r) is Some) && inv(
+            brk_target(c, r),
+            restore_mask(s2, c.opened, olds),
             fr,
-        ),
+        ) && ext(st, s2, fr),
+        Out::Cont(s2) => !(c.lp is NoLoop) && inv(
+            entry_of(c.lp),
+            restore_mask(s2, c.opened, olds),
+            fr,
+        ) && ext(st, s2, fr),
         Out::Ret(s2) => ext(st, s2, fr) && exit_sem(s2, fr),
         Out::Halt => true,
     }
@@ -184,6 +235,63 @@ pub proof fn lemma_capture(e: Env, y: nat)
             } else {
                 (y - 1) as nat
             });
+        },
+    }
+}
+
+pub proof fn lemma_get_clear(e: Env, y: nat)
+    ensures
+        len(clear(e)) == len(e),
+        get(clear(e), y) == Slot::Absent,
+    decreases e,
+{
+    match e {
+        Env::Nil => {},
+        Env::Cons(_, t) => lemma_get_clear(*t, if y == 0 {
+            0
+        } else {
+            (y - 1) as nat
+        }),
+    }
+}
+
+/// ループに入った時点の印には、何も付いていない。
+pub proof fn lemma_clear_unmarked(e: Env)
+    ensures
+        len(clear(e)) == len(e),
+        forall|y: nat| !#[trigger] marked(clear(e), y),
+{
+    lemma_get_clear(e, 0);
+    assert forall|y: nat| !#[trigger] marked(clear(e), y) by {
+        lemma_get_clear(e, y);
+    }
+}
+
+pub proof fn lemma_nil_unmarked()
+    ensures
+        forall|y: nat| !#[trigger] marked(Env::Nil, y),
+{
+}
+
+pub proof fn lemma_get_release(e: Env, m: Env, y: nat)
+    ensures
+        len(release(e, m)) == len(e),
+        get(release(e, m), y) == if marked(m, y) {
+            Slot::Absent
+        } else {
+            get(e, y)
+        },
+    decreases e,
+{
+    match e {
+        Env::Nil => {},
+        Env::Cons(_, t) => {
+            if y == 0 {
+                lemma_get_release(*t, tail(m), 0);
+            } else {
+                lemma_get_release(*t, tail(m), (y - 1) as nat);
+                assert(get(tail(m), (y - 1) as nat) == get(m, y));
+            }
         },
     }
 }
@@ -506,6 +614,126 @@ pub proof fn lemma_borrow_end(f: Env, s2: St, fr: Frame, x: usize, old: Option<n
     }
 }
 
+/// `break` / `continue` の点：印の付いた変数を Γ から消し、束縛を入る前に戻すと、不変条件が成り立つ。
+pub proof fn lemma_release_inv(e: Env, st: St, fr: Frame, m: Env, olds: Seq<Option<nat>>)
+    requires
+        inv(e, st, fr),
+        pend_ok(e, m, olds, st, fr),
+    ensures
+        inv(release(e, m), restore_mask(st, m, olds), fr),
+{
+    let e2 = release(e, m);
+    let s3 = restore_mask(st, m, olds);
+    lemma_get_release(e, m, 0);
+    assert forall|y: int| 0 <= y < s3.bind.len() implies #[trigger] bound_ok(
+        s3.bind[y],
+        fr.base,
+        s3.toks.len(),
+    ) by {
+        if marked(m, y as nat) {
+        } else {
+            assert(bound_ok(st.bind[y], fr.base, st.toks.len()));
+        }
+    }
+    assert forall|y: int| 0 <= y < s3.bind.len() implies #[trigger] rel(
+        get(e2, y as nat),
+        s3.bind[y],
+        s3.toks,
+    ) by {
+        lemma_get_release(e, m, y as nat);
+        if marked(m, y as nat) {
+        } else {
+            assert(rel(get(e, y as nat), st.bind[y], st.toks));
+        }
+    }
+    assert forall|y: int, z: int|
+        0 <= y < s3.bind.len() && 0 <= z < s3.bind.len() && y != z && live(get(e2, y as nat))
+            && live(get(e2, z as nat)) implies #[trigger] s3.bind[y] != #[trigger] s3.bind[z] by {
+        lemma_get_release(e, m, y as nat);
+        lemma_get_release(e, m, z as nat);
+        assert(st.bind[y] != st.bind[z]);
+    }
+    assert forall|t: nat|
+        fr.base <= t < s3.toks.len() && #[trigger] s3.toks[t as int] == Tok::Live(
+            Kind::Owned,
+        ) implies exists|w: int|
+        0 <= w < s3.bind.len() && get(e2, w as nat) == Slot::Owned && #[trigger] s3.bind[w]
+            == Some(t) by {
+        let w = choose|w: int|
+            0 <= w < st.bind.len() && get(e, w as nat) == Slot::Owned && #[trigger] st.bind[w]
+                == Some(t);
+        if marked(m, w as nat) {
+            assert(blk(get(e, w as nat)));
+        }
+        lemma_get_release(e, m, w as nat);
+        assert(s3.bind[w] == Some(t));
+    }
+}
+
+/// 印が何も付いていなければ、戻しても同じ状態。
+pub proof fn lemma_restore_none(s: St, m: Env, olds: Seq<Option<nat>>)
+    requires
+        forall|y: nat| !#[trigger] marked(m, y),
+    ensures
+        restore_mask(s, m, olds) == s,
+{
+    let r = restore_mask(s, m, olds);
+    assert forall|i: int| 0 <= i < r.bind.len() implies r.bind[i] == s.bind[i] by {
+        assert(!marked(m, i as nat));
+    }
+    assert(r.bind =~= s.bind);
+}
+
+/// `borrow` ブロックを `break` / `continue` で抜ける：ブロックの `x` の束縛を戻してから、外の印で戻す。
+pub proof fn lemma_restore_step(s2: St, m: Env, olds: Seq<Option<nat>>, x: usize, old: Option<nat>)
+    requires
+        (x as nat) < len(m),
+        !marked(m, x as nat),
+        (x as int) < s2.bind.len(),
+        olds.len() == s2.bind.len(),
+    ensures
+        restore_mask(s2, set(m, x as nat, Slot::Owned), olds.update(x as int, old))
+            == restore_mask(St { bind: s2.bind.update(x as int, old), toks: s2.toks }, m, olds),
+{
+    let l = restore_mask(s2, set(m, x as nat, Slot::Owned), olds.update(x as int, old));
+    let r = restore_mask(St { bind: s2.bind.update(x as int, old), toks: s2.toks }, m, olds);
+    assert forall|i: int| 0 <= i < l.bind.len() implies l.bind[i] == r.bind[i] by {
+        lemma_get_set(m, x as nat, Slot::Owned, i as nat);
+    }
+    assert(l.bind =~= r.bind);
+}
+
+/// 印の付いた変数の欄が変わらず、状態が先へ進んでも、`pend_ok` は保たれる。
+pub proof fn lemma_pend_ext(
+    e: Env,
+    e2: Env,
+    m: Env,
+    olds: Seq<Option<nat>>,
+    st: St,
+    s2: St,
+    fr: Frame,
+)
+    requires
+        pend_ok(e, m, olds, st, fr),
+        ext(st, s2, fr),
+        forall|y: nat| #[trigger] marked(m, y) ==> get(e2, y) == get(e, y),
+    ensures
+        pend_ok(e2, m, olds, s2, fr),
+{
+    assert forall|y: nat| #[trigger] marked(m, y) implies blk(get(e2, y)) && old_ok(
+        olds[y as int],
+        s2,
+        fr,
+    ) by {
+        assert(old_ok(olds[y as int], st, fr));
+        if olds[y as int] is Some {
+            let t = olds[y as int].unwrap() as int;
+            assert(st.toks[t] is Dead);
+            assert(s2.toks[t] is Dead);
+        }
+    }
+}
+
 /// クロージャの呼び出しの入口：外の Γ を `Captured` にした Γ と、束縛のない新しい本体。
 pub proof fn lemma_closure_start(e: Env, st: St, fr: Frame)
     requires
@@ -609,12 +837,7 @@ pub proof fn lemma_mono_stmt(s: Stmt, e: Env, b: Env, c: Ctx)
             lemma_mono_block(*bb, e, b, c);
         },
         Op::Borrow { x, mutable, body } => {
-            lemma_mono_block(
-                *body,
-                set(e, x as nat, blk_slot(mutable)),
-                b,
-                Ctx { crossed: true, ..c },
-            );
+            lemma_mono_block(*body, set(e, x as nat, blk_slot(mutable)), b, borrow_ctx(c, x, mutable));
         },
         _ => {},
     }
@@ -643,14 +866,18 @@ pub open spec fn borrowed(s: Slot) -> bool {
     s is Shared || s is Mut || s is BlkShared || s is BlkMut
 }
 
-/// 借用の欄は変わらない（消費も再束縛も拒まれる）。出口の Γ と、新しく決まった `break` の Γ で同じ。
+/// 借用の欄は変わらない（消費も再束縛も拒まれる）。出口の Γ では同じで、新しく決まった `break` の Γ
+/// では、抜ける点で消した後（[`release`]）と同じ。
 pub proof fn lemma_frozen_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, y: nat)
     requires
         chk_stmt(s, e, brk, c) is Ok,
         borrowed(get(e, y)),
     ensures
         res_fall(chk_stmt(s, e, brk, c)) matches Some(f) ==> get(f, y) == get(e, y),
-        brk is None ==> (res_brk(chk_stmt(s, e, brk, c)) matches Some(b) ==> get(b, y) == get(e, y)),
+        brk is None ==> (res_brk(chk_stmt(s, e, brk, c)) matches Some(b) ==> get(b, y) == get(
+            release(e, c.opened),
+            y,
+        )),
     decreases s,
 {
     let r = chk_stmt(s, e, brk, c);
@@ -671,15 +898,21 @@ pub proof fn lemma_frozen_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, y: nat
                 *body,
                 e,
                 None,
-                Ctx { lp: LoopCtx::Loop(e), crossed: false, ..c },
+                Ctx { lp: LoopCtx::Loop(e), opened: clear(e), ..c },
                 y,
             );
+            lemma_get_release(e, clear(e), y);
+            lemma_get_clear(e, y);
         },
         Op::Borrow { x, mutable, body } => {
             let e1 = set(e, x as nat, blk_slot(mutable));
+            let c3 = borrow_ctx(c, x, mutable);
             lemma_get_set(e, x as nat, blk_slot(mutable), y);
-            lemma_frozen_block(*body, e1, brk, Ctx { crossed: true, ..c }, y);
-            match res_fall(chk_block(*body, e1, brk, Ctx { crossed: true, ..c })) {
+            lemma_get_set(c.opened, x as nat, Slot::Owned, y);
+            lemma_get_release(e1, c3.opened, y);
+            lemma_get_release(e, c.opened, y);
+            lemma_frozen_block(*body, e1, brk, c3, y);
+            match res_fall(chk_block(*body, e1, brk, c3)) {
                 Some(f) => lemma_get_set(f, x as nat, Slot::Absent, y),
                 None => {},
             }
@@ -695,7 +928,7 @@ pub proof fn lemma_frozen_block(bl: Block, e: Env, brk: Option<Env>, c: Ctx, y: 
     ensures
         res_fall(chk_block(bl, e, brk, c)) matches Some(f) ==> get(f, y) == get(e, y),
         brk is None ==> (res_brk(chk_block(bl, e, brk, c)) matches Some(b) ==> get(b, y) == get(
-            e,
+            release(e, c.opened),
             y,
         )),
     decreases bl,
@@ -706,6 +939,8 @@ pub proof fn lemma_frozen_block(bl: Block, e: Env, brk: Option<Env>, c: Ctx, y: 
             lemma_frozen_stmt(*s, e, brk, c, y);
             match chk_stmt(*s, e, brk, c) {
                 Res::Ok { fall: Some(e2), brk: b2 } => {
+                    lemma_get_release(e, c.opened, y);
+                    lemma_get_release(e2, c.opened, y);
                     lemma_frozen_block(*r, e2, b2, c, y);
                     if b2 is Some {
                         lemma_mono_block(*r, e2, b2.unwrap(), c);
@@ -719,19 +954,38 @@ pub proof fn lemma_frozen_block(bl: Block, e: Env, brk: Option<Env>, c: Ctx, y: 
 
 // ---- 健全性 ----
 
-pub open spec fn pre(s_wf: bool, r: Res, e: Env, c: Ctx, st: St, fr: Frame) -> bool {
+pub open spec fn pre(
+    s_wf: bool,
+    r: Res,
+    e: Env,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    olds: Seq<Option<nat>>,
+) -> bool {
     &&& s_wf
     &&& r is Ok
     &&& inv(e, st, fr)
     &&& c.gives == fr.gives
+    &&& pend_ok(e, c.opened, olds, st, fr)
+    &&& mask_ok(c, st)
 }
 
-proof fn lemma_atom(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+proof fn lemma_atom(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
         !(s.op is Branch || s.op is While || s.op is Loop || s.op is Borrow || s.op is Closure),
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
 {
     lemma_ext_refl(st, fr);
     match s.op {
@@ -748,16 +1002,26 @@ proof fn lemma_atom(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame
         Op::Let { x } => lemma_unbind(e, st, fr, x),
         Op::Return => lemma_exit(e, st, fr),
         Op::Try => lemma_exit(e, st, fr),
+        Op::Break | Op::Continue => lemma_release_inv(e, st, fr, c.opened, olds),
         _ => {},
     }
 }
 
-proof fn lemma_branch(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+proof fn lemma_branch(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
         s.op is Branch,
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
     decreases s, 0nat,
 {
     if let Op::Branch { a, b, .. } = s.op {
@@ -765,29 +1029,38 @@ proof fn lemma_branch(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Fra
         let b1 = res_brk(ra);
         let rb = chk_block(*b, e, b1, c);
         if choice(o) == 0 {
-            lemma_block(*a, e, brk, c, st, fr, rest(o));
+            lemma_block(*a, e, brk, c, st, fr, rest(o), olds);
             if b1 is Some {
                 lemma_mono_block(*b, e, b1.unwrap(), c);
             }
         } else {
-            lemma_block(*b, e, b1, c, st, fr, rest(o));
+            lemma_block(*b, e, b1, c, st, fr, rest(o), olds);
         }
     }
 }
 
-proof fn lemma_while(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+proof fn lemma_while(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
         s.op is While || s.op is Loop,
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
     decreases s, 0nat,
 {
     match s.op {
         Op::While { body } => lemma_iter(
             *body,
             e,
-            Ctx { lp: LoopCtx::While(e), crossed: false, ..c },
+            Ctx { lp: LoopCtx::While(e), opened: clear(e), ..c },
             st,
             fr,
             rest(o),
@@ -797,7 +1070,7 @@ proof fn lemma_while(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Fram
         Op::Loop { body } => lemma_iter(
             *body,
             e,
-            Ctx { lp: LoopCtx::Loop(e), crossed: false, ..c },
+            Ctx { lp: LoopCtx::Loop(e), opened: clear(e), ..c },
             st,
             fr,
             rest(o),
@@ -838,7 +1111,7 @@ proof fn lemma_iter(
         } else {
             LoopCtx::Loop(e)
         }),
-        !c.crossed,
+        c.opened == clear(e),
     ensures
         ({
             let out = run_loop(body, st, fr, o, k, exits).0;
@@ -858,7 +1131,8 @@ proof fn lemma_iter(
 {
     lemma_ext_refl(st, fr);
     if k > 0 {
-        lemma_block(body, e, None, c, st, fr, o);
+        lemma_clear_unmarked(e);
+        lemma_block(body, e, None, c, st, fr, o, st.bind);
         let (out, o2) = run_block(body, st, fr, o);
         match out {
             Out::Normal(s) => {
@@ -870,7 +1144,9 @@ proof fn lemma_iter(
                     _ => {},
                 }
             },
+            Out::Brk(s) => lemma_restore_none(s, c.opened, st.bind),
             Out::Cont(s) => {
+                lemma_restore_none(s, c.opened, st.bind);
                 lemma_iter(body, e, c, s, fr, o2, (k - 1) as nat, exits);
                 let out2 = run_loop(body, s, fr, o2, (k - 1) as nat, exits).0;
                 match out2 {
@@ -884,24 +1160,62 @@ proof fn lemma_iter(
     }
 }
 
-proof fn lemma_borrow(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+proof fn lemma_borrow(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
         s.op is Borrow,
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
     decreases s, 0nat,
 {
     if let Op::Borrow { x, mutable, body } = s.op {
         let k = blk_slot(mutable);
         let e1 = set(e, x as nat, k);
-        let c3 = Ctx { crossed: true, ..c };
+        let c3 = borrow_ctx(c, x, mutable);
         let st1 = fresh(st, x, kind_of(mutable));
         let old = st.bind[x as int];
+        let m = c.opened;
+        let m1 = c3.opened;
+        let olds1 = olds.update(x as int, old);
         assert(rel(get(e, x as nat), old, st.toks));
         assert(bound_ok(old, fr.base, st.toks.len()));
         lemma_fresh(e, st, fr, x, k, kind_of(mutable));
-        lemma_block(*body, e1, brk, c3, st1, fr, o);
+        lemma_len_set(m, x as nat, Slot::Owned);
+        // `x` は Γ になかったので、外の印は付いていない。
+        if marked(m, x as nat) {
+            assert(blk(get(e, x as nat)));
+        }
+        // 本体の印：`x` に入る前の束縛を持たせる。
+        assert forall|y: nat| #[trigger] marked(m1, y) implies blk(get(e1, y)) && old_ok(
+            olds1[y as int],
+            st1,
+            fr,
+        ) by {
+            lemma_get_set(m, x as nat, Slot::Owned, y);
+            lemma_get_set(e, x as nat, k, y);
+            if y == x as nat {
+                if old is Some {
+                    assert(st1.toks[old.unwrap() as int] == st.toks[old.unwrap() as int]);
+                }
+            } else {
+                assert(marked(m, y));
+                assert(old_ok(olds[y as int], st, fr));
+                if olds[y as int] is Some {
+                    let t = olds[y as int].unwrap() as int;
+                    assert(st1.toks[t] == st.toks[t]);
+                }
+            }
+        }
+        lemma_block(*body, e1, brk, c3, st1, fr, o, olds1);
         lemma_get_set(e, x as nat, k, x as nat);
         lemma_frozen_block(*body, e1, brk, c3, x as nat);
         let outb = run_block(*body, st1, fr, o).0;
@@ -913,35 +1227,53 @@ proof fn lemma_borrow(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Fra
                 let s3 = St { bind: s2.bind.update(x as int, old), toks: s2.toks };
                 assert(ext(st, s3, fr));
             },
+            // 抜ける：束縛を戻してから外へ（消費ではない）。
+            Out::Brk(s2) => {
+                lemma_ext_trans(st, st1, s2, fr);
+                lemma_restore_step(s2, m, olds, x, old);
+                let s3 = St { bind: s2.bind.update(x as int, old), toks: s2.toks };
+                assert(ext(st, s3, fr));
+            },
+            Out::Cont(s2) => {
+                lemma_ext_trans(st, st1, s2, fr);
+                lemma_restore_step(s2, m, olds, x, old);
+                let s3 = St { bind: s2.bind.update(x as int, old), toks: s2.toks };
+                assert(ext(st, s3, fr));
+            },
             Out::Ret(s2) => lemma_ext_trans(st, st1, s2, fr),
             _ => {},
         }
     }
 }
 
-proof fn lemma_closure(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+proof fn lemma_closure(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
         s.op is Closure,
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
     decreases s, 0nat,
 {
     if let Op::Closure { body } = s.op {
-        lemma_calls(*body, e, st, fr, rest(o), choice(o));
+        lemma_calls(*body, e, c, st, fr, rest(o), choice(o));
     }
 }
 
-pub open spec fn closure_ctx() -> Ctx {
-    Ctx { gives: None, lp: LoopCtx::NoLoop, crossed: false, closure: true }
-}
-
 /// クロージャを `k` 回呼ぶ。外の Γ と不変条件は変わらない。
-proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat)
+proof fn lemma_calls(body: Block, e: Env, c: Ctx, st: St, fr: Frame, o: Seq<nat>, k: nat)
     requires
         wf_block(body, st.bind.len(), false),
-        chk_block(body, capture(e), None, closure_ctx()) is Ok,
-        res_fall(chk_block(body, capture(e), None, closure_ctx())) matches Some(f) ==> exit_ok(
+        chk_block(body, capture(e), None, closure_ctx(c)) is Ok,
+        res_fall(chk_block(body, capture(e), None, closure_ctx(c))) matches Some(f) ==> exit_ok(
             f,
             None,
         ),
@@ -962,15 +1294,16 @@ proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat
         let fr2 = closure_frame(st);
         let st2 = closure_start(st);
         lemma_closure_start(e, st, fr);
-        lemma_block(body, capture(e), None, closure_ctx(), st2, fr2, o);
+        lemma_nil_unmarked();
+        lemma_block(body, capture(e), None, closure_ctx(c), st2, fr2, o, st2.bind);
         let (out, o2) = run_block(body, st2, fr2, o);
         match out {
             Out::Normal(s) => {
-                let f = res_fall(chk_block(body, capture(e), None, closure_ctx())).unwrap();
+                let f = res_fall(chk_block(body, capture(e), None, closure_ctx(c))).unwrap();
                 lemma_exit(f, s, fr2);
                 lemma_closure_back(e, st, fr, s);
                 let s3 = St { bind: st.bind, toks: s.toks };
-                lemma_calls(body, e, s3, fr, o2, (k - 1) as nat);
+                lemma_calls(body, e, c, s3, fr, o2, (k - 1) as nat);
                 match run_closure(body, s3, fr, o2, (k - 1) as nat).0 {
                     Out::Normal(s4) => lemma_ext_trans(st, s3, s4, fr),
                     _ => {},
@@ -979,7 +1312,7 @@ proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat
             Out::Ret(s) => {
                 lemma_closure_back(e, st, fr, s);
                 let s3 = St { bind: st.bind, toks: s.toks };
-                lemma_calls(body, e, s3, fr, o2, (k - 1) as nat);
+                lemma_calls(body, e, c, s3, fr, o2, (k - 1) as nat);
                 match run_closure(body, s3, fr, o2, (k - 1) as nat).0 {
                     Out::Normal(s4) => lemma_ext_trans(st, s3, s4, fr),
                     _ => {},
@@ -990,42 +1323,68 @@ proof fn lemma_calls(body: Block, e: Env, st: St, fr: Frame, o: Seq<nat>, k: nat
     }
 }
 
-pub proof fn lemma_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+pub proof fn lemma_stmt(
+    s: Stmt,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr),
+        pre(wf_stmt(s, st.bind.len(), !(c.lp is NoLoop)), chk_stmt(s, e, brk, c), e, c, st, fr, olds),
     ensures
-        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr),
+        post(run_stmt(s, st, fr, o).0, chk_stmt(s, e, brk, c), c, st, fr, olds),
     decreases s, 1nat,
 {
     match s.op {
-        Op::Branch { .. } => lemma_branch(s, e, brk, c, st, fr, o),
-        Op::While { .. } => lemma_while(s, e, brk, c, st, fr, o),
-        Op::Loop { .. } => lemma_while(s, e, brk, c, st, fr, o),
-        Op::Borrow { .. } => lemma_borrow(s, e, brk, c, st, fr, o),
-        Op::Closure { .. } => lemma_closure(s, e, brk, c, st, fr, o),
-        _ => lemma_atom(s, e, brk, c, st, fr, o),
+        Op::Branch { .. } => lemma_branch(s, e, brk, c, st, fr, o, olds),
+        Op::While { .. } => lemma_while(s, e, brk, c, st, fr, o, olds),
+        Op::Loop { .. } => lemma_while(s, e, brk, c, st, fr, o, olds),
+        Op::Borrow { .. } => lemma_borrow(s, e, brk, c, st, fr, o, olds),
+        Op::Closure { .. } => lemma_closure(s, e, brk, c, st, fr, o, olds),
+        _ => lemma_atom(s, e, brk, c, st, fr, o, olds),
     }
 }
 
-pub proof fn lemma_block(b: Block, e: Env, brk: Option<Env>, c: Ctx, st: St, fr: Frame, o: Seq<nat>)
+pub proof fn lemma_block(
+    b: Block,
+    e: Env,
+    brk: Option<Env>,
+    c: Ctx,
+    st: St,
+    fr: Frame,
+    o: Seq<nat>,
+    olds: Seq<Option<nat>>,
+)
     requires
-        pre(wf_block(b, st.bind.len(), !(c.lp is NoLoop)), chk_block(b, e, brk, c), e, c, st, fr),
+        pre(wf_block(b, st.bind.len(), !(c.lp is NoLoop)), chk_block(b, e, brk, c), e, c, st, fr, olds),
     ensures
-        post(run_block(b, st, fr, o).0, chk_block(b, e, brk, c), c, st, fr),
+        post(run_block(b, st, fr, o).0, chk_block(b, e, brk, c), c, st, fr, olds),
     decreases b, 0nat,
 {
     lemma_ext_refl(st, fr);
     match b {
         Block::Nil => {},
         Block::Cons(s, r) => {
-            lemma_stmt(*s, e, brk, c, st, fr, o);
+            lemma_stmt(*s, e, brk, c, st, fr, o, olds);
             let rs = chk_stmt(*s, e, brk, c);
             let (out, o2) = run_stmt(*s, st, fr, o);
             match out {
                 Out::Normal(s2) => {
                     let e2 = res_fall(rs).unwrap();
                     let b2 = res_brk(rs);
-                    lemma_block(*r, e2, b2, c, s2, fr, o2);
+                    // 印の付いた変数（`borrow` の `p`）の欄は変わらない。
+                    assert forall|y: nat| #[trigger] marked(c.opened, y) implies get(e2, y) == get(
+                        e,
+                        y,
+                    ) by {
+                        lemma_frozen_stmt(*s, e, brk, c, y);
+                    }
+                    lemma_pend_ext(e, e2, c.opened, olds, st, s2, fr);
+                    lemma_block(*r, e2, b2, c, s2, fr, o2, olds);
                     match run_block(*r, s2, fr, o2).0 {
                         Out::Normal(s3) => lemma_ext_trans(st, s2, s3, fr),
                         Out::Brk(s3) => lemma_ext_trans(st, s2, s3, fr),
@@ -1089,7 +1448,8 @@ pub proof fn theorem_soundness(p: Program, o: Seq<nat>)
         !(run_fn(p, o) is Bad),
 {
     lemma_init(p);
-    lemma_block(p.body, p.params, None, ctx0(p), init(p), frame0(p), o);
+    lemma_nil_unmarked();
+    lemma_block(p.body, p.params, None, ctx0(p), init(p), frame0(p), o, init(p).bind);
     match run_block(p.body, init(p), frame0(p), o).0 {
         Out::Normal(s) => {
             let f = res_fall(chk_block(p.body, p.params, None, ctx0(p))).unwrap();
