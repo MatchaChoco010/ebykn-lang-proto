@@ -1,0 +1,8 @@
+unchecked smuggled::liar
+verified smuggled::caller
+admit smuggled::helper
+external smuggled::t
+verified smuggled::a
+verified smuggled::b
+verified smuggled::c
+results 5 verified, 0 errors

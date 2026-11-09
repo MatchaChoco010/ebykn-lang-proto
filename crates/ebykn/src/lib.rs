@@ -7,6 +7,8 @@ use ebykn_check::project::{self, Project};
 use ebykn_check::{Checked, sort_diags};
 use ebykn_syntax::diag::{Diagnostic, Lang};
 
+pub mod no_cheating;
+pub mod verify;
 pub mod verus;
 
 /// `ebykn check` の §6 までの結果。

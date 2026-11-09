@@ -1,6 +1,8 @@
 //! `golden-verify`：golden のケース（`tests/golden/<名前>/`）のうち `expected/status.txt` があるものに
 //! `ebykn verify` をかけ、出力を `expected/status.txt` と比べる（仕様 §11 の (3)）。続けて、書き出した
-//! `build/verus/` を Verus なしの cargo でもビルドする（OPEN-11）。
+//! `build/verus/` を Verus なしの cargo でもビルドする（OPEN-11）。最後に、Verus が要るので `#[ignore]` にした
+//! テスト（[`IGNORED`]。#37 の `--no-cheating` の照合の再現）を `--ignored` で走らせ、どれも実際に走って
+//! 通ったことを確かめる。
 //!
 //! Verus が要るので `gates` には入れず、CI の Verus のジョブで走らせる。依存の版は、ケースの
 //! `expected/verus/Cargo.lock` を `build/verus/` に写して固定する。
@@ -44,6 +46,57 @@ pub fn judge(expected: &str, stdout: &str, success: bool) -> Result<(), String> 
         ));
     }
     Ok(())
+}
+
+/// Verus が要るので `#[ignore]` にしたテスト（パッケージ、テストのターゲット、テストの名前）。
+pub const IGNORED: &[(&str, &str, &str)] =
+    &[("ebykn", "no_cheating", "smuggled_assumptions_fail_verify")];
+
+/// `cargo test` の出力が、ちょうど一つのテストが走って通ったことを示すか。0 件で通ったもの（名前の誤り
+/// など）を通さない。
+pub fn ran_one(stdout: &str) -> bool {
+    stdout
+        .lines()
+        .any(|l| l.starts_with("test result: ok. 1 passed;"))
+}
+
+fn run_ignored(root: &Path) -> bool {
+    let mut ok = true;
+    for (package, target, name) in IGNORED {
+        eprintln!("$ cargo test -p {package} --test {target} -- --ignored --exact {name}");
+        let out = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args([
+                "test",
+                "-p",
+                package,
+                "--test",
+                target,
+                "--",
+                "--ignored",
+                "--exact",
+                name,
+            ])
+            .current_dir(root)
+            .output();
+        match out {
+            Ok(o) if o.status.success() && ran_one(&String::from_utf8_lossy(&o.stdout)) => {
+                eprintln!("ok: golden-verify: {target}::{name}")
+            }
+            Ok(o) => {
+                eprint!("{}", String::from_utf8_lossy(&o.stdout));
+                eprint!("{}", String::from_utf8_lossy(&o.stderr));
+                eprintln!(
+                    "error: golden-verify: {target}::{name} が通りません（1 件走って通る必要があります）"
+                );
+                ok = false;
+            }
+            Err(e) => {
+                eprintln!("error: golden-verify: cargo test を起動できません: {e}");
+                ok = false;
+            }
+        }
+    }
+    ok
 }
 
 pub fn verify(root: &Path, files: &[String]) -> bool {
@@ -137,7 +190,8 @@ pub fn verify(root: &Path, files: &[String]) -> bool {
             }
         }
     }
-    ok
+    // 普通のケースの後に走らせる（smuggled のケースの build/verus/ を、差し込んだもので書き直すため）。
+    run_ignored(root) && ok
 }
 
 #[cfg(test)]
@@ -187,6 +241,25 @@ mod tests {
             "unknown k::f\nresults not verified: Verus stopped before verification (1 errors)\n";
         assert!(judge(s, s, true).is_err());
         assert_eq!(judge(s, s, false), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_no_ignored_test_ran() {
+        let one = "running 1 test\ntest smuggled_assumptions_fail_verify ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s\n";
+        assert!(ran_one(one));
+        let none = mutate(one, "ok. 1 passed", "ok. 0 passed");
+        assert!(!ran_one(&none));
+        let failed = mutate(one, "ok. 1 passed; 0 failed", "FAILED. 0 passed; 1 failed");
+        assert!(!ran_one(&failed));
+    }
+
+    #[test]
+    fn ignored_tests_exist() {
+        for (_, target, name) in IGNORED {
+            let src = real(&format!("crates/ebykn/tests/{target}.rs"));
+            assert!(src.contains(&format!("fn {name}()")), "{target}::{name}");
+            assert!(src.contains("#[ignore"), "{target}");
+        }
     }
 
     #[test]
