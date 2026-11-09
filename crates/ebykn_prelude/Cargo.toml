@@ -7,7 +7,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# ルートの Cargo.toml の [workspace.metadata.verus] の vstd と同じ版にする（verus-verify が検査する）。
+# ルートの Cargo.toml の [workspace.metadata.verus] の vstd と同じ版にする（check-verus-pin が検査する）。
 vstd = "=0.0.0-2026-11-01-0251"
 
 [package.metadata.verus]

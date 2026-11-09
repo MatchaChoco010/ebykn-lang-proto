@@ -1,7 +1,11 @@
-//! `check-verus-pin`：固定した Verus の値が読め、Verus のクレートが固定した vstd を使っている。
+//! `check-verus-pin`：固定した Verus の値が読め、Verus のクレートが固定した vstd を使い、
+//! すべて `verus-verify` の対象になっている。
 //!
-//! Verus は実行しない。固定値（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）と、
-//! `vstd` に依存する全 `Cargo.toml` の版の食い違いを検出する。
+//! Verus は実行しない。次を検査する。
+//! - 固定値（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）が読める。
+//! - `vstd` に依存する `Cargo.toml` は、`vstd = "<固定した版>"` の形で書いてある（ほかの形は読まずに失敗にする）。
+//! - `vstd` に依存するクレートは、すべて `CRATES`（`verus-verify` が検証する一覧）に載っている。
+//! - `CRATES` の各クレートは `Cargo.toml` と `Cargo.lock` を追跡し、`Cargo.lock` の vstd が固定した版。
 
 use super::{Repo, Report};
 use crate::verus::{CRATES, read_pin};
@@ -19,11 +23,28 @@ pub fn run(repo: &Repo) -> Report {
         "{}（{}）、toolchain {}、vstd {}",
         pin.release, pin.commit, pin.toolchain, pin.vstd
     ));
+    let locked = pin.vstd.trim_start_matches('=');
     for krate in CRATES {
         if !repo.has(&format!("{krate}/Cargo.toml")) {
             r.errors.push(format!(
                 "Verus で検証するクレート {krate} に Cargo.toml がありません。xtask/src/verus.rs の CRATES を直してください"
             ));
+        }
+        let lock = format!("{krate}/Cargo.lock");
+        if !repo.has(&lock) {
+            r.errors.push(format!(
+                "{lock} を追跡してください（依存の版を固定し、Verus なしのビルドを環境に左右させない）"
+            ));
+            continue;
+        }
+        match repo.read(&lock) {
+            Err(e) => r.errors.push(e),
+            Ok(text) => {
+                if !lock_has(&text, "vstd", locked) {
+                    r.errors
+                        .push(format!("{lock}: vstd が固定した版 {locked} ではありません"));
+                }
+            }
         }
     }
     let mut checked = 0;
@@ -39,31 +60,60 @@ pub fn run(repo: &Repo) -> Report {
                 continue;
             }
         };
+        let mut depends = false;
         for (i, line) in text.lines().enumerate() {
             let t = line.trim();
+            let at = |m: String| format!("{f}:{}: {m}", i + 1);
+            if t.starts_with('[') && t.contains("vstd") {
+                r.errors.push(at(format!(
+                    "vstd の依存は表の形（{t}）ではなく `vstd = \"{}\"` と書いてください",
+                    pin.vstd
+                )));
+                depends = true;
+                continue;
+            }
             let Some(rest) = t.strip_prefix("vstd") else {
                 continue;
             };
-            let Some(value) = rest.trim_start().strip_prefix('=') else {
+            if !rest.starts_with([' ', '=', '.']) {
                 continue;
-            };
+            }
+            depends = true;
             checked += 1;
             let want = format!("\"{}\"", pin.vstd);
-            if value.trim() != want {
-                r.errors.push(format!(
-                    "{f}:{}: vstd は固定した版 {want} にしてください（今は {}）",
-                    i + 1,
-                    value.trim()
-                ));
+            match rest.trim_start().strip_prefix('=') {
+                Some(value) if value.trim() == want => {}
+                _ => r.errors.push(at(format!(
+                    "vstd は `vstd = {want}` の形で固定した版にしてください（今は {t}）"
+                ))),
             }
+        }
+        let dir = f.strip_suffix("/Cargo.toml").unwrap_or_default();
+        if depends && !CRATES.contains(&dir) {
+            r.errors.push(format!(
+                "{f}: vstd に依存するクレート {dir} が verus-verify の対象にありません。xtask/src/verus.rs の CRATES に足してください"
+            ));
         }
     }
     if checked == 0 {
         r.errors
             .push("vstd に依存する Cargo.toml が一つもありません".to_string());
     }
-    r.notes.push(format!("vstd の依存 {checked} 個を検査"));
+    r.notes.push(format!(
+        "vstd の依存 {checked} 個を検査。verus-verify の対象: {}",
+        CRATES.join(", ")
+    ));
     r
+}
+
+/// `Cargo.lock` に `name = "<name>"` の直後が `version = "<version>"` の項目がある。
+fn lock_has(text: &str, name: &str, version: &str) -> bool {
+    let want_name = format!("name = \"{name}\"");
+    let want_version = format!("version = \"{version}\"");
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    lines
+        .windows(2)
+        .any(|w| w[0] == want_name && w[1] == want_version)
 }
 
 #[cfg(test)]
@@ -72,13 +122,17 @@ mod tests {
     use crate::testutil::*;
 
     const PRELUDE: &str = "crates/ebykn_prelude/Cargo.toml";
+    const PRELUDE_LOCK: &str = "crates/ebykn_prelude/Cargo.lock";
     const STACK: &str = "tests/golden/stack/expected/verus/Cargo.toml";
+    const STACK_LOCK: &str = "tests/golden/stack/expected/verus/Cargo.lock";
 
     fn repo(root: &str, prelude: &str) -> TempRepo {
         let mut t = TempRepo::new();
         t.write("Cargo.toml", root);
         t.write(PRELUDE, prelude);
+        t.write(PRELUDE_LOCK, &real(PRELUDE_LOCK));
         t.write(STACK, &real(STACK));
+        t.write(STACK_LOCK, &real(STACK_LOCK));
         t
     }
 
@@ -104,9 +158,59 @@ mod tests {
         let mut t = TempRepo::new();
         t.write("Cargo.toml", &real("Cargo.toml"));
         t.write(STACK, &real(STACK));
+        t.write(STACK_LOCK, &real(STACK_LOCK));
         assert_fails(
             &t.run(run),
             "crates/ebykn_prelude に Cargo.toml がありません",
         );
+    }
+
+    #[test]
+    fn fails_when_a_vstd_crate_is_not_verified() {
+        let mut t = repo(&real("Cargo.toml"), &real(PRELUDE));
+        t.write("tests/golden/dlist/expected/verus/Cargo.toml", &real(STACK));
+        assert_fails(
+            &t.run(run),
+            "tests/golden/dlist/expected/verus が verus-verify の対象にありません",
+        );
+    }
+
+    #[test]
+    fn fails_on_other_forms_of_the_vstd_dependency() {
+        let src = real(PRELUDE);
+        let line = src.lines().find(|l| l.starts_with("vstd = ")).unwrap();
+        for form in [
+            "vstd.workspace = true".to_string(),
+            "vstd = { version = \"=0.0.0-2026-11-01-0251\" }".to_string(),
+            "[dependencies.vstd]\nversion = \"=0.0.0-2026-11-01-0251\"".to_string(),
+        ] {
+            let broken = mutate(&src, line, &form);
+            assert_fails(&repo(&real("Cargo.toml"), &broken).run(run), PRELUDE);
+        }
+    }
+
+    #[test]
+    fn fails_when_a_lock_file_is_not_tracked() {
+        let mut t = TempRepo::new();
+        t.write("Cargo.toml", &real("Cargo.toml"));
+        t.write(PRELUDE, &real(PRELUDE));
+        t.write(STACK, &real(STACK));
+        t.write(STACK_LOCK, &real(STACK_LOCK));
+        assert_fails(
+            &t.run(run),
+            "crates/ebykn_prelude/Cargo.lock を追跡してください",
+        );
+    }
+
+    #[test]
+    fn fails_when_a_lock_file_has_another_vstd() {
+        let mut t = repo(&real("Cargo.toml"), &real(PRELUDE));
+        let broken = mutate(
+            &real(STACK_LOCK),
+            "name = \"vstd\"\nversion = \"0.0.0-2026-11-01-0251\"",
+            "name = \"vstd\"\nversion = \"0.0.0-2026-10-01-0000\"",
+        );
+        t.write(STACK_LOCK, &broken);
+        assert_fails(&t.run(run), "vstd が固定した版");
     }
 }

@@ -61,6 +61,9 @@ jobs:
   # 固定した Verus（ルートの Cargo.toml の [workspace.metadata.verus]）で prelude・手書きの stack・プローブを検証する。
   verus:
     runs-on: ubuntu-latest
+    env:
+      # xtask は XDG_CACHE_HOME を優先する。キャッシュするパスと食い違わないよう明示する。
+      XDG_CACHE_HOME: /home/runner/.cache
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
@@ -73,7 +76,7 @@ jobs:
       - name: Verus のキャッシュ
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ebykn/verus/${{ steps.pin.outputs.version }}
+          path: ${{ env.XDG_CACHE_HOME }}/ebykn/verus/${{ steps.pin.outputs.version }}
           key: verus-${{ steps.pin.outputs.sha256 }}
       # vstd などの crates.io の依存。ビルド成果物（数百 MB）は復元と再ビルドの時間が変わらないので入れない。
       - name: crates.io の依存のキャッシュ

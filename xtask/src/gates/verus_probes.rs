@@ -11,8 +11,14 @@
 //! // expect: errors <V> <E>                   （V verified, E errors で失敗する）
 //! // expect: rejected                         （検証の前に失敗し、結果の行が出ない）
 //! // expect-output: <部分文字列>              （任意個。出力に含まれる）
+//! // expect-output-count: <回数> <部分文字列>  （任意個。出力にちょうどその回数だけ含まれる）
 //! // verus-args: <引数 ..>                    （任意。verus に足す引数）
 //! ```
+//!
+//! 失敗を期待するプローブ（`errors` / `rejected`）は、`expect-output` か `expect-output-count` を
+//! 少なくとも一つ持つ。持たないと、タイプミスや構文エラーのような別の失敗も期待どおりに数えてしまう。
+//! 部分文字列の中の `\n` は改行、`\\` は `\` と読む。ヘッダの後ろに指示に見える行（`//expect:` など）が
+//! あれば失敗にする。
 
 use std::path::Path;
 use std::process::Command;
@@ -34,7 +40,47 @@ pub struct Probe {
     pub file: String,
     pub expect: Expect,
     pub outputs: Vec<String>,
+    /// 出力にちょうど `.0` 回含まれる部分文字列 `.1`。
+    pub counts: Vec<(usize, String)>,
     pub args: Vec<String>,
+}
+
+const DIRECTIVES: &[&str] = &[
+    "probe",
+    "expect",
+    "expect-output",
+    "expect-output-count",
+    "verus-args",
+];
+
+/// `\n` を改行に、`\\` を `\` に戻す。それ以外の `\` は読めない値として失敗にする。
+fn unescape(v: &str) -> Result<String, String> {
+    let mut out = String::new();
+    let mut chars = v.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('\\') => out.push('\\'),
+            _ => return Err(format!("値の中の \\ を読めません: {v}")),
+        }
+    }
+    Ok(out)
+}
+
+/// ヘッダの外にある、指示に見える行（`//expect:`、`// expect-output:` など）。
+fn stray_directive(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix("//") else {
+        return false;
+    };
+    let rest = rest.trim_start_matches(['/', '!', ' ']);
+    DIRECTIVES.iter().any(|d| {
+        rest.strip_prefix(d)
+            .is_some_and(|r| r.trim_start().starts_with(':'))
+    })
 }
 
 /// プローブのファイルと追加の引数を受け取って Verus を走らせる関数。テストでは偽物を渡す。
@@ -50,11 +96,14 @@ pub fn parse(file: &str, text: &str) -> Result<Probe, String> {
     let mut desc = None;
     let mut expect = None;
     let mut outputs = Vec::new();
+    let mut counts = Vec::new();
     let mut args = None;
+    let mut header_end = 0;
     for (i, line) in text.lines().enumerate() {
         let Some(body) = line.strip_prefix("// ") else {
             break;
         };
+        header_end = i + 1;
         let at = |m: &str| format!("{file}:{}: {m}", i + 1);
         let (key, value) = body
             .split_once(": ")
@@ -66,7 +115,14 @@ pub fn parse(file: &str, text: &str) -> Result<Probe, String> {
         match key {
             "probe" if desc.is_none() => desc = Some(value.to_string()),
             "expect" if expect.is_none() => expect = Some(parse_expect(value).map_err(|e| at(&e))?),
-            "expect-output" => outputs.push(value.to_string()),
+            "expect-output" => outputs.push(unescape(value).map_err(|e| at(&e))?),
+            "expect-output-count" => {
+                let (n, sub) = value
+                    .split_once(' ')
+                    .and_then(|(n, sub)| Some((n.parse::<usize>().ok()?, sub)))
+                    .ok_or_else(|| at(&format!("expect-output-count を読めません: {value}")))?;
+                counts.push((n, unescape(sub).map_err(|e| at(&e))?));
+            }
             "verus-args" if args.is_none() => {
                 args = Some(value.split_whitespace().map(str::to_string).collect())
             }
@@ -80,10 +136,24 @@ pub fn parse(file: &str, text: &str) -> Result<Probe, String> {
         return Err(format!("{file}: 先頭に `// probe: ..` がありません"));
     }
     let expect = expect.ok_or_else(|| format!("{file}: 先頭に `// expect: ..` がありません"))?;
+    if !matches!(expect, Expect::Verified(_)) && outputs.is_empty() && counts.is_empty() {
+        return Err(format!(
+            "{file}: 失敗を期待するプローブには `// expect-output: ..` が要ります（どの失敗かを固定する）"
+        ));
+    }
+    for (i, line) in text.lines().enumerate().skip(header_end) {
+        if stray_directive(line) {
+            return Err(format!(
+                "{file}:{}: ヘッダの外に指示があります（ヘッダは先頭の `// ` の行が続く間だけ）: {line}",
+                i + 1
+            ));
+        }
+    }
     Ok(Probe {
         file: file.to_string(),
         expect,
         outputs,
+        counts,
         args: args.unwrap_or_default(),
     })
 }
@@ -138,6 +208,12 @@ pub fn check(probe: &Probe, out: &Outcome) -> Vec<String> {
     for o in &probe.outputs {
         if !out.text.contains(o.as_str()) {
             errs.push(format!("{f}: 出力に {o:?} がありません"));
+        }
+    }
+    for (n, o) in &probe.counts {
+        let got = out.text.matches(o.as_str()).count();
+        if got != *n {
+            errs.push(format!("{f}: 出力の {o:?} が {got} 回（期待 {n} 回）"));
         }
     }
     errs
@@ -226,6 +302,7 @@ mod tests {
 
     const PROBE: &str = "tests/verus-probes/simple_pptr.rs";
     const REJECTED: &str = "tests/verus-probes/assume_specification_duplicate.rs";
+    const JSON_FAILURE: &str = "tests/verus-probes/json_output_failure.rs";
 
     /// 期待どおりの結果を返す偽の Verus。期待は `original` から読む（壊す前の実ファイル）。
     fn consistent(original: &str) -> impl Fn(&str, &[String]) -> Result<Outcome, String> + use<> {
@@ -236,9 +313,16 @@ mod tests {
                 Expect::Errors(a, b) => format!("verification results:: {a} verified, {b} errors"),
                 Expect::Rejected => "error: aborting".to_string(),
             };
+            let mut text = format!("{line}\n{}\n", probe.outputs.join("\n"));
+            for (n, o) in &probe.counts {
+                let have = text.matches(o.as_str()).count();
+                for _ in have..*n {
+                    text.push_str(&format!("{o}\n"));
+                }
+            }
             Ok(Outcome {
                 success: matches!(probe.expect, Expect::Verified(_)),
-                text: format!("{line}\n{}\n", probe.outputs.join("\n")),
+                text,
             })
         }
     }
@@ -339,6 +423,57 @@ mod tests {
         t.write("tests/verus-probes/notes.md", "# x\n");
         let fake = consistent(&real(PROBE));
         assert_fails(&t.run_ref(|repo| run_with(repo, &fake)), "notes.md");
+    }
+
+    #[test]
+    fn fails_when_a_failing_probe_has_no_expected_output() {
+        let src = real(REJECTED);
+        let line = src
+            .lines()
+            .find(|l| l.starts_with("// expect-output: "))
+            .unwrap();
+        let broken = mutate(&src, &format!("{line}\n"), "");
+        assert_fails(
+            &run_one(REJECTED, &broken, &src),
+            "`// expect-output: ..` が要ります",
+        );
+    }
+
+    #[test]
+    fn fails_on_a_directive_outside_the_header() {
+        let src = real(PROBE);
+        let broken = mutate(
+            &src,
+            "// expect: verified 3\n",
+            "// expect: verified 3\n\n// expect-output: x\n",
+        );
+        assert_fails(&run_one(PROBE, &broken, &src), "ヘッダの外に指示があります");
+        let typo = mutate(
+            &src,
+            "// expect: verified 3\n",
+            "// expect: verified 3\n//expect-output: x\n",
+        );
+        assert_fails(&run_one(PROBE, &typo, &src), "ヘッダの外に指示があります");
+    }
+
+    #[test]
+    fn fails_when_an_output_count_changes() {
+        let src = real(JSON_FAILURE);
+        let broken = mutate(
+            &src,
+            "// expect-output-count: 1 json_output_failure::bad",
+            "// expect-output-count: 2 json_output_failure::bad",
+        );
+        assert_fails(
+            &run_one(JSON_FAILURE, &broken, &src),
+            "が 1 回（期待 2 回）",
+        );
+    }
+
+    #[test]
+    fn reads_escaped_newlines() {
+        assert_eq!(unescape("a\\nb\\\\c").unwrap(), "a\nb\\c");
+        assert!(unescape("a\\tb").is_err());
     }
 
     #[test]

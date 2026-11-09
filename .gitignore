@@ -1,5 +1,2 @@
 target/
 book/book/
-# Verus のクレートはルートのワークスペースの外にあり、依存は vstd の固定した版だけ（OPEN.md）。
-crates/ebykn_prelude/Cargo.lock
-tests/golden/*/expected/verus/Cargo.lock

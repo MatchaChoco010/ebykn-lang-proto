@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Verus で検証するクレート。`verus-verify` は各クレートを Verus で検証し、Verus なしの cargo でもビルドする。
+/// vstd に依存するクレートはすべてここに載せ、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
 pub const CRATES: &[&str] = &["crates/ebykn_prelude", "tests/golden/stack/expected/verus"];
 
 /// リリースの zip を展開してできるディレクトリ。
@@ -132,8 +133,40 @@ fn cache_dir(pin: &Pin) -> Result<PathBuf, String> {
     Ok(base.join("ebykn").join("verus").join(&pin.version))
 }
 
-/// 導入済みの Verus のディレクトリ（`verus` と `cargo-verus` がある）。印の sha256 が固定値と違えば失敗にする。
+/// 導入済みの Verus のディレクトリ（`verus` と `cargo-verus` がある）。
+///
+/// 印の sha256 が固定値と違うとき、`verus --version` の版・コミット・toolchain が固定値と合わないとき
+/// （キャッシュの中身が差し替わった、toolchain が入っていない）は失敗にする。
 pub fn installed(pin: &Pin) -> Result<PathBuf, String> {
+    let bin = unpacked(pin)?;
+    let out = Command::new(bin.join("verus"))
+        .args(["--version", "--output-json"])
+        .env("RUSTUP_TOOLCHAIN", &pin.toolchain)
+        .output()
+        .map_err(|e| format!("verus を起動できません: {e}"))?;
+    check_version(&String::from_utf8_lossy(&out.stdout), pin)?;
+    Ok(bin)
+}
+
+/// `verus --version --output-json` の出力が固定値の版・コミット・toolchain を含む。
+fn check_version(text: &str, pin: &Pin) -> Result<(), String> {
+    for (key, want) in [
+        ("version", &pin.version),
+        ("commit", &pin.commit),
+        ("toolchain", &pin.toolchain),
+    ] {
+        let line = format!("\"{key}\": \"{want}");
+        if !text.contains(&line) {
+            return Err(format!(
+                "verus --version の {key} が固定値 {want} ではありません。`cargo xtask verus-install` で入れ直してください:\n{text}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 展開済みの Verus のディレクトリ。印の sha256 が固定値と違えば失敗にする。
+fn unpacked(pin: &Pin) -> Result<PathBuf, String> {
     let dir = cache_dir(pin)?;
     let marker = std::fs::read_to_string(dir.join(MARKER)).unwrap_or_default();
     let bin = dir.join(UNPACKED);
@@ -194,7 +227,7 @@ pub fn install(root: &Path) -> bool {
 fn try_install(root: &Path) -> Result<PathBuf, String> {
     let pin = root_pin(root)?;
     let dir = cache_dir(&pin)?;
-    if installed(&pin).is_err() {
+    if unpacked(&pin).is_err() {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let zip = dir.join(&pin.asset);
@@ -230,21 +263,7 @@ fn try_install(root: &Path) -> Result<PathBuf, String> {
         "--profile",
         "minimal",
     ]))?;
-    let bin = installed(&pin)?;
-    let version = Command::new(bin.join("verus"))
-        .args(["--version", "--output-json"])
-        .env("RUSTUP_TOOLCHAIN", &pin.toolchain)
-        .output()
-        .map_err(|e| format!("verus を起動できません: {e}"))?;
-    let text = String::from_utf8_lossy(&version.stdout);
-    for want in [&pin.version, &pin.commit, &pin.toolchain] {
-        if !text.contains(want.as_str()) {
-            return Err(format!(
-                "verus --version の出力に {want} がありません:\n{text}"
-            ));
-        }
-    }
-    Ok(bin)
+    installed(&pin)
 }
 
 /// cargo を子として呼ぶとき、xtask を起動した cargo の環境を引き継がない。
@@ -281,6 +300,17 @@ fn package_name(dir: &Path) -> Result<String, String> {
         }
     }
     Err("Cargo.toml の [package] に name がありません".to_string())
+}
+
+/// `cargo verus` の結果を判定する。結果の行があり、0 errors で、1 件以上を検証し、終了コードが 0 のときだけ通す。
+pub fn judge(results: Option<(u64, u64)>, success: bool) -> Result<u64, String> {
+    match results {
+        Some((n, 0)) if success && n > 0 => Ok(n),
+        Some((0, 0)) => Err("何も検証していません（0 verified）".to_string()),
+        Some((_, 0)) => Err("0 errors なのに終了コードが 0 ではありません".to_string()),
+        Some((n, e)) => Err(format!("{n} verified, {e} errors")),
+        None => Err("結果の行（verification results::）がありません".to_string()),
+    }
 }
 
 /// `verification results:: N verified, M errors` の N と M。
@@ -342,13 +372,13 @@ pub fn verify(root: &Path) -> bool {
         }
         let mut cmd = Command::new("cargo");
         clean_cargo(&mut cmd)
-            .args(["verus", "focus", "--target-dir"])
+            .args(["verus", "focus", "--locked", "--target-dir"])
             .arg(root.join("target/verus"))
             .args(["--", "--no-cheating", "--triggers-mode", "silent"])
             .current_dir(&dir)
             .env("PATH", &path)
             .env("RUSTUP_TOOLCHAIN", &pin.toolchain);
-        eprintln!("$ (cd {krate} && cargo verus focus -- --no-cheating)");
+        eprintln!("$ (cd {krate} && cargo verus focus --locked -- --no-cheating)");
         let out = match cmd.output() {
             Ok(o) => o,
             Err(e) => {
@@ -362,13 +392,11 @@ pub fn verify(root: &Path) -> bool {
             String::from_utf8_lossy(&out.stderr)
         );
         eprint!("{text}");
-        match results_line(&text) {
-            Some((n, 0)) if out.status.success() && n > 0 => {
-                eprintln!("ok: verus-verify: {krate}: {n} verified, 0 errors");
-            }
-            got => {
+        match judge(results_line(&text), out.status.success()) {
+            Ok(n) => eprintln!("ok: verus-verify: {krate}: {n} verified, 0 errors"),
+            Err(e) => {
                 eprintln!(
-                    "error: verus-verify: {krate}: 検証が通りません（結果 {got:?}、終了 {}）",
+                    "error: verus-verify: {krate}: 検証が通りません（{e}、終了 {}）",
                     out.status
                 );
                 ok = false;
@@ -378,7 +406,7 @@ pub fn verify(root: &Path) -> bool {
         // Verus なしの cargo（リポジトリの toolchain）でビルドできること。
         let mut plain = Command::new("cargo");
         clean_cargo(&mut plain)
-            .args(["build", "--quiet", "--target-dir"])
+            .args(["build", "--quiet", "--locked", "--target-dir"])
             .arg(root.join("target/verus-plain"))
             .current_dir(&dir);
         match run(&mut plain) {
@@ -431,6 +459,70 @@ mod tests {
             "release = \"release/1.",
         );
         assert!(read_pin(&broken).unwrap_err().contains("release"));
+    }
+
+    #[test]
+    fn passes_a_verified_crate() {
+        assert_eq!(judge(Some((5, 0)), true), Ok(5));
+    }
+
+    #[test]
+    fn fails_when_verification_has_errors() {
+        assert!(
+            judge(Some((4, 1)), false)
+                .unwrap_err()
+                .contains("4 verified, 1 errors")
+        );
+        assert!(judge(Some((4, 1)), true).is_err());
+    }
+
+    #[test]
+    fn fails_when_there_is_no_results_line() {
+        assert!(judge(None, true).unwrap_err().contains("結果の行"));
+    }
+
+    #[test]
+    fn fails_when_the_exit_code_is_not_zero() {
+        assert!(
+            judge(Some((5, 0)), false)
+                .unwrap_err()
+                .contains("終了コード")
+        );
+    }
+
+    #[test]
+    fn fails_when_nothing_is_verified() {
+        assert!(
+            judge(Some((0, 0)), true)
+                .unwrap_err()
+                .contains("0 verified")
+        );
+    }
+
+    fn version_output(pin: &Pin) -> String {
+        format!(
+            "{{\n  \"verus\": {{\n    \"version\": \"{}\",\n    \"toolchain\": \"{} (overridden by environment variable RUSTUP_TOOLCHAIN)\",\n    \"commit\": \"{}\"\n  }}\n}}\n",
+            pin.version, pin.toolchain, pin.commit
+        )
+    }
+
+    #[test]
+    fn accepts_the_pinned_version() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        assert_eq!(check_version(&version_output(&pin), &pin), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_the_installed_verus_is_another_version() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        let other = mutate(&version_output(&pin), &pin.commit, &"0".repeat(40));
+        assert!(check_version(&other, &pin).unwrap_err().contains("commit"));
+        let tc = mutate(
+            &version_output(&pin),
+            &pin.toolchain,
+            "1.98.0-x86_64-unknown-linux-gnu",
+        );
+        assert!(check_version(&tc, &pin).unwrap_err().contains("toolchain"));
     }
 
     #[test]

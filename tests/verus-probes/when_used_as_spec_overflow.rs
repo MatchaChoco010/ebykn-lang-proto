@@ -1,6 +1,7 @@
 // probe: 純粋関数の式をそのまま `fn` と `spec fn` に写すと、spec 側では u32 の算術が int になり型が合わない（`as` が要る）
 // expect: rejected
 // expect-output: mismatched types
+// expect-output: expected `u32`, found `int`
 use vstd::prelude::*;
 
 verus! {
