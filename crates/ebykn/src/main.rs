@@ -349,8 +349,8 @@ fn verify(
     if shown.iter().any(|s| s.status == "unknown") {
         say(
             opts,
-            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), an error could not be attributed to an item, or a proof assumption was smuggled in",
-            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、どの項目のものか決められないエラーがあるか、証明の前提が紛れ込んでいます",
+            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), an error points at these items only as a secondary label, an error could not be attributed to an item, or a proof assumption was smuggled in",
+            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、エラーが副のラベルでこの項目を指しているか、どの項目のものか決められないエラーがあるか、証明の前提が紛れ込んでいます",
         );
     }
     if !success {

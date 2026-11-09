@@ -119,6 +119,18 @@ pub enum Import {
     Glob { path: Vec<String> },
 }
 
+/// std の `Drop` の判定でパスを引いた結果（[`Index::find_ext`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ext {
+    Module(ItemPath),
+    /// クレートの定義（モジュールでないもの）。
+    Crate,
+    /// 外のクレートか std の prelude のパス（`use` の別名をたどった後）。
+    External(Vec<String>),
+    /// モジュールの中に見つからない。
+    NotFound,
+}
+
 /// 一つのモジュールの名前。
 #[derive(Debug, Clone, Default)]
 pub struct ModuleScope {
@@ -219,6 +231,9 @@ pub enum ImplTrait {
     Invariant,
     /// `impl View for T`。
     View,
+    /// std の `Drop`（`impl Drop for T`、`std::ops::Drop`・`core::ops::Drop` と、その `use` の別名）。
+    /// 書き下しが `fn drop` に `opens_invariants none` と `no_unwind` を足す（#61）。
+    Drop,
     /// それ以外のトレイト。
     Other,
     /// 最後の名前が `Invariant` / `View` で、`impl Invariant for T` の 1 つの書き方でないもの
@@ -551,7 +566,7 @@ impl Index {
                         ms.insert(info.name.clone(), info);
                     }
                 }
-                ImplTrait::Other | ImplTrait::Misspelled => {}
+                ImplTrait::Drop | ImplTrait::Other | ImplTrait::Misspelled => {}
             }
         }
     }
@@ -578,7 +593,115 @@ impl Index {
             // cfg で消えうるトレイトは、クレートの定義として数えない（消えれば prelude に解決する）。
             Resolved::Type(p) if !self.is_gated(&p) => ImplTrait::Other,
             _ if ebykn => ImplTrait::Misspelled,
+            Resolved::Unknown if self.is_std_drop(module, t) => ImplTrait::Drop,
             _ => ImplTrait::Other,
+        }
+    }
+
+    /// トレイトのパスが std の `Drop` か。`use` の別名・glob の `use`・`pub use` の再公開をたどって外のパスに
+    /// なり、それが `Drop`（std の prelude）、`std::ops::Drop` / `core::ops::Drop`、
+    /// `std::prelude::<版>::Drop` のどれかなら std の `Drop`。
+    fn is_std_drop(&self, module: &[String], t: &ast::Path) -> bool {
+        if !t
+            .segments
+            .iter()
+            .all(|s| matches!(s.args, ast::GenericArgs::None))
+        {
+            return false;
+        }
+        let segs: Vec<String> = t.segments.iter().map(|s| s.ident.name.clone()).collect();
+        // `::a::b` は外のクレートのパス。
+        let found = if t.leading_colon {
+            Ext::External(segs)
+        } else {
+            self.find_ext(module, &segs, true, 0)
+        };
+        let Ext::External(p) = found else {
+            return false;
+        };
+        let p: Vec<&str> = p.iter().map(String::as_str).collect();
+        match p.as_slice() {
+            ["std" | "core", "ops", "Drop"] => true,
+            [
+                "std" | "core",
+                "prelude",
+                "v1" | "rust_2015" | "rust_2018" | "rust_2021" | "rust_2024",
+                "Drop",
+            ] => true,
+            // `::Drop` は外のクレートの名前で、prelude の `Drop` ではない。
+            ["Drop"] => !t.leading_colon,
+            _ => false,
+        }
+    }
+
+    /// パス `segs` をモジュール `m` から引く（std の `Drop` の判定に使う）。`use` の別名、glob の `use`
+    /// （その先の `use` も）、`crate` / `self` / `super` をたどる。`root` は、パスの先頭（どこにもなければ
+    /// 外のクレートか std の prelude の名前）か。モジュールの中をたどる途中なら、見つからないのは `NotFound`。
+    fn find_ext(&self, m: &[String], segs: &[String], root: bool, depth: usize) -> Ext {
+        let Some(first) = segs.first() else {
+            return Ext::Module(m.to_vec());
+        };
+        if depth > 32 {
+            return Ext::NotFound;
+        }
+        let rest = &segs[1..];
+        let into = |r: Ext| match r {
+            Ext::Module(p) if !rest.is_empty() => self.find_ext(&p, rest, false, depth + 1),
+            Ext::External(mut p) => {
+                p.extend(rest.iter().cloned());
+                Ext::External(p)
+            }
+            r => r,
+        };
+        match first.as_str() {
+            "crate" if root => return into(Ext::Module(Vec::new())),
+            "self" if root => return into(Ext::Module(m.to_vec())),
+            "super" => {
+                let mut parent = m.to_vec();
+                if parent.pop().is_none() {
+                    return Ext::NotFound;
+                }
+                let chain = rest.first().is_some_and(|s| s == "super");
+                return if rest.is_empty() {
+                    Ext::Module(parent)
+                } else {
+                    self.find_ext(&parent, rest, chain, depth + 1)
+                };
+            }
+            // `Self` と prelude（`ebykn_prelude`）は std の `Drop` ではない。
+            "Self" | "ebykn_prelude" => return Ext::Crate,
+            _ => {}
+        }
+        let Some(scope) = self.modules.get(m) else {
+            return Ext::NotFound;
+        };
+        if let Some(p) = scope.items.get(first) {
+            return into(match self.kinds.get(p) {
+                Some(DefKind::Module) => Ext::Module(p.clone()),
+                _ => Ext::Crate,
+            });
+        }
+        for imp in &scope.imports {
+            if let Import::Name { alias, path } = imp
+                && alias == first
+            {
+                return into(self.find_ext(m, path, true, depth + 1));
+            }
+        }
+        for imp in &scope.imports {
+            if let Import::Glob { path } = imp
+                && let Ext::Module(g) = self.find_ext(m, path, true, depth + 1)
+            {
+                match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
+                    Ext::NotFound => {}
+                    r => return into(r),
+                }
+            }
+        }
+        if root {
+            into(Ext::External(vec![first.clone()]))
+        } else {
+            Ext::NotFound
         }
     }
 

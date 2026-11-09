@@ -8,6 +8,7 @@ use ebykn_check::{Checked, sort_diags};
 use ebykn_syntax::diag::{Diagnostic, Lang};
 
 pub mod no_cheating;
+pub mod sites;
 pub mod sync;
 pub mod verify;
 pub mod verus;
