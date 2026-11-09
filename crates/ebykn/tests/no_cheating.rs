@@ -83,6 +83,7 @@ fn smuggled_assumptions_fail_verify() {
         &output,
         &got.run.locations(),
         got.run.checked.as_ref(),
+        got.run.failed.as_ref(),
         got.summary,
         false,
     );

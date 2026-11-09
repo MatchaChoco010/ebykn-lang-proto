@@ -282,6 +282,7 @@ error: could not compile `smuggled` (lib) due to 5 previous errors
             results: None,
             errors,
             checked: None,
+            failed: None,
             compiled: true,
         }
     }

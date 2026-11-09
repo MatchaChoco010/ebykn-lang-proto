@@ -17,7 +17,8 @@
 //! 割り当てられないエラーとして、失敗していない項目をすべて unknown にする）。
 //!
 //! Verus の `--output-json` の `func-details` は関数ごとの成否を持たない（失敗した関数も
-//! `failed_proof_notes` が空）ので、ブロックの行で決める。
+//! `failed_proof_notes` が空）ので、エラーの場所はブロックの行で決める。`--time` の関数ごとの成否
+//! （[`crate::verus::failed_functions`]）とは、[`crate::verus::statuses`] が突き合わせる（#79）。
 
 /// 呼び出し元の失敗の場所を示すラベル（失敗した呼び出しの位置）。`-` で描かれても失敗の場所にする。
 pub const BLAME_LABELS: &[&str] = &["at this call-site"];

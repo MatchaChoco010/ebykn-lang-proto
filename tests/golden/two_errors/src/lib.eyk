@@ -1,0 +1,5 @@
+// #79：一つの関数に Verus のエラーが 2 つある（`ensures` の 2 項が成り立たない）。Verus の `errors` は
+// 失敗した関数の数え方で 1 になり、エラーの見出しは 2 つ。Verus が通した `ok` は verified のまま。
+pub fn ok(x: u32) -> (r: u32) requires x <= 10, ensures r == x + 1, { x + 1 }
+
+pub fn bad(x: u32) -> (r: u32) ensures r == 1, r == 2, { x }
