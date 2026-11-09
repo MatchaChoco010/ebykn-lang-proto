@@ -584,6 +584,17 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
 * 状態：基準で決めた。
 
+### 生成クレートの成果物は `build/verus/target`
+
+`check`・`verify`・`build` が生成クレート（`build/verus/`）で走らせる cargo（`cargo metadata`、`cargo clean -p`、`cargo verus ...`）は、どれも `CARGO_TARGET_DIR` に `build/verus/target` の絶対パスを渡します。最終の成果物（`build` が作る実行ファイルなど）は、利用者の環境の `CARGO_TARGET_DIR` や、親のディレクトリの `.cargo/config.toml` の `build.target-dir` によらず、`build/verus/target` の下にできます（`cargo verus focus` の成果物は `build/verus/target/verus-partial`）。中間の成果物は、`build.build-dir` を設定すればその下に移ります。親の設定で移しても、`verify` と `build` の結果は設定のないときと同じです。
+
+- 置き場を cargo の設定に任せると、各実行の前の `cargo clean -p` が消す成果物と cargo が使う成果物が食い違います。前の成果物が残ると、cargo はクレートを作り直さず Verus を呼ばないので、`verify` の項目がすべて `unknown` になります。
+- cargo の呼び出しは `crates/ebykn/src/verus.rs` の `cargo` でだけ作ります（単体テストが数える）。置き場は `target_dir` の 1 か所で決め、`build` が示す置き場もそこから作ります。`build.target-dir` を設定した親の下（`build.build-dir` も設定したものと、しないもの）のプロジェクトで `verify` を 2 回と `build` を走らせ、`build` が示す置き場に成果物があることも確かめるテスト（`crates/ebykn/tests/target_dir.rs`。Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
+
+* 元の仕様：§9 は `build/verus/` に書き下すとするが、cargo の成果物の置き場を定めていない。
+* 根拠：#137（PR #146）。
+* 状態：基準で決めた。
+
 ### `ebykn sync` の決めごと
 
 `sync` は `proof/` の下の各 `.eykp` を、仕様 §9 のとおり `git merge-file` で更新します（`proof/<p>.eykp` ↔ `src/<p>.eyk` ↔ 基準 `.ebykn/sync/<p>.eyk`）。仕様が定めていない場合は、次のように扱います。

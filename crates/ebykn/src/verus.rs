@@ -245,9 +245,8 @@ impl Run {
 /// コードで使われる名前（改名と `[lib] name` を反映した名前）を [`parse_extern_crate_names`] で読む。
 /// 走らなければ `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
 pub fn cargo_metadata(verus: &Verus, build: &Path) -> Option<String> {
-    let out = Command::new("cargo")
-        .current_dir(build)
-        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+    let out = cargo(verus, build)
+        .ok()?
         .args(["metadata", "--format-version", "1", "--offline"])
         .output()
         .ok()?;
@@ -274,26 +273,37 @@ pub fn parse_extern_crate_names(json: &str) -> Option<Vec<String>> {
         .collect()
 }
 
+/// 生成クレートの成果物の置き場（`build/verus/target`）。[`cargo`] が `CARGO_TARGET_DIR` に渡すので、
+/// 利用者の `CARGO_TARGET_DIR` や、親の `.cargo/config.toml` の `build.target-dir` によらない（#137）。
+pub fn target_dir(build: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(build.join("target")).map_err(|e| format!("{}: {e}", build.display()))
+}
+
+/// 生成クレート（`build`）で走らせる cargo。cargo の呼び出しはここでだけ作る（テストが数える）。
+///
+/// `ebykn` を起動した cargo の環境（`cargo run` や `cargo test` から呼ばれたとき）を引き継がず、
+/// 固定した toolchain で走らせ、成果物を [`target_dir`] に置かせる。`CARGO_TARGET_DIR` は
+/// `.cargo/config.toml` の `build.target-dir` より優先する。置き場を cargo の設定に任せると、
+/// [`run`] が消す成果物と cargo が使う成果物が食い違い、cargo が Verus を呼ばなくなる。
+fn cargo(verus: &Verus, build: &Path) -> Result<Command, String> {
+    let mut cmd = Command::new("cargo");
+    for v in ["CARGO", "RUSTC", "RUSTDOC", "CARGO_MANIFEST_DIR"] {
+        cmd.env_remove(v);
+    }
+    cmd.current_dir(build)
+        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+        .env("CARGO_TARGET_DIR", target_dir(build)?);
+    Ok(cmd)
+}
+
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let path = std::env::join_paths(std::iter::once(verus.dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("cargo");
-    for v in [
-        "CARGO",
-        "RUSTC",
-        "RUSTDOC",
-        "CARGO_TARGET_DIR",
-        "CARGO_MANIFEST_DIR",
-    ] {
-        cmd.env_remove(v);
-    }
+    let mut cmd = cargo(verus, build)?;
     // 診断の位置を読むので、色の制御文字を出させない（CI は `CARGO_TERM_COLOR=always`）。
-    cmd.current_dir(build)
-        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
-        .env("CARGO_TERM_COLOR", "never")
-        .env("PATH", path);
+    cmd.env("CARGO_TERM_COLOR", "never").env("PATH", path);
     match mode {
         Mode::NoVerify => cmd.args(["verus", "focus", "--", "--no-verify"]),
         Mode::Verify => cmd.args([
@@ -309,24 +319,22 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         Mode::NoCheating => cmd.args(["verus", "focus", "--", "--no-cheating", "--no-verify"]),
     };
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
-    // `cargo verus focus` は `target/verus-partial` にも成果物を置く。
+    // `cargo verus focus` は target-dir の下の `verus-partial` にも成果物を置く。
     let name = package_name(build).unwrap_or_default();
+    let target = target_dir(build)?;
     // 消せなければ、前の結果を今の結果と取り違えるおそれがあるので止める。
-    for target in ["target", "target/verus-partial"] {
-        let args = ["clean", "--quiet", "-p", &name, "--target-dir", target];
-        let out = Command::new("cargo")
-            .current_dir(build)
-            .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
-            .args(args)
+    for dir in [target.clone(), target.join("verus-partial")] {
+        let shown = format!(
+            "cargo clean --quiet -p {name} --target-dir {}",
+            dir.display()
+        );
+        let out = cargo(verus, build)?
+            .args(["clean", "--quiet", "-p", &name, "--target-dir"])
+            .arg(&dir)
             .output()
-            .map_err(|e| cannot_run(&format!("cargo {}", args.join(" ")), &e, verus.lang))?;
+            .map_err(|e| cannot_run(&shown, &e, verus.lang))?;
         if !out.status.success() {
-            return Err(command_failed(
-                &format!("cargo {}", args.join(" ")),
-                build,
-                &out,
-                verus.lang,
-            ));
+            return Err(command_failed(&shown, build, &out, verus.lang));
         }
     }
     let out = cmd
@@ -912,6 +920,156 @@ pub fn status_text(
 mod tests {
     use super::*;
     use ebykn_syntax::diag::Lang;
+
+    #[test]
+    fn cargo_puts_artifacts_under_the_build_dir() {
+        let verus = Verus {
+            dir: PathBuf::from("/verus"),
+            pin: verus_pin(),
+            lang: Lang::En,
+        };
+        let build = Path::new("rel/build/verus");
+        let cmd = cargo(&verus, build).unwrap();
+        let env = |k: &str| {
+            cmd.get_envs()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.map(PathBuf::from))
+        };
+        // 親の `.cargo/config.toml` の `build.target-dir` より優先する環境変数で、絶対パスを渡す（#137）。
+        let target = env("CARGO_TARGET_DIR").flatten().expect("CARGO_TARGET_DIR");
+        assert!(target.is_absolute(), "{}", target.display());
+        assert!(
+            target.ends_with("rel/build/verus/target"),
+            "{}",
+            target.display()
+        );
+        assert_eq!(target, target_dir(build).unwrap());
+        for v in ["CARGO", "RUSTC", "RUSTDOC", "CARGO_MANIFEST_DIR"] {
+            assert_eq!(env(v), Some(None), "{v} を外していない");
+        }
+        assert_eq!(
+            env("RUSTUP_TOOLCHAIN").flatten(),
+            Some(PathBuf::from(&verus.pin.toolchain))
+        );
+        assert_eq!(cmd.get_current_dir(), Some(build));
+    }
+
+    /// `root` の下の `.rs`（サブディレクトリも）を、`root` からのパスと中身の組で読む。
+    fn sources_under(root: &Path) -> Vec<(String, String)> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, base, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.push((rel, std::fs::read_to_string(&path).unwrap()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out.sort();
+        out
+    }
+
+    fn crate_sources() -> Vec<(String, String)> {
+        sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+    }
+
+    /// cargo の呼び出し（`Command::new("cargo")`）が、テストの外では `verus.rs` の `fn cargo(` の中の
+    /// 1 か所だけか。`cargo` を通らない呼び出しは、成果物の置き場を cargo の設定に任せてしまう（#137）。
+    fn cargo_only_in_helper(files: &[(String, String)]) -> Result<(), String> {
+        let needle = ["Command::new(", "\"cargo\")"].concat();
+        let mut found = Vec::new();
+        for (rel, text) in files {
+            let body = text
+                .split_once("\n#[cfg(test)]\nmod tests {")
+                .map_or(text.as_str(), |(b, _)| b);
+            for (at, _) in body.match_indices(needle.as_str()) {
+                found.push((rel.as_str(), body, at));
+            }
+        }
+        let [(rel, body, at)] = found[..] else {
+            let at: Vec<&str> = found.iter().map(|(r, _, _)| *r).collect();
+            return Err(format!("cargo の呼び出しが 1 か所でない: {at:?}"));
+        };
+        if rel != "verus.rs" {
+            return Err(format!("cargo の呼び出しが verus.rs の外にある: {rel}"));
+        }
+        match body[..at].rfind("\nfn ") {
+            Some(def) if body[def..].starts_with("\nfn cargo(") => Ok(()),
+            _ => Err("cargo の呼び出しが fn cargo の中にない".into()),
+        }
+    }
+
+    /// `from` を `to` に置き換える。壊す操作が当たったことを先に確かめる。
+    fn mutate(src: &str, from: &str, to: &str) -> String {
+        assert!(src.contains(from), "壊す操作が当たらない: {from:?}");
+        let out = src.replacen(from, to, 1);
+        assert_ne!(out, src);
+        out
+    }
+
+    #[test]
+    fn cargo_is_called_only_in_the_cargo_helper() {
+        let files = crate_sources();
+        assert!(files.iter().any(|(r, _)| r == "verus.rs"), "{files:?}");
+        assert_eq!(cargo_only_in_helper(&files), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_cargo_is_called_outside_the_cargo_helper() {
+        let files = crate_sources();
+        let stray = "\nfn stray() -> Command {\n    Command::new(\"cargo\")\n}\n";
+        let with = |rel: &str, edit: &dyn Fn(&str) -> String| -> Vec<(String, String)> {
+            let mut f = files.clone();
+            let e = f.iter_mut().find(|(r, _)| r == rel).expect(rel);
+            e.1 = edit(&e.1);
+            f
+        };
+        // ほかのファイルの呼び出し。
+        let other = with("sync.rs", &|t| {
+            mutate(t, "\nuse ", &format!("{stray}\nuse "))
+        });
+        assert!(cargo_only_in_helper(&other).is_err());
+        // サブディレクトリのファイルの呼び出し：実際のディレクトリを読み、sources_under が拾うこと。
+        let dir = std::env::temp_dir().join(format!("ebykn-cargo-calls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in &files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        assert_eq!(cargo_only_in_helper(&sources_under(&dir)), Ok(()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(
+            dir.join("sub/mod.rs"),
+            format!("use std::process::Command;{stray}"),
+        )
+        .unwrap();
+        let sub = sources_under(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(sub.iter().any(|(r, _)| r == "sub/mod.rs"), "{sub:?}");
+        assert!(cargo_only_in_helper(&sub).is_err());
+        // verus.rs の中でも、fn cargo の外の呼び出し。
+        let outside = with("verus.rs", &|t| {
+            mutate(t, "\npub fn run(", &format!("{stray}\npub fn run("))
+        });
+        assert!(cargo_only_in_helper(&outside).is_err());
+        // fn cargo の中の呼び出しを、別の名前の関数に移したもの。
+        let renamed = with("verus.rs", &|t| mutate(t, "\nfn cargo(", "\nfn cargo_any("));
+        assert!(cargo_only_in_helper(&renamed).is_err());
+        // テストの中の呼び出しは数えない。
+        let in_tests = with("verus.rs", &|t| {
+            mutate(t, "\nmod tests {\n", &format!("\nmod tests {{\n{stray}"))
+        });
+        assert_eq!(cargo_only_in_helper(&in_tests), Ok(()));
+    }
 
     #[test]
     fn relative_paths() {

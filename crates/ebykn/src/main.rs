@@ -256,7 +256,14 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
     }
     // 検証していないことを、成功の行で必ず断る（ビルドできたことを verified と取り違えない）。
     // 実行ファイルがあればそれを、ライブラリだけならその置き場所を示す。
-    let target = build.join("target/debug");
+    // 置き場は `cargo verus build` に渡したのと同じ（`verus::target_dir`）。
+    let target = match ebykn::verus::target_dir(&build) {
+        Ok(t) => t.join("debug"),
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let out = if output.files.iter().any(|f| f.rel == "src/main.rs") {
         target.join(&report.project.manifest.name)
     } else {
