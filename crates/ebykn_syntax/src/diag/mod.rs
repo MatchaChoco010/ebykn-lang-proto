@@ -225,10 +225,21 @@ pub enum Message {
 pub enum BindingForm {
     /// 名前を書いて束縛する（`let r#type`、引数、量化子の変数、戻り値の名前など）。
     Name,
-    /// 構造体のパターンの省略形（`S { r#type }`）。フィールドの名前で束縛する。
-    Shorthand,
+    /// 構造体のパターンの省略形（`S { r#type }`、`S { ref mut r#type }`）。フィールドの名前で束縛する。
+    /// 案内で `ref` / `mut` を落とさないよう、付いていたかを持つ。
+    Shorthand { by_ref: bool, mutable: bool },
     /// 消去フィールドのパターン（`S { @r#type }`）。別の名前で束縛する書き方がない。
     Erased,
+}
+
+/// 省略形の束縛に付いていた `ref` / `mut` を、案内の書き方の前に付ける形にする。
+fn shorthand_modes(by_ref: bool, mutable: bool) -> &'static str {
+    match (by_ref, mutable) {
+        (true, true) => "ref mut ",
+        (true, false) => "ref ",
+        (false, true) => "mut ",
+        (false, false) => "",
+    }
 }
 
 /// [`Message::Expected`] の対象。
@@ -447,11 +458,12 @@ impl Message {
             (Message::RawKeywordBinding { word, form }, En) => {
                 let fix = match form {
                     BindingForm::Name => format!("use another name such as `{word}_`"),
-                    BindingForm::Shorthand => {
-                        format!("bind the field to another name, such as `r#{word}: {word}_`")
-                    }
+                    BindingForm::Shorthand { by_ref, mutable } => format!(
+                        "bind the field to another name, such as `r#{word}: {}{word}_`",
+                        shorthand_modes(*by_ref, *mutable)
+                    ),
                     BindingForm::Erased => format!(
-                        "an erased field pattern binds the field's own name, so rename the field, or read it as `x@r#{word}` without binding it"
+                        "an erased field pattern binds the field's own name; for a `spec` field, leave it out of the pattern with `@..` and read it from the struct value, such as `s@r#{word}`; for an `owns` field, rename the field"
                     ),
                 };
                 format!(
@@ -461,11 +473,12 @@ impl Message {
             (Message::RawKeywordBinding { word, form }, Ja) => {
                 let fix = match form {
                     BindingForm::Name => format!("`{word}_` などの別の名前を使います"),
-                    BindingForm::Shorthand => {
-                        format!("`r#{word}: {word}_` のように、別の名前で束縛します")
-                    }
+                    BindingForm::Shorthand { by_ref, mutable } => format!(
+                        "`r#{word}: {}{word}_` のように、別の名前で束縛します",
+                        shorthand_modes(*by_ref, *mutable)
+                    ),
                     BindingForm::Erased => format!(
-                        "消去フィールドのパターンはフィールドの名前で束縛するので、フィールドの名前を変えるか、束縛せずに `x@r#{word}` で読みます"
+                        "消去フィールドのパターンはフィールドの名前で束縛します。`spec` フィールドなら、パターンでは `@..` で外し、構造体の値から `s@r#{word}` のように読みます。`owns` フィールドなら、フィールドの名前を変えます"
                     ),
                 };
                 format!(

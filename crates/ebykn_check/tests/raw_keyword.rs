@@ -128,10 +128,28 @@ fn says_what_to_write_for_each_form() {
         "E0103",
         "such as `r#type: type_`",
     );
+    // `ref` / `mut` を落とさずに案内する（落とすと借用が移動に変わる）。
     rejects(
-        "pub struct S { pub x: u64 } spec { r#type: int }\npub fn f(s: S) { let S { x, @r#type } = s; }",
+        &format!("{s}pub fn f(s: &S) -> u64 {{ let S {{ ref r#type }} = s; *r#type }}"),
         "E0103",
-        "rename the field, or read it as `x@r#type`",
+        "such as `r#type: ref type_`",
+    );
+    rejects(
+        &format!("{s}pub fn f(s: S) {{ let S {{ ref r#type, @g }} = s; }}"),
+        "E0103",
+        "such as `r#type: ref type_`",
+    );
+    rejects(
+        &format!(
+            "{s}pub fn f(s: S) -> u64 {{ let S {{ mut r#type, @g }} = s; r#type = 1; r#type }}"
+        ),
+        "E0103",
+        "such as `r#type: mut type_`",
+    );
+    rejects(
+        "pub struct S { pub a: u64 } spec { r#type: int }\npub fn f(s: S) { let S { a, @r#type } = s; }",
+        "E0103",
+        "for a `spec` field, leave it out of the pattern with `@..` and read it from the struct value, such as `s@r#type`; for an `owns` field, rename the field",
     );
 }
 

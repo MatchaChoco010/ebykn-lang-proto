@@ -1092,7 +1092,16 @@ fn pat_as(p: syn::Pat, form: BindingForm) -> ast::Pat {
         syn::Pat::Ident(i) => P::Ident {
             by_ref: i.by_ref.is_some(),
             mutable: i.mutability.is_some(),
-            ident: binding_as(&i.ident, form),
+            ident: binding_as(
+                &i.ident,
+                match form {
+                    BindingForm::Shorthand { .. } => BindingForm::Shorthand {
+                        by_ref: i.by_ref.is_some(),
+                        mutable: i.mutability.is_some(),
+                    },
+                    f => f,
+                },
+            ),
             sub: i.subpat.map(|(_, s)| Box::new(pat(*s))),
         },
         syn::Pat::Wild(_) => P::Wild,
@@ -1124,7 +1133,11 @@ fn pat_as(p: syn::Pat, form: BindingForm) -> ast::Pat {
                     let span = span_of(&f);
                     let shorthand = f.colon_token.is_none();
                     let form = if shorthand {
-                        BindingForm::Shorthand
+                        // `ref` / `mut` は `pat_as` が名前のパターンから読む。
+                        BindingForm::Shorthand {
+                            by_ref: false,
+                            mutable: false,
+                        }
                     } else {
                         BindingForm::Name
                     };
@@ -1190,7 +1203,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                         // 省略形（`S { r#type, @g }`）はフィールドの名前で局所の名前を束縛する（#119）。
                         let bound = match (&m, &p) {
                             (syn::Member::Named(i), None) => {
-                                Some(binding_as(i, BindingForm::Shorthand))
+                                Some(binding_as(i, BindingForm::Shorthand { by_ref, mutable }))
                             }
                             _ => None,
                         };
