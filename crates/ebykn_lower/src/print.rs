@@ -336,7 +336,7 @@ mod tests {
             "fn f(x: u64) -> (r: u64) requires x > 0, ensures r ==> x <==> y, { let a = x; a }",
         );
         same_tokens(
-            "proof { self.nodes.borrow_mut().insert(__eyk_perm_n); } let x = self.order@.first_opt(); a - -b; & &x; x::<Vec<u8>>()",
+            "proof { self.nodes.borrow_mut().insert(__eyk_perm_n); } let x = self.order@.get(0); a - -b; & &x; x::<Vec<u8>>()",
         );
         let out = round("let x = a==>b;");
         assert!(out.contains("a ==> b"), "{out}");

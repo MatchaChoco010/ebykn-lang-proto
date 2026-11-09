@@ -1,4 +1,6 @@
-//! `Seq` の拡張（spec）。vstd にあるもの（`index_of`、`no_duplicates`、`remove`）は重複させない。
+//! `Seq` の拡張（spec）。vstd にあるもの（`index_of`、`no_duplicates`、`remove`、`first`、`last`）は
+//! 重複させない。`first()` / `last()` は vstd の意味（空でないことを前提に要素を返す）に従う（#11 の
+//! 決定：案 B）。`Option` が要るときは `get(0)` / `get(len - 1)` を使う。
 
 use vstd::prelude::*;
 
@@ -7,12 +9,6 @@ verus! {
 pub trait SeqExt<A>: Sized {
     /// `0 <= i < len` なら `Some(self[i])`、それ以外は `None`。
     spec fn get(self, i: int) -> Option<A>;
-
-    /// 先頭の要素。空なら `None`（vstd の `first()` は空でないことを前提に `A` を返す）。
-    spec fn first_opt(self) -> Option<A>;
-
-    /// 末尾の要素。空なら `None`。
-    spec fn last_opt(self) -> Option<A>;
 }
 
 impl<A> SeqExt<A> for Seq<A> {
@@ -22,14 +18,6 @@ impl<A> SeqExt<A> for Seq<A> {
         } else {
             None
         }
-    }
-
-    open spec fn first_opt(self) -> Option<A> {
-        self.get(0)
-    }
-
-    open spec fn last_opt(self) -> Option<A> {
-        self.get(self.len() - 1)
     }
 }
 

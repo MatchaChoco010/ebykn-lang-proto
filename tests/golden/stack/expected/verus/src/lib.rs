@@ -12,6 +12,8 @@ verus! {
 // 除いたもの。そのため `push` / `pop` は検証を通らない（`expected/status.txt`）。
 // ほかに変えたのは、先頭の `use`（#16）、`and { }` の括弧、範囲の束縛子の型（`forall|i: int|`）。
 // 表の形どおりでは通らず形を変えた箇所は `OPEN.md` に記録してある。
+// `.eyk` は、付録 B の不変条件の `self.head == self@order.first()` を、vstd の `first()`（要素を返す）の
+// 意味で正しい `self.head == self@order.get(0)` に書き直したもの（#11 の決定：案 B）。
 
 pub struct Node<T> {
     pub val: T,
@@ -27,7 +29,7 @@ pub struct Stack<T> {
 impl<T> Stack<T> {
     pub closed spec fn invariant(&self) -> bool {
         (((forall|p| self.order@.contains(p) ==> self.nodes@.contains(p))) && (self.head
-            == self.order@.first_opt()) && ((forall|i: int|
+            == self.order@.get(0)) && ((forall|i: int|
             0 <= i < self.order@.len() ==> self.nodes@.index(self.order@[i]).next
                 == self.order@.get(i + 1))))
     }

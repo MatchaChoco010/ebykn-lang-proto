@@ -160,8 +160,6 @@ pub enum Unimpl {
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
     NestedAssumption,
-    /// 論理文脈の、中を読まないマクロの引数の中の `.first()` / `.last()`（#11 の置き換えが届かない）。
-    MacroFirstLast,
     /// 関数の本体の中の `cfg!` と `#[cfg(..)]`（#27 の既定 B）。
     CfgInBody,
     /// std のマクロの引数の中の属性（トークンのまま持つので検査できない。#28）。
@@ -262,12 +260,6 @@ impl Unimpl {
             }
             (Unimpl::CfgInBody, Lang::Ja) => {
                 "関数の中（文・式・match の腕・欄・引数）の `cfg!` と `#[cfg(..)]` はまだ扱えません。Verus が検証するコードと Verus なしでビルドするコードが食い違いうるためです。条件付きのコードは別の項目に分けます"
-            }
-            (Unimpl::MacroFirstLast, Lang::En) => {
-                "`.first()` / `.last()` in the arguments of this macro in a logical context are not supported yet (Ebykn does not read them, so they would mean vstd's `first` instead of `first_opt`); compute the value outside the macro"
-            }
-            (Unimpl::MacroFirstLast, Lang::Ja) => {
-                "論理文脈のこのマクロの引数の中の `.first()` / `.last()` はまだ扱えません（Ebykn が読まないので、`first_opt` ではなく vstd の `first` の意味になります）。値はマクロの外で求めます"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"

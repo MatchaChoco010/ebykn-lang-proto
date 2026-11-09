@@ -4,7 +4,7 @@ pub struct Stack<T> { head: Option<Ptr<Node<T>>> } owns { nodes: Region<Ptr<Node
 impl<T> Invariant for Stack<T> {
     closed spec fn invariant(&self) -> bool = and {
         forall p in self@order, self@nodes.contains(p),
-        self.head == self@order.first(),
+        self.head == self@order.get(0),
         forall i in 0..self@order.len(), self@nodes[self@order[i]].next == self@order.get(i + 1),
     };
 }
