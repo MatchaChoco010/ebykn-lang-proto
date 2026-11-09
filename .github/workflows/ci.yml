@@ -1,9 +1,12 @@
 name: CI
 
+# develop への push は、リリースを切る前に develop の先頭が緑であることを確かめるため（ebykn-release スキル）。
+# PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない。
+# release は develop のコミットそのものなので足さない。
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, develop]
 
 concurrency:
   group: ci-${{ github.ref }}

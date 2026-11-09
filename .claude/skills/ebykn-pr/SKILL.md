@@ -1,11 +1,22 @@
 ---
 name: ebykn-pr
-description: ebykn-lang-proto で PR を作る手順。ゲートを通し、日本語の本文を yomiyasu（--doc-type pr）で推敲してから gh pr create し、CI が緑になるまで見届ける。PR を作るとき、PR 本文を書くときに使う。
+description: ebykn-lang-proto で PR を作る手順。ゲートを通し、日本語の本文を yomiyasu（--doc-type pr）で推敲してから develop へ gh pr create し、CI が緑になるまで見届ける。PR を作るとき、PR 本文を書くときに使う。
 ---
 
 # PR を作る
 
-前提：作業は orca のワークツリーで行い、1 つの Issue に 1 つの PR にする（AGENTS.md）。ワークツリー名は `<種類>-<Issue 番号>-<短い名前>` で、ブランチ名は orca が付ける `<GitHub ユーザー名>/<ワークツリー名>`（`git branch --show-current` で分かる）をそのまま使う。
+前提：作業は orca のワークツリーで行い、1 つの Issue に 1 つの PR にする（AGENTS.md）。ワークツリーの元は `origin/develop`、ワークツリー名は `<種類>-<Issue 番号>-<短い名前>`。
+
+## 0. ブランチ名を変える
+
+orca はブランチ名に `<GitHub ユーザー名>/` を付けるので、作業の最初に `feature/<Issue 番号>-<短い名前>` に変える。
+
+```bash
+git log -1 --oneline; git log -1 --oneline origin/develop   # 元が origin/develop か確かめる
+git branch -m feature/<Issue 番号>-<短い名前>
+```
+
+`main`・`release`・`develop` には直接コミットしない。
 
 ## 1. ゲートを通す
 
@@ -24,15 +35,19 @@ cargo xtask ci
 - 決めた既定と理由（あれば）。`OPEN.md` や `needs review` の Issue に記録したものは番号を挙げる。
 - 関連 Issue。`Closes #N` で紐づける。閉じない Issue は閉じる動詞の後に `#N` を書かない。
 
+本文は、リリースの報告スライドを作るときにも読まれる。何を直したか・足したか、なぜ必要だったかを、文脈を知らない人にも分かるように書く。
+
 ## 3. yomiyasu で推敲する（必須）
 
 `yomiyasu:yomiyasu` スキルを呼び、PR 向けの設定 `--doc-type pr` で推敲する。スキルの手順どおり lint → 書き直し → `run --final <ファイル> --doc-type pr` → `verify` まで通す。verify を通した最終稿は、そのあと変えない。
 
 ## 4. PR を作る
 
+ベースは `develop`。
+
 ```bash
-git push -u origin <ブランチ>
-gh pr create --base main --head <ブランチ> --title "<日本語の題>" --body-file <最終稿>
+git push -u origin feature/<Issue 番号>-<短い名前>
+gh pr create --base develop --head feature/<Issue 番号>-<短い名前> --title "<日本語の題>" --body-file <最終稿>
 ```
 
 ## 5. CI を見届ける
@@ -41,19 +56,10 @@ gh pr create --base main --head <ブランチ> --title "<日本語の題>" --bod
 gh pr checks <番号> --watch
 ```
 
-`ci-required` が緑になるまで、落ちたら直して push する。
+`ci-required` が緑になるまで、落ちたら直して push する。`develop` と衝突したら `develop` に rebase して push し直す（feature ブランチなので `--force-with-lease` でよい）。
 
 ## 6. マージしない
 
 ワーカーは PR をマージしない。PR の URL と CI の結果を報告して終える。
 
-マージはコーディネーター（main ワークスペース）が行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っておらず、作者の承認を待つ PR に当たらないものを squash でマージする。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。
-
-作者の承認を待つ PR：
-
-- `docs/ebykn-*.md`（思想・仕様・設計ノート）を変える。
-- 開発ルールを変える（`AGENTS.md`、`.claude/`、`.github/ISSUE_TEMPLATE/`、`.github/pull_request_template.md`）。
-- ゲートを弱める（`ci-required` から外す、ゲートを消す・緩める、対象外を足す）。
-- `needs review` の Issue に関わる。
-
-マージ後、コーディネーターはワーカーを release し、ワークツリーを削除し、リモートのブランチを消す。マイルストーンを閉じる前に、そのマイルストーンでマージした PR の一覧を作者に報告する。詳しくは AGENTS.md の「PR」の節。
+マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（取り込みのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。詳しくは AGENTS.md の「マージ」。

@@ -5,9 +5,11 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 要点：
 
 - 正典は `docs/` の 3 文書。仕様が最優先。矛盾と未決事項は `OPEN.md` に記録し、既定に従って進む。
-- 作業は orca のワークツリーで行う。main のワークスペースは指示を待つ。1 Issue に 1 PR。
+- ブランチは 3 本。すべての作業は `develop` に入り、`release` はリリースを切った時点の `develop`、`main` は作者が確かめたものだけ。
+- 作業は orca のワークツリーの `feature/<Issue 番号>-<短い名前>` で行い、`develop` に PR を出す。コーディネーターのワークスペースは指示を待つ。1 Issue に 1 PR。
 - 人間の判断が要るものは `needs review` の Issue にし、番号を報告する。自分で確定しない。
-- PR 本文は日本語で書き、yomiyasu で推敲してから投稿する。ワーカーは PR をマージしない。条件を満たす PR はコーディネーターが squash でマージし、開発ルールや仕様を変える PR などは作者の承認を待つ。
+- PR 本文は日本語で書き、yomiyasu で推敲してから投稿する。ワーカーは PR をマージしない。条件を満たす PR はコーディネーターが `develop` にマージする。作者の承認は待たない。
+- 作者はリリースごとの報告スライドであとから確かめ、`release` を `main` にマージする。問題が見つかったら、直す PR を `develop` に積む。
 - ゲートは、失敗できると示してから信用する。
 
 ## 正典と優先順位
@@ -26,9 +28,18 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 
 ## 作業の場所
 
-- main のワークスペースは、ユーザーの指示を受けるために待機させる。作業は orca のワークツリー（作業用ブランチ）で行う。
-- main で解決してよいのは、ブランチのマージで生じた問題のように main でしか解決できないものだけ。main に直接コミットしない。
-- orca のワークツリー名は `<種類>-<Issue 番号>-<短い名前>`（例：`harness-3-vibe-lang-structure`、`fix-12-linearity-loop`）。ブランチ名は orca が付ける `<GitHub ユーザー名>/<ワークツリー名>` をそのまま使う。
+| ブランチ | 中身 | 誰が入れるか |
+| --- | --- | --- |
+| `main` | 作者が確かめて承認したものだけ | 作者だけ。リリースの PR（`release` → `main`）をマージコミットでマージする |
+| `release` | リリースを切った時点の `develop` | コーディネーター。リリースを切るときに `develop` の先頭まで早送りするだけ |
+| `develop` | すべての作業が入る統合ブランチ | コーディネーター。作者の承認なしでマージする |
+| `feature/<Issue 番号>-<短い名前>` | 1 つの Issue の作業 | ワーカー。`develop` に PR を出す |
+
+- `main`・`release`・`develop` はずっと使い続け、履歴を書き換えない（force push しない）。どれにも直接コミットしない。
+- 問題が見つかったら、直す変更を新しい PR として `develop` の先頭に積む。過去の履歴は直さない。
+- コーディネーターのワークスペースは、ユーザーの指示を受けるために待機させる。作業は orca のワークツリーで行う。
+- orca のワークツリーの元は `origin/develop`。ワークツリー名は `<種類>-<Issue 番号>-<短い名前>`（例：`harness-3-vibe-lang-structure`、`fix-12-linearity-loop`）。
+- orca はブランチ名に `<GitHub ユーザー名>/` を付けるので、ワーカーは作業の最初にブランチ名を変える（`git branch -m feature/<Issue 番号>-<短い名前>`）。
 - 1 つの Issue に 1 つの PR。
 
 ## Issue
@@ -89,26 +100,43 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 1. `cargo xtask ci` を通す。
 2. PR 本文を日本語で書き、ファイルに保存する。変更点、確認したこと、決めた既定、関連 Issue（`Closes #N`）を書く。
 3. yomiyasu スキル（`yomiyasu:yomiyasu`）を呼び、PR 向けの設定（`--doc-type pr`）で推敲する。スキルの手順どおり lint → 書き直し → `run --final ... --doc-type pr` → `verify` まで通し、verify を通した最終稿を変えずに使う。推敲は必須。
-4. `gh pr create --base main --head <ブランチ> --title "<日本語の題>" --body-file <最終稿>`。
+4. `gh pr create --base develop --head feature/<Issue 番号>-<短い名前> --title "<日本語の題>" --body-file <最終稿>`。
 5. `gh pr checks <番号> --watch` で CI を見届ける。落ちたら直して push し、`ci-required` が緑になるまで繰り返す。
 6. ワーカーは PR をマージしない。マージは次の「マージ」に従ってコーディネーターが行う。
 
 ### マージ
 
-コーディネーター（main ワークスペース）は、次をすべて満たす PR を squash でマージする。取り込みのコミットを含む PR は例外で、マージコミットでマージする（「外部から取り込むコード」）。
+コーディネーターは、次をすべて満たす PR を `develop` にマージする。作者の承認は待たない。
 
 - `ci-required` が緑。
 - PR を書いたワーカーとは別に、コーディネーターが起動したサブエージェントがコードレビューし、指摘が残っていない。指摘はワーカーに送って直させ、直したら再レビューする。
-- 次の「作者の承認を待つ PR」に当たらない。
 
-作者の承認を待つ PR：
+マージの仕方：
 
-- `docs/ebykn-*.md`（思想・仕様・設計ノート）を変える。
-- 開発ルールを変える（`AGENTS.md`、`.claude/`、`.github/ISSUE_TEMPLATE/`、`.github/pull_request_template.md`）。
-- ゲートを弱める（`ci-required` から外す、ゲートを消す・緩める、対象外を足す）。
-- `needs review` の Issue に関わる。
+- squash でマージする。コミットの題は GitHub の既定（`<PR の題> (#N)`）のまま変えない。リリースのときに、この `(#N)` で PR を集める。
+- 取り込みのコミットを含む PR は例外で、マージコミットでマージする（「外部から取り込むコード」）。題は既定の `Merge pull request #N from ...` のまま。
+- `develop` と衝突したら、ワーカーが feature ブランチを `develop` に rebase して push し直す。
+- `needs review` の Issue の判断は、マージを止めない。既定で実装してマージし、作者の判断が既定と違えば、作り直しの PR を積む。
+- 開発ルールやゲートを変える PR も、同じ条件でマージする。3 文書をエージェントが変更しない規則はそのまま。
 
-マージ後、コーディネーターはワーカーを release し、ワークツリーを削除し、リモートのブランチを消す。マイルストーンを閉じる前に、そのマイルストーンでマージした PR の一覧を作者に報告する。
+`release` へは早送りだけで進め、`main` へは作者がマージコミットでマージする（次の「リリースと作者の確認」）。
+
+マージ後、コーディネーターはワーカーを解放し（orca の release）、ワークツリーを削除し、リモートのブランチを消す。
+
+GitHub の既定のブランチは `main` なので、`develop` への PR の `Closes #N` では Issue が閉じず、PR との紐づけもできない。マージ後、コーディネーターが本文の `Closes #N` の Issue を閉じる（`gh issue close <N> --comment "#<PR 番号> で develop に入りました"`）。
+
+## リリースと作者の確認
+
+コーディネーターとワーカーは手を止めずに作ってマージし続け、作者はあとからまとめて確かめる。手順は [.claude/skills/ebykn-release/SKILL.md](.claude/skills/ebykn-release/SKILL.md)。
+
+- リリースは基本 1 日 1 回切る。作者が見つけた問題を直したあとなど、1 日に何度切ってもよい。識別子は `YYYY-MM-DD.N`（日本時間の日付と、その日の何回目か）。
+- 切るときは、`develop` の先頭で CI が緑であることを確かめ、`release` をそこまで早送りし、注釈付きのタグ `report/YYYY-MM-DD.N` を付ける。言語のリリースのタグ（`v0.1.0` など）とは名前空間を分ける。
+- 前回のタグから今回までに `develop` に入った PR と、それが閉じた Issue を集め、報告スライドの PDF を作る（`ebykn-report-slides` スキル）。スライドはリリースごとに 1 つ作り、前のものを上書きしない。
+- PDF は、タグの GitHub Release（prerelease）に添付する。`release` → `main` の PR がなければ作り、あれば本文の「確認待ちのリリース」の一覧を最新にして、今回のリリースのコメントを足す。
+- 作者には、リリースの識別子、PR、Release、判断待ちの `needs review` の Issue を報告する。
+- 作者は数日おきにスライドを読み、気になったところをコーディネーターに質問し、`release` ブランチで動作を確かめる。問題がなければ、リリースの PR を `main` にマージコミットでマージする。確認待ちのリリースが複数あれば、まとめて入る。squash や rebase をすると、次のリリースの PR で同じ変更が差分にもう一度出る。
+- 作者が問題を伝えたら、コーディネーターは Issue と直す PR を `develop` に積み、もう一度リリースを切る。スライドはその差分になる。
+- 作者が確かめなかった日は、`release` は `main` にマージされないまま、次のリリースの分が積み上がる。
 
 ## コマンド
 
@@ -129,7 +157,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 - pre-commit フックは `git config core.hooksPath .githooks` で有効にする。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
 - toolchain は `rust-toolchain.toml`（1.96.0）。Verus は自分の toolchain（固定値の `toolchain`）で動き、`verus-*` のコマンドがそれを指定する。Verus のクレートはルートの Cargo ワークスペースから `exclude` してある。
 - Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes`・`formal-oracle` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` を見直す。
-- CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と `main` への `push` だけにする。
+- CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と、`main`・`develop` への `push` だけにする。`develop` への `push` は、リリースを切る前に `develop` の先頭が緑であることを確かめるため（PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない）。
 
 ## ゲートの規則
 
@@ -206,6 +234,6 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 
 - `vendor/` は Cargo のワークスペースのメンバーにしない（`exclude`）。path 依存で使う。`cargo fmt --check`（`--all` を付けない。`--all` は path 依存も整形する）と `clippy --workspace` は `vendor/` を整形・検査しない。
 - `vendor/` は行数のゲートの対象外。ディレクトリ単位で `EXEMPT_DIRS` に明示する。
-- 取り込みのコミットを含む PR は squash せず、マージコミットでマージする（取り込みだけのコミットを main に残すため）。
+- 取り込みのコミットを含む PR は squash せず、マージコミットでマージする（取り込みだけのコミットを `develop` と、その先の `main` に残すため）。
 - フォークとして手を入れる場合は、取り込みとは別のコミットで、必要な箇所だけにする。変更した箇所には `EBYKN:` で始まるコメントを付ける。上流を取り込み直すときは、取り込みのコミットとの差分を当て直す。
 - 自分たちの部分は、できるだけ `vendor/` の外に置く（`verus_syn` なら `crates/ebykn_syntax`）。
