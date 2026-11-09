@@ -1,8 +1,10 @@
 //! Verus のエラーのブロックから、エラーが指す生成コードの行を読む（PR #76 のレビューの B1）。
 //!
-//! 主な位置（`-->` の行）だけで項目に割り当てると、主な span を呼ばれる側に置くエラー（`callee may
-//! open invariants that caller cannot`）で、失敗した呼び出し元を verified と出してしまう。そこで、
-//! ブロックの中のラベルの付いた行（`NN | ..` の行と、その下の `^` / `-` の行）をすべて読み、次のように分ける。
+//! 主な位置（`-->` の行）だけで項目に割り当てると、失敗した呼び出し元を verified と出してしまうことがある。
+//! `callee may open invariants that caller cannot` は、呼ばれる側の署名・呼び出し元の
+//! `opens_invariants`・呼び出しの位置の 3 つのラベルをどれも `^` で描き、`-->` はそのうちファイルの中で
+//! 先に出るものを指す。呼ばれる側が先にあれば、`-->` は呼ばれる側を指す。そこで、ブロックの中のラベルの
+//! 付いた行（`NN | ..` の行と、その下の `^` / `-` の行）をすべて読み、次のように分ける。
 //!
 //! - 失敗の場所（[`ErrorSites::blamed`]。その項目を failed にする）：主な span（`^`）の行と、
 //!   [`BLAME_LABELS`] のラベルの行。
@@ -11,10 +13,13 @@
 //! - 数えない行：[`CALLEE_LABELS`] のラベル（呼ばれる側の契約や署名を示すだけで、呼ばれる側の失敗では
 //!   ない）と、ラベルのない文脈の行。
 //!
+//! ブロックに `NN |` の行が一つもなければ、`-->` の位置には頼らず、失敗の場所を空にする（どの項目にも
+//! 割り当てられないエラーとして、失敗していない項目をすべて unknown にする）。
+//!
 //! Verus の `--output-json` の `func-details` は関数ごとの成否を持たない（失敗した関数も
 //! `failed_proof_notes` が空）ので、ブロックの行で決める。
 
-/// 呼び出し元の失敗の場所を示すラベル（主な span が呼ばれる側にあるエラーで、失敗した呼び出しの位置）。
+/// 呼び出し元の失敗の場所を示すラベル（失敗した呼び出しの位置）。`-` で描かれても失敗の場所にする。
 pub const BLAME_LABELS: &[&str] = &["at this call-site"];
 
 /// 呼ばれる側を示すだけのラベル。その行の項目のエラーではない（呼ばれる側は自分の検証で決まる）。
@@ -84,9 +89,8 @@ fn underline(tok: &str) -> bool {
     tok.contains(['^', '-']) && tok.chars().all(|c| matches!(c, '^' | '-' | '_' | '|'))
 }
 
-/// エラーのブロックから、エラーが指す生成コードの行を読む。`at` は主な位置（`-->` の行）で、ブロックに
-/// `NN |` の行が一つもないときだけ失敗の場所にする。
-pub fn error_sites(block: &str, at: Option<&(String, usize)>) -> ErrorSites {
+/// エラーのブロックから、エラーが指す生成コードの行を読む。
+pub fn error_sites(block: &str) -> ErrorSites {
     let mut shown: Vec<Shown> = Vec::new();
     // 終わりの印（`|__^`）を待つ、複数行の span の行。
     let mut pending: Vec<usize> = Vec::new();
@@ -167,12 +171,6 @@ pub fn error_sites(block: &str, at: Option<&(String, usize)>) -> ErrorSites {
         }
     }
     unresolved.append(&mut pending);
-    if shown.is_empty() {
-        return ErrorSites {
-            blamed: at.into_iter().cloned().collect(),
-            related: Vec::new(),
-        };
-    }
     let mut out = ErrorSites::default();
     for (i, s) in shown.iter().enumerate() {
         let Some(f) = &s.file else { continue };
@@ -224,8 +222,7 @@ mod tests {
 
     #[test]
     fn callee_side_spans_do_not_blame_the_callee() {
-        let at = ("src/lib.rs".to_string(), 10);
-        let s = error_sites(CALLEE_OPENS, Some(&at));
+        let s = error_sites(CALLEE_OPENS);
         assert_eq!(s.blamed, lines(&[("src/lib.rs", 16), ("src/lib.rs", 18)]));
         assert!(s.related.is_empty(), "{s:?}");
     }
@@ -242,7 +239,7 @@ mod tests {
    |                     ^^^^
 
 ";
-        let s = error_sites(block, Some(&("src/lib.rs".into(), 13)));
+        let s = error_sites(block);
         assert_eq!(s.blamed, lines(&[("src/lib.rs", 13)]));
         assert!(s.related.is_empty(), "{s:?}");
     }
@@ -260,7 +257,7 @@ mod tests {
    |         failed this postcondition
 
 ";
-        let s = error_sites(block, Some(&("src/lib.rs".into(), 16)));
+        let s = error_sites(block);
         assert_eq!(s.blamed, lines(&[("src/lib.rs", 16)]));
         assert_eq!(s.related, lines(&[("src/lib.rs", 9)]));
     }
@@ -282,7 +279,7 @@ mod tests {
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invariants opened by callee
 
 ";
-        let s = error_sites(block, None);
+        let s = error_sites(block);
         assert_eq!(s.blamed, lines(&[("src/lib.rs", 25), ("src/lib.rs", 27)]));
         assert!(s.related.is_empty(), "{s:?}");
     }
@@ -299,7 +296,7 @@ mod tests {
    | |_____^
 
 ";
-        let s = error_sites(block, Some(&("src/lib.rs".into(), 40)));
+        let s = error_sites(block);
         assert_eq!(
             s.blamed,
             lines(&[("src/lib.rs", 40), ("src/lib.rs", 41), ("src/lib.rs", 42)])
@@ -315,19 +312,35 @@ mod tests {
  4 | |     b();
    |
 ";
-        let s = error_sites(block, Some(&("src/lib.rs".into(), 5)));
+        let s = error_sites(block);
         assert!(s.blamed.is_empty(), "{s:?}");
         assert_eq!(s.related, lines(&[("src/lib.rs", 3), ("src/lib.rs", 4)]));
     }
 
+    /// PR #76 の再レビューの N3：`NN |` の行がないブロックは、`-->` の位置に頼らない（呼ばれる側が先に
+    /// 出るエラーで、呼ばれる側を失敗にしてしまう）。どの項目にも割り当てない。
     #[test]
-    fn blocks_without_shown_lines_use_the_primary_location() {
-        let at = ("src/lib.rs".to_string(), 3);
-        let s = error_sites(
-            "error: x\n  --> build/verus/src/lib.rs:3:1（生成コード）\n",
-            Some(&at),
-        );
-        assert_eq!(s, ErrorSites::at("src/lib.rs", 3));
-        assert_eq!(error_sites("error: x\n", None), ErrorSites::default());
+    fn blocks_without_shown_lines_blame_nothing() {
+        let s = error_sites("error: x\n  --> build/verus/src/lib.rs:3:1（生成コード）\n");
+        assert_eq!(s, ErrorSites::default());
+        assert_eq!(error_sites("error: x\n"), ErrorSites::default());
+    }
+
+    /// `at this call-site` が `-` で描かれても、呼び出しの行を失敗の場所にする（[`BLAME_LABELS`]）。
+    #[test]
+    fn call_sites_drawn_as_secondary_are_blamed() {
+        let block = "error: callee may open invariants that caller cannot
+  --> build/verus/src/lib.rs:3:1（生成コード）
+   |
+ 3 | pub fn helper(x: u64) -> u64
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invariants opened by callee
+...
+ 9 |         self.a = helper(self.a);
+   |                  -------------- at this call-site
+
+";
+        let s = error_sites(block);
+        assert_eq!(s.blamed, lines(&[("src/lib.rs", 9)]));
+        assert!(s.related.is_empty(), "{s:?}");
     }
 }

@@ -434,7 +434,7 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
         text.push('\n');
     }
     for e in &mut errors {
-        e.sites = crate::sites::error_sites(&e.block, e.at.as_ref());
+        e.sites = crate::sites::error_sites(&e.block);
     }
     (text, errors)
 }

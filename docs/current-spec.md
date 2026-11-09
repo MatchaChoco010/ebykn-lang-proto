@@ -388,7 +388,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
 | `failed` | Verus のエラーの失敗の場所が、項目の行の範囲にある。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`） |
-| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある）があるか、Verus が検証の前に止まった |
+| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
@@ -398,7 +398,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `failed` か `unknown` があれば、`verify` は失敗します。
 - 証明なしの前提（`admit` / `unchecked` / `external`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
 - 出力は、項目ごとの「状態 パス」の行と、最後の `results N verified, M errors` です（`status`（M5）の形が決まるまでの仮の形）。
-- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの主な位置がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
+- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの失敗の場所がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
 - `--json` では、1 行の JSON（`$message_type: ebykn-verify`。`results` は `{"ran": true, "verified": N, "errors": M}` か `{"ran": false, "errors": N}`）を標準出力に出し、Verus の診断は標準エラーに出します。
 - Verus の出力は `CARGO_TERM_COLOR=never` で受け取り、制御文字を除いて読みます。Verus の診断は、生成コードの位置を `build/verus/src/..（生成コード）` として出します（§10.2 の変換できない場合の形）。
 
