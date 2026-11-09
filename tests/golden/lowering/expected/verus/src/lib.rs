@@ -148,7 +148,7 @@ impl Bag {
     fn adopt(p: Ptr < Node >, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
     requires r.contains(p),
     ensures b.items@.contains(p), b.items@[p] == r.index(p), {
-        #[allow(unused_mut)] let tracked mut r = r;
+        let tracked mut r = r;
         Bag { items: Tracked(r) }
     }
 
