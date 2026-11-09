@@ -166,7 +166,7 @@ Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#g
 - 属性は、`#[verifier::..]`（`E0102`）に加えて `#[verus::..]` も拒否します。どちらも `r#`、先頭の `::`、`cfg_attr(条件, ..)` の中まで見ます。
 - `self@`・`Self@` は、権限ではなく Verus の view として拒否します。権限は `Ident "@"`、view は `.view()` です。
 - `broadcast`・`uninterp`・`assume_specification` は、後ろに Verus の形（`broadcast use / group / proof / fn / axiom`、`uninterp spec`、`assume_specification [` / `<`）が続くときだけ Verus の構文とし、それ以外は識別子として読みます。
-- Verus の句・証明・モード変換の組み込み関数（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_BUILTIN_CALLS`）、証明の構文の関数、Verus のマクロ、`Invariant` / `View` の名前は、綴りによらずパスの最後の名前で判定します。裸の名前の呼び出しと、先頭が `::` のパスは `E0001` です。そのほかのパス（`crate::` / `self::` / `super::`、モジュール経由、改名する `use`）は、クレートの中の定義に解決するときだけ通します。診断は、同じ名前の自分の関数を `crate::..::requires(..)` のパスで呼べることを案内します。裸の名前を値として参照する形（`let r = requires;`、`(requires)(..)`）は、ローカル変数でなければ `E0001` です。中を読まないマクロの引数の中は名前解決しないので、どの綴りの呼び出しも拒否します。値を求めるだけの仕様の関数（`equal`、`imply`、`add` など）と、Ebykn が使う `old` は表に入れません。`crates/ebykn_check/tests/reserved.rs` が、表のすべての名前について綴りを総当たりで試します。
+- Verus の句・証明・モード変換の組み込み関数（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_BUILTIN_CALLS`）、証明の構文の関数、Verus のマクロ、`Invariant` / `View` の名前は、綴りによらずパスの最後の名前で判定します。裸の名前の呼び出しと、先頭が `::` のパスは `E0001` です。そのほかのパス（`crate::` / `self::` / `super::`、モジュール経由、改名する `use`）は、クレートの中の定義（列挙の列挙子 `St::Tracked` を含む）に解決するときだけ通します。診断は、同じ名前の自分の関数を `crate::..::requires(..)` のパスで呼べることを案内します。裸の名前を値として参照する形（`let r = requires;`、`(requires)(..)`）は、ローカル変数でなければ `E0001` です。中を読まないマクロの引数の中は名前解決しないので、どの綴りの呼び出しも拒否します。値を求めるだけの仕様の関数（`equal`、`imply`、`add` など）と、Ebykn が使う `old` は表に入れません。`crates/ebykn_check/tests/reserved.rs` が、表のすべての名前について綴りを総当たりで試します。
 - Verus の ghost の包み `Tracked` / `Ghost`（`reserved.rs` の `VERUS_WRAPPERS`）も、同じ判定で拒否します。見るのは、式（`Tracked(e)`）、型（`Tracked<T>`、`Option<Ghost<T>>`）、パターン（`Tracked(x)`）、`use`、中を読まないマクロの引数です。実行コードの `Tracked(e)` / `Ghost(e)` は、`e` を証明のモードで評価するモードの変換で、`.eyk` に証明を書けてしまいます。ghost の状態は `owns` / `spec` フィールドで、領域の引数は `uses r: Region<..>` で書きます（#99）。
 
 * 元の仕様：§5 は「Rust の文法（syn が受理する範囲）を土台」とし、Verus の構文の扱いを定めていない。
@@ -282,7 +282,7 @@ into_graph(a, b, uses g)                                         // 移動
 | --- | --- |
 | `&mut r` / `&r`（局所の領域、値で受けた領域） | `Tracked(&mut r)` / `Tracked(&r)` |
 | `&mut r` / `&r`（`r` が `uses r: &mut Region<..>` / `&Region<..>` で受けた参照） | `Tracked(&mut *r)` / `Tracked(&*r)` |
-| `&mut self@nodes` / `&self@nodes` | `Tracked(self.nodes.borrow_mut())` / `Tracked(self.nodes.borrow())` |
+| `&mut self@nodes` / `&self@nodes` | `Tracked(self.__eyk_erased_nodes.borrow_mut())` / `Tracked(self.__eyk_erased_nodes.borrow())` |
 | `r`（移動） | `Tracked(r)` |
 
 呼ばれる側を引けない呼び出し（クロージャ、外のクレートの関数など）には、書いた領域を書いた順に足します。受け取らなければ Verus が型の誤りとして拒みます。
@@ -299,12 +299,13 @@ into_graph(a, b, uses g)                                         // 移動
 
 - 拒否する形は、フィールドの読み書き `e.f`、構造体リテラルの `f: e`、パターンの `f` / `f: p`（分解代入の左辺を含む）です。受け手によりません（`self`、ほかの値、`*p`、`old(self)` / `final(self)`）。実行コードでも論理文脈でも同じです。
 - `.` の前の値の型が分かり、それがクレートの構造体で、`f` がその通常のフィールドなら通します。消去フィールドなら拒否します。
-- 型が分からないものは、`f` がクレートのどれかの構造体の消去フィールドと同じ名前なら拒否します。診断は、別の型の値なら型を書く（`let x: T = ..`）よう案内します。型が分かるとするのは、`self`、型を書いた引数と変数、`*e`（参照と `Ptr` / `Cell` の指す値）、`old(e)` / `final(e)`、型の引数のない構造体のフィールド `e.g` です。次の型は、分からないものとして扱います。
+- 型が分からないものは、`f` がクレートのどれかの構造体の消去フィールドと同じ名前で、クレートのどの構造体も `f` を通常のフィールドに持たないときだけ拒否します。診断は、別の型の値なら型を書く（`let x: T = ..`）よう案内します。通常のフィールドに `f` を持つ構造体があれば、その値かもしれないので通します。消去フィールドに届く形なら、書き下しの名前（§7.3「消去フィールドの名前」）のため Verus のビルドで止まります。
+- 型が分かるとするのは、`self`、型を書いた引数と変数、`*e`（参照と `Ptr` / `Cell` の指す値）、`old(e)` / `final(e)`、型の引数のない構造体のフィールド `e.g` です。次の型は、分からないものとして扱います。
   - `f` を自分のフィールドに持たないクレートの構造体。`Deref` でほかの型に届きうるからです。
-  - 型の引数か型の別名の先に、`f` を消去フィールドに持つ構造体を書いた型（`Box<S>`、`type A = S;` の `A`）。
+  - 型の引数（`T`、`T::Target`、`<T as Tr>::A`）と、クレートの構造体でない型の `impl` や trait の既定のメソッドの `self`。
+  - 型の引数か型の別名の先に、`f` を消去フィールドに持つ構造体か型の引数を書いた型（`Box<S>`、`type A = S;` の `A`、`Box<T>`）。
   - `_` と `dyn Trait` など。
-- 中を読まないマクロ（`println!` など）の引数の `.f` も、名前で拒否します（メソッドの呼び出し `.f(..)` は除く）。
-- 検査が見逃した形も、書き下しの名前（§7.3「消去フィールドの名前」）のため Verus のビルドで止まります。
+- 中を読まないマクロ（`println!` など）の引数の `.f` も、同じ規則で判定します（メソッドの呼び出し `.f(..)` は除く）。受け手の型は、`.` の直前が裸の名前（`self` か、型を書いた変数）のときだけ見ます。それ以外は型が分からないものとして扱います。
 
 * 元の仕様：§5.4 は `self@x` と `@name` の形を定めるが、`.` で書いたものの扱いを定めていない。`owns` フィールドへの代入の `E0516` は `self@x = e;` の形だけ。
 * 根拠：#99。`self.nodes = Tracked(Region::empty());` が、書き下しの `Tracked` のフィールドに届いて領域の権限をすべて捨て、verified になった（P0）。

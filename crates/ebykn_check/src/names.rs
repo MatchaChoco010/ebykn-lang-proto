@@ -10,7 +10,7 @@ use ebykn_syntax::reserved::{DeferredName, ReservedKind};
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
-use crate::index::Index;
+use crate::index::{Index, Resolved};
 use crate::project::Project;
 
 /// 表の名前を最後に持つパスを拒否する診断。
@@ -73,11 +73,30 @@ fn check_one(
 ) {
     let r = index.resolve(module, false, &n.segments, None);
     // cfg で消えうる定義は数えない（消えれば暗黙の `use ebykn_prelude::*;` などに解決する）。
-    if index.is_live_def(&r) {
+    if index.is_live_def(&r) || is_variant(index, module, &n.segments) {
         return;
     }
     let last = n.segments.last().map(String::as_str).unwrap_or_default();
     diags.push(span, message(n.kind, last, &n.written, in_proof));
+}
+
+/// パスがクレートの列挙の列挙子（`St::Tracked`）か。
+fn is_variant(index: &Index, module: &[String], segs: &[String]) -> bool {
+    let Some((last, prefix)) = segs.split_last() else {
+        return false;
+    };
+    if prefix.is_empty() {
+        return false;
+    }
+    let r = index.resolve(module, false, prefix, None);
+    let Resolved::Type(t) = &r else {
+        return false;
+    };
+    index.is_live_def(&r)
+        && index
+            .enums
+            .get(t)
+            .is_some_and(|e| e.variants.iter().any(|(v, _, _)| v == last))
 }
 
 /// インラインの `mod` の位置とモジュールのパス。

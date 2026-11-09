@@ -77,6 +77,8 @@ pub struct FnCx<'a> {
     pub module: &'a [String],
     pub self_ty: Option<&'a ItemPath>,
     pub has_self: bool,
+    /// スコープにある型の引数の名前（消去フィールドの `.` の検査で、型が分からないものとして扱う）。
+    pub type_params: Vec<String>,
     /// 権限の規則（E0503〜E0512）を検査するか（`unchecked fn` と論理の本体では検査しない）。
     pub linear: bool,
     pub gives: Vec<String>,

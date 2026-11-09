@@ -148,6 +148,62 @@ fn other_fields_and_erased_forms_are_accepted() {
     ));
 }
 
+/// 型の分からない受け手は、クレートのどれかの構造体が同じ名前の通常のフィールドを持てば通す
+/// （#111 のレビュー）。消去フィールドに届く形なら、書き下しの名前のために Verus のビルドで止まる。
+#[test]
+fn unknown_receivers_pass_when_some_struct_has_the_plain_field() {
+    let t = format!(
+        "{PRELUDE}pub struct T {{ pub nodes: u64, pub order: u64 }}\npub fn mk() -> T {{ T {{ nodes: 0, order: 0 }} }}\n"
+    );
+    for body in [
+        "pub fn f() -> u64 { mk().nodes }",
+        "pub fn f(v: Vec<T>) -> u64 { v[0].nodes }",
+        "pub fn f(v: Vec<T>) { for t in v.iter() { let q = t.order; } }",
+        "pub fn f(t: T) -> u64 { let u = t; u.nodes }",
+        "pub fn f(t: T) -> u64 { match Some(t) { Some(x) => x.nodes, None => 0 } }",
+        // マクロの引数の中も同じ規則。
+        "pub fn f(t: T) { println!(\"{}\", t.nodes); }",
+        "pub fn f(v: Vec<T>) { println!(\"{}\", v[0].order); }",
+    ] {
+        accepts(&format!("{t}{body}"));
+    }
+    // 型の分かる受け手は、同じ名前の通常のフィールドがほかにあっても拒否する（マクロの引数の中でも）。
+    for body in [
+        "impl Pool { pub fn f(&self) { println!(\"{:?}\", self.order); } }",
+        "pub fn f(p: &Pool) { println!(\"{:?}\", p.order); }",
+        "pub fn f(p: &Pool) { let o = p.order; }",
+    ] {
+        rejects_all(&format!("{t}{body}"), "E0404", "is an erased");
+    }
+}
+
+/// 型の引数の受け手（`Deref` で消去フィールドを持つ構造体に届きうる）は、型が分からないものと同じ。
+#[test]
+fn type_parameter_receivers_are_unknown() {
+    for src in [
+        format!(
+            "{PRELUDE}pub fn f<Q: std::ops::DerefMut<Target = Pool>>(q: Q) {{ let r = &q.order; }}"
+        ),
+        format!(
+            "{PRELUDE}pub fn f<Q>(q: &mut Q) where Q: std::ops::DerefMut<Target = Pool> {{ let r = &q.order; }}"
+        ),
+        format!(
+            "{PRELUDE}pub fn f<Q: std::ops::Deref<Target = Pool>>(q: Box<Q>) {{ let r = &q.order; }}"
+        ),
+        format!(
+            "{PRELUDE}pub struct H<Q> {{ q: Q }}\nimpl<Q: std::ops::Deref<Target = Pool>> H<Q> {{ pub fn f(&self, x: Q) {{ let r = &x.order; }} }}"
+        ),
+        format!(
+            "{PRELUDE}pub trait Tr: std::ops::Deref<Target = Pool> {{ fn f(&self) {{ let r = &self.order; }} }}"
+        ),
+        format!(
+            "{PRELUDE}pub fn f<Q: std::ops::Deref<Target = Pool>>(q: Q) {{ println!(\"{{:?}}\", q.order); }}"
+        ),
+    ] {
+        rejects_all(&src, "E0404", "may be the erased");
+    }
+}
+
 #[test]
 fn the_message_is_in_both_languages() {
     let src = in_pool("pub fn f(&mut self) { let r = &mut self.nodes; }");

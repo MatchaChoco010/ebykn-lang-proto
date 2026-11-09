@@ -176,6 +176,11 @@ fn spellings_that_name_crate_definitions_are_accepted() {
                     "mod m { pub struct NAME(pub u64); }\npub fn f(x: m::NAME) { let m::NAME(y) = x; }",
                     name,
                 ));
+                // クレートの列挙の同じ名前の列挙子（式とパターンの両方。#111 のレビュー）。
+                accepts(&fill(
+                    "pub enum St { NAME, W(u64) }\npub enum E2 { NAME(u64) }\npub fn f(s: St) -> St { match s { St::NAME => St::NAME, St::W(_) => St::W(0) } }\npub fn g(e: E2) -> E2 { let E2::NAME(x) = e; E2::NAME(x) }\nmod m { pub enum M { NAME } }\npub fn h() -> m::M { crate::m::M::NAME }",
+                    name,
+                ));
             }
             ReservedKind::EbyknTrait => {
                 // 裸の名前の 1 つの書き方。

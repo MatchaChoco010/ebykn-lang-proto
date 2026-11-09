@@ -679,7 +679,7 @@ fn region_arguments_are_appended_as_tracked() {
     );
     has(
         &src,
-        "rd(1, Tracked(self.r.borrow())); wr(2, Tracked(self.r.borrow_mut()));",
+        "rd(1, Tracked(self.__eyk_erased_r.borrow())); wr(2, Tracked(self.__eyk_erased_r.borrow_mut()));",
     );
     // 権限と領域が混ざった宣言は、宣言の順に並べる。
     let src = format!(

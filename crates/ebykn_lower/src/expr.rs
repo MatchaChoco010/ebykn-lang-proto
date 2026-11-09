@@ -641,7 +641,7 @@ impl Cx<'_> {
     }
 
     /// 呼び出しで渡す領域（#19 の既定 P1）：`&mut r` ⇒ `Tracked(&mut r)`（`r` が `uses` で受けた参照なら
-    /// `Tracked(&mut *r)`）、`&mut self@x` ⇒ `Tracked(self.x.borrow_mut())`、移動の `r` ⇒ `Tracked(r)`。
+    /// `Tracked(&mut *r)`）、`&mut self@x` ⇒ `Tracked(self.__eyk_erased_x.borrow_mut())`、移動の `r` ⇒ `Tracked(r)`。
     fn region_arg(&self, u: &ast::RegionArg) -> String {
         let by_ref = self.facts.region_arg_refs.contains(&SpanKey::from(u.span));
         let inner = match (&u.region, u.mode) {
@@ -656,7 +656,7 @@ impl Cx<'_> {
             (ast::Region::SelfField { field, .. }, PermMode::Mut) => {
                 format!("self.{}.borrow_mut()", erased_field(field))
             }
-            // ここに届くのは `unchecked fn` の中だけ（ほかは検査が E0519 で止める）。`self.x` は
+            // ここに届くのは `unchecked fn` の中だけ（ほかは検査が E0519 で止める）。`self.__eyk_erased_x` は
             // `Tracked<Region<..>>` で、受け取る側の引数の型そのものなので、欄をそのまま渡す。
             (ast::Region::SelfField { field, .. }, PermMode::Move) => {
                 return format!("self.{}", erased_field(field));
