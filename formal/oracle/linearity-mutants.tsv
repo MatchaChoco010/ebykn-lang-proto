@@ -1,11 +1,13 @@
 mutant	rule	differing	first_case	expected	got
-no-join	分岐の終端の Γ を比べない（E0510）	202	c00313	E0510 end 1	ok
+no-join	分岐の終端の Γ を比べない（E0510）	200	c00313	E0510 end 1	ok
 no-borrow-consume	borrow ブロックの p を Owned と同じに消費できる（E0509）	48	c00238	E0509 at 2	ok
 no-continue	continue の点の Γ を本体の入口と比べない	4	c03154	E0511 at 3	ok
 no-break	break の点の Γ をループの直後の Γ と比べない	2	c03152	E0511 at 3	ok
-no-loop-end	本体の終端の Γ を本体の入口と比べない	132	c00226	E0511 end 1	ok
-no-closure-reset	クロージャの本体で Γ を空にしない（E0512）	744	c00032	E0505 end 0	E0505 end 2
+no-loop-end	本体の終端の Γ を本体の入口と比べない	130	c00226	E0511 end 1	ok
+no-closure-reset	クロージャの本体で Γ を空にしない（E0512）	698	c00032	E0505 end 0	E0505 end 2
 no-try-return	? を return として扱わない（E0505）	76	c00026	E0505 at 2	E0505 end 0
 no-release	break / continue で抜ける点で borrow ブロックの p を Γ から消さない（#21）	116	c03562	ok	E0511 at 3
 no-loop-clear	ループの中のループに入るときに、外のループに入ってから開いた borrow の印を引き継ぐ（#21）	12	c09416	ok	E0511 at 4
 no-try-shape	戻り値の型を Option / Result と書いていない関数の borrow mut の中の ? を通す（E0003。#21）	1	c09512	E0003 at 2	ok
+no-gives-owned	出口で gives の名前が Owned であることを求めない（E0504。#63）	132	c01377	E0504 end 0	ok
+no-closure-intro	クロージャの本体で権限を導入できる（E0512。#63）	45	c00230	E0512 at 2	E0505 end 1

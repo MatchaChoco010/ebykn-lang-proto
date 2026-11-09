@@ -306,7 +306,7 @@ fn write_stmt(o: &mut Out, s: &S, indent: usize, next: &mut u32, ret: Ret) {
             A::BorrowArg(x, true) => format!("update({});", name(x)),
             A::Write(x) => format!("*{} = 1;", name(x)),
             A::Assign(x) => format!("{} = other();", name(x)),
-            A::Let(x) => format!("let {} = other();", name(x)),
+            A::Let(x) => format!("let {}: Ptr<u32> = other();", name(x)),
             A::Return => match ret {
                 Ret::Unit => "return;".to_string(),
                 Ret::Gives(g) => format!("return {};", name(g)),
@@ -517,6 +517,22 @@ pub fn mutants() -> Vec<(&'static str, &'static str, Rules)> {
             "戻り値の型を Option / Result と書いていない関数の borrow mut の中の ? を通す（E0003。#21）",
             Rules {
                 try_shape: false,
+                ..f
+            },
+        ),
+        (
+            "no-gives-owned",
+            "出口で gives の名前が Owned であることを求めない（E0504。#63）",
+            Rules {
+                gives_owned: false,
+                ..f
+            },
+        ),
+        (
+            "no-closure-intro",
+            "クロージャの本体で権限を導入できる（E0512。#63）",
+            Rules {
+                closure_intro: false,
                 ..f
             },
         ),

@@ -20,7 +20,7 @@ use crate::Diags;
 use crate::facts::{Facts, RegionRef, SpanKey};
 use crate::index::{
     ErasedKind, FnInfo, Index, ItemPath, PreludeFn, Resolved, StructInfo, is_region_type,
-    pat_ident, region_mode,
+    pat_ident, ptr_or_cell, region_mode,
 };
 
 /// Γ の一つの項目。
@@ -168,6 +168,14 @@ impl<'a> Walker<'a> {
                 }
                 self.add_locals(pat);
             }
+        }
+        // `gives` の戻り値の名前は、本体で束縛する前でも型を書いた名前（`free` を prelude の `free` と読む）。
+        if let Some(ast::Ret {
+            name: Some(n), ty, ..
+        }) = &sig.ret
+            && self.cx.gives.contains(&n.name)
+        {
+            self.var_types.insert(n.name.clone(), ty.clone());
         }
         for u in contract.uses() {
             match u {
@@ -336,7 +344,8 @@ impl<'a> Walker<'a> {
             }) => {
                 self.env.remove(name);
             }
-            Some(Perm { block: true, .. }) => self.push(
+            // E0509 は `free` / `put` / 移動だけ（§6.2）。`leak` は「`Owned` 必須」の E0504。
+            Some(Perm { block: true, .. }) if op != Op::Leak => self.push(
                 span,
                 CheckMsg::ConsumeBorrowed {
                     name: name.to_string(),
@@ -864,14 +873,7 @@ impl<'a> Walker<'a> {
         self.add_locals(p);
         match &p.kind {
             PatKind::Ident { ident, sub, .. } => {
-                if self.env.contains_key(&ident.name) {
-                    self.push(
-                        ident.span,
-                        CheckMsg::ShadowHeld {
-                            name: ident.name.clone(),
-                        },
-                    );
-                }
+                self.shadow_check(ident);
                 self.known.remove(&ident.name);
                 self.regions.remove(&ident.name);
                 self.region_modes.remove(&ident.name);
@@ -961,6 +963,14 @@ impl<'a> Walker<'a> {
     }
 
     fn bind_ident(&mut self, ident: &ast::Ident) {
+        self.shadow_check(ident);
+        self.known.remove(&ident.name);
+        self.var_types.remove(&ident.name);
+    }
+
+    /// 束縛する名前が Γ にあれば E0507。クロージャの中で外の Γ の名前を束縛し直すのは E0512
+    /// （`OPEN.md` の #18 の行。同名の `let` で覆う場合も一律）。
+    fn shadow_check(&mut self, ident: &ast::Ident) {
         if self.env.contains_key(&ident.name) {
             self.push(
                 ident.span,
@@ -968,9 +978,18 @@ impl<'a> Walker<'a> {
                     name: ident.name.clone(),
                 },
             );
+        } else if self
+            .closure_outer
+            .as_ref()
+            .is_some_and(|(env, _)| env.contains_key(&ident.name))
+        {
+            self.push(
+                ident.span,
+                CheckMsg::PermInClosure {
+                    name: ident.name.clone(),
+                },
+            );
         }
-        self.known.remove(&ident.name);
-        self.var_types.remove(&ident.name);
     }
 
     fn struct_of_path(&self, path: &ast::Path) -> Option<&'a StructInfo> {
@@ -1400,12 +1419,18 @@ impl<'a> Walker<'a> {
                 return d;
             }
         } else if let Some(x) = ident_of(receiver) {
+            // 権限を持ったことのない名前でも、型を `Ptr` / `Cell` と書いてあれば prelude の `free`
+            // （設計ノート §3.2：宣言だけで決める。書いていなければ Rust のメソッド呼び出し）。
             let held = self.env.contains_key(&x.name)
                 || self.known.contains(&x.name)
                 || self
                     .closure_outer
                     .as_ref()
-                    .is_some_and(|(env, _)| env.contains_key(&x.name));
+                    .is_some_and(|(env, _)| env.contains_key(&x.name))
+                || self
+                    .var_types
+                    .get(&x.name)
+                    .is_some_and(|t| ptr_or_cell(t).is_some());
             if method.is("free") && args.is_empty() && uses.is_empty() && held {
                 if !self.logic {
                     self.consume(&x.name, Op::Free, e.span);

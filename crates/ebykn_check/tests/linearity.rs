@@ -307,3 +307,74 @@ fn calls_through_use_and_modules_are_resolved() {
         "move it",
     );
 }
+
+/// 一度も権限を持っていない名前の `free`（#63 の A）。型を `Ptr` / `Cell` と書いた変数と、`gives` の
+/// 戻り値の名前は prelude の `free` として読む。型を書いていなければ Rust のメソッド呼び出しのまま。
+#[test]
+fn e0504_free_of_a_declared_pointer_never_held() {
+    rejects(
+        &in_pool("pub fn f(p: Ptr<Node>) { let n = p.free(); }"),
+        "E0504",
+        "not held",
+    );
+    rejects(
+        &in_pool("pub fn f(c: Cell<u64>) { let n = c.free(); }"),
+        "E0504",
+        "not held",
+    );
+    rejects(
+        &in_pool(
+            "fn other() -> Ptr<Node> { let p = Ptr::new(Node { val: 1 }); leak p@; p }\npub fn f() { let p: Ptr<Node> = other(); let n = p.free(); }",
+        ),
+        "E0504",
+        "not held",
+    );
+    rejects(
+        &in_pool(
+            "pub fn f() -> (q: Ptr<Node>) gives q@ { let n = q.free(); let q = Ptr::new(Node { val: 1 }); q }",
+        ),
+        "E0504",
+        "not held",
+    );
+    // 型を書いていない束縛は、型を知らないので Rust のメソッド呼び出しとして読む（設計ノート §3.2）。
+    accepts(&in_pool(
+        "fn other() -> Ptr<Node> { let p = Ptr::new(Node { val: 1 }); leak p@; p }\npub fn f() { let p = other(); let n = p.free(); }",
+    ));
+    // 型を書いた束縛でも、型を書かずに束縛し直せば同じ。
+    accepts(&in_pool(
+        "fn other() -> Ptr<Node> { let p = Ptr::new(Node { val: 1 }); leak p@; p }\npub fn f(p: Ptr<Node>) { let p = other(); let n = p.free(); }",
+    ));
+    // `free` という名前のメソッドを持つ別の型。
+    accepts(
+        "pub struct H { n: u64 }\nimpl H { pub fn free(self) -> u64 { self.n } }\npub fn f(h: H) -> u64 { h.free() }",
+    );
+}
+
+/// クロージャの中で外の Γ の名前を `let` で覆う（#63 の C、`OPEN.md` の #18 の行）。
+#[test]
+fn e0512_closure_shadows_an_outer_permission() {
+    rejects(
+        &in_pool("pub fn f(p: Ptr<Node>) uses p@ { let g = || { let p = 1u64; }; leak p@; }"),
+        "E0512",
+        "`p`",
+    );
+    // 外で権限を持っていない名前なら Rust の束縛。
+    accepts(&in_pool(
+        "pub fn f(p: Ptr<Node>) { let g = || { let p = 1u64; }; }",
+    ));
+}
+
+/// `borrow` ブロックの中の `leak p@;` は E0504（E0509 が挙げるのは `free` / `put` / 移動だけ。#63 の D）。
+#[test]
+fn e0504_leak_inside_borrow() {
+    rejects(
+        &in_pool("pub fn f(&mut self, p: Ptr<Node>) { borrow self@nodes[p] { leak p@; } }"),
+        "E0504",
+        "leak",
+    );
+    rejects(
+        &in_pool("pub fn f(&mut self, p: Ptr<Node>) { borrow mut self@nodes[p] { leak p@; } }"),
+        "E0504",
+        "leak",
+    );
+}

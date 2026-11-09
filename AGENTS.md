@@ -207,7 +207,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | --- | --- |
 | `cargo xtask precommit` | `cargo fmt --check` と全ゲート。pre-commit フックが呼ぶ。速く保つ |
 | `cargo xtask ci` | `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、全ゲート。PR の前に通す |
-| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` / `check-examples` / `check-attr-names` |
+| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` / `check-examples` / `check-attr-names` / `check-formal-diff` |
 | `cargo xtask verus-install` | 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）を `~/.cache/ebykn/verus/<版>/` に入れ、sha256 を確かめ、Verus が要求する toolchain を rustup で入れる |
 | `cargo xtask verus-verify` | `ebykn_prelude` と §6.2 の参照モデル（`formal/linearity`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする。参照モデルは、定理（`xtask/src/verus.rs` の `REQUIRED`）が検証されたことを名前で確かめる |
 | `cargo xtask golden-verify` | golden の各ケース（`tests/golden/*/expected/status.txt` のあるもの）に `ebykn verify` をかけて期待と比べ、書き出した `build/verus/` を Verus なしの cargo でもビルドする。`expected/build-error.txt` のあるケースは、素の cargo と `ebykn build` の両方がその行を出して失敗することを期待する。続けて、Verus が要るので `#[ignore]` にしたテスト（`xtask/src/golden.rs` の `IGNORED`）を走らせる |
@@ -287,7 +287,7 @@ M2（stack が verified になる）以降、機能追加とバグ修正がマ�
 
 ## 形式モデル
 
-Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証し、実装との差分テストのオラクルにする（#1 の F）。対象は §6.2 の線形性、§6.1 の剥がし一致、§8.2 の合成、§9.1 の状態の伝播だけ。トランスパイル先の健全性は Verus が受け持つ。置き場は `formal/` で、今あるのは §6.2 のモデル（`formal/linearity`）と判定の表（`formal/oracle/`）。何を証明し何を証明していないかは [formal/README.md](formal/README.md) に書く。
+Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証し、実装との差分テストのオラクルにする（#1 の F）。対象は §6.2 の線形性、§6.1 の剥がし一致、§8.2 の合成、§9.1 の状態の伝播だけ。トランスパイル先の健全性は Verus が受け持つ。置き場は `formal/` で、今あるのは §6.2 のモデル（`formal/linearity`）と判定の表（`formal/oracle/`）と、表と `ebykn check` の判定を比べる差分テスト（`check-formal-diff`）。何を証明し何を証明していないかは [formal/README.md](formal/README.md) に書く。
 
 ## 文書の方針
 

@@ -5,6 +5,7 @@ pub mod attr_names;
 pub mod book;
 pub mod examples;
 pub mod file_size;
+pub mod formal_diff;
 pub mod formal_oracle;
 pub mod gate_tests;
 pub mod md_links;
@@ -57,6 +58,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-attr-names",
         run: attr_names::run,
+    },
+    Gate {
+        name: "check-formal-diff",
+        run: formal_diff::run,
     },
 ];
 
