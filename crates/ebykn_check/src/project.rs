@@ -310,11 +310,28 @@ fn parse_file(p: &mut Project, rel: &str, diags: &mut Vec<Diagnostic>) -> Option
     };
     let file = SourceFile::new(id, rel, text);
     let parsed = parse_eyk(&file);
-    diags.extend(parsed.diags);
+    let edition = p.manifest.edition.clone();
+    diags.extend(
+        parsed
+            .diags
+            .into_iter()
+            .filter(|d| keeps_edition_keyword(d, &edition)),
+    );
     p.files.push(file);
     p.asts.push(Some(parsed.file));
     p.deferred.push(parsed.deferred);
     Some(id)
+}
+
+/// 版の予約語の診断（`gen`）を、`Ebykn.toml` の `edition` がその版より前なら捨てる（#104）。
+/// ほかの診断はそのまま残す。
+fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
+    match &d.message {
+        Message::EditionKeyword { since, .. } => {
+            ebykn_syntax::reserved::edition_reserves(edition, *since)
+        }
+        _ => true,
+    }
 }
 
 /// まだ読めないファイル（`.eykp` と `props/` の下）を探し、`E0003` にする。

@@ -168,6 +168,9 @@ pub enum Message {
     NotAllowedHere { written: String },
     /// 予約語（`uses`。#19 の既定 P1）を名前に使った。
     ReservedWord { word: String },
+    /// Rust の版で予約語になった名前（`gen`。[`crate::reserved::EDITION_KEYWORDS`]）を `r#` なしで
+    /// 使った。検査が `Ebykn.toml` の `edition` を見て、その版より前なら捨てる（#104）。
+    EditionKeyword { word: String, since: u32 },
     /// 呼び出しの引数の末尾でない位置の `uses`（#19 の既定 P1）。
     UsesOutsideCall,
     /// `take` / `put` / `borrow` の領域に、`self` でない値の消去フィールド（`t@nodes`）を書いた
@@ -402,6 +405,12 @@ impl Message {
             ),
             (Message::ReservedWord { word }, Ja) => format!(
                 "構文エラー: `{word}` は Ebykn の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
+            ),
+            (Message::EditionKeyword { word, since }, En) => format!(
+                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name"
+            ),
+            (Message::EditionKeyword { word, since }, Ja) => format!(
+                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
             ),
             (Message::UsesOutsideCall, En) => {
                 "syntax error: `uses` passes regions only at the end of the arguments of a call (`f(x, uses &mut r)`)".into()
