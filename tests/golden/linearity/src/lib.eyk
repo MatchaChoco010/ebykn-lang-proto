@@ -1,0 +1,75 @@
+// 権限の規則（仕様 §6.2）の違反を、E0503 から E0512 まで一つずつ出す負例。
+// 各関数がちょうど一つの診断を出す。期待は expected/diag.txt。
+
+pub struct Node { pub val: u64 }
+
+pub struct Pool { len: u64 } owns { nodes: Region<Ptr<Node>> }
+
+impl Pool {
+    // E0503：持っている権限をもう一度取り出す。
+    pub fn take_twice(&mut self, p: Ptr<Node>) {
+        take self@nodes[p];
+        take self@nodes[p];
+        put self@nodes[p];
+    }
+
+    // E0504：解放した権限をもう一度解放する。
+    pub fn free_twice() {
+        let p = Ptr::new(Node { val: 1 });
+        let a = p.free();
+        let b = p.free();
+    }
+
+    // E0505：所有した権限を残して戻る。
+    pub fn left_behind() {
+        let p = Ptr::new(Node { val: 1 });
+    }
+
+    // E0506：権限を持っている変数に代入する。
+    pub fn reassign(q: Ptr<Node>) {
+        let mut p = Ptr::new(Node { val: 1 });
+        p = q;
+        let v = p.free();
+    }
+
+    // E0507：権限を持っている変数を束縛し直す。
+    pub fn shadow() {
+        let p = Ptr::new(Node { val: 1 });
+        let p = 5u64;
+        leak p@;
+    }
+
+    // E0508：共有の借用を通して書き込む。
+    pub fn write_shared(p: Ptr<Node>) uses &p@ {
+        (*p).val = 2;
+    }
+
+    // E0509：borrow の中で借りている権限を解放する。
+    pub fn free_in_borrow(&mut self, p: Ptr<Node>) {
+        borrow self@nodes[p] {
+            let n = p.free();
+        }
+    }
+
+    // E0510：分岐の終わりで持っている権限が違う。
+    pub fn branch(&mut self, p: Ptr<Node>, c: bool) {
+        take self@nodes[p];
+        if c {
+            put self@nodes[p];
+        }
+    }
+
+    // E0511：ループの本体の終わりと始めで持っている権限が違う。
+    pub fn in_loop(&mut self, p: Ptr<Node>, n: u64) {
+        let mut i = 0;
+        while i < n {
+            take self@nodes[p];
+            i = i + 1;
+        }
+    }
+
+    // E0512：クロージャの中で権限を使う。
+    pub fn in_closure(p: Ptr<Node>) uses &p@ {
+        let f = || (*p).val;
+    }
+}

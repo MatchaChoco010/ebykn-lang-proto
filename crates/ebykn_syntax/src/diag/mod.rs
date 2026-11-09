@@ -1,9 +1,14 @@
 //! 診断（仕様 §10.1）。
 //!
 //! 形式は `ファイル:行:列: コード: メッセージ`。文言は英語と日本語を持ち、既定は英語。
-//! `--json` 用に rustc 互換の JSON も出せる。構文エラーのコードは `E0001`（`OPEN.md`）。
+//! `--json` 用に rustc 互換の JSON も出せる。構文エラーのコードは `E0001`、プロジェクトの誤りは
+//! `E0002`、未実装の機能は `E0003`（`OPEN.md`）。§6 の検査の文言は [`check`] にある。
+
+mod check;
 
 use std::fmt::Write as _;
+
+pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, Unimpl};
 
 use crate::span::{SourceFile, Span};
 
@@ -28,6 +33,36 @@ pub enum Code {
     E0401,
     /// `impl T` の中での `invariant` / `view` の直接定義。
     E0403,
+    /// プロジェクトの誤り（`Ebykn.toml`、モジュールのファイル。仕様 §10.1 にない。`OPEN.md`）。
+    E0002,
+    /// 未実装の機能（仕様 §10.1 にない。`OPEN.md`）。
+    E0003,
+    /// 消去フィールドの欠落。
+    E0402,
+    /// `uses` / `gives` の対象の型が直接 `Ptr` / `Cell` でない。
+    E0501,
+    /// 領域添字が識別子でない。
+    E0502,
+    E0503,
+    E0504,
+    E0505,
+    E0506,
+    E0507,
+    E0508,
+    E0509,
+    E0510,
+    E0511,
+    E0512,
+    /// `spec` フィールドを領域として使用。
+    E0513,
+    /// `uses` / `gives` 関数のメソッド呼び出し。
+    E0514,
+    /// `self` のない関数で `self@`。
+    E0515,
+    /// `owns` フィールドへの代入。
+    E0516,
+    /// 絞り込み型を展開しない位置で使用（警告）。
+    W0601,
 }
 
 impl Code {
@@ -38,7 +73,32 @@ impl Code {
             Code::E0102 => "E0102",
             Code::E0401 => "E0401",
             Code::E0403 => "E0403",
+            Code::E0002 => "E0002",
+            Code::E0003 => "E0003",
+            Code::E0402 => "E0402",
+            Code::E0501 => "E0501",
+            Code::E0502 => "E0502",
+            Code::E0503 => "E0503",
+            Code::E0504 => "E0504",
+            Code::E0505 => "E0505",
+            Code::E0506 => "E0506",
+            Code::E0507 => "E0507",
+            Code::E0508 => "E0508",
+            Code::E0509 => "E0509",
+            Code::E0510 => "E0510",
+            Code::E0511 => "E0511",
+            Code::E0512 => "E0512",
+            Code::E0513 => "E0513",
+            Code::E0514 => "E0514",
+            Code::E0515 => "E0515",
+            Code::E0516 => "E0516",
+            Code::W0601 => "W0601",
         }
+    }
+
+    /// 警告か（`W` で始まるコード）。警告だけなら検査は通る。
+    pub fn is_warning(self) -> bool {
+        self.as_str().starts_with('W')
     }
 }
 
@@ -94,6 +154,8 @@ pub enum Message {
     },
     /// E0403。
     DirectInvariantOrView { name: String },
+    /// §3、§6 の検査（[`check`]）。
+    Check(CheckMsg),
 }
 
 /// [`Message::Expected`] の対象。
@@ -181,6 +243,7 @@ impl Message {
             Message::VerifierAttr => Code::E0102,
             Message::ErasedOnNonNamed { .. } => Code::E0401,
             Message::DirectInvariantOrView { .. } => Code::E0403,
+            Message::Check(m) => m.code(),
             _ => Code::E0001,
         }
     }
@@ -188,6 +251,7 @@ impl Message {
     pub fn text(&self, lang: Lang) -> String {
         use Lang::{En, Ja};
         match (self, lang) {
+            (Message::Check(m), _) => m.text(lang),
             (Message::Lex, En) => {
                 "syntax error: cannot read tokens here (unbalanced delimiter or unterminated literal)".into()
             }
@@ -353,7 +417,15 @@ impl Diagnostic {
         json_str(&mut out, &self.message.text(lang));
         out.push_str(",\"code\":{\"code\":");
         json_str(&mut out, self.code().as_str());
-        out.push_str(",\"explanation\":null},\"level\":\"error\",\"spans\":[{\"file_name\":");
+        let level = if self.code().is_warning() {
+            "warning"
+        } else {
+            "error"
+        };
+        let _ = write!(
+            out,
+            ",\"explanation\":null}},\"level\":\"{level}\",\"spans\":[{{\"file_name\":"
+        );
         json_str(&mut out, &file.path);
         let _ = write!(
             out,
