@@ -162,8 +162,10 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     ] {
         cmd.env_remove(v);
     }
+    // 診断の位置を読むので、色の制御文字を出させない（CI は `CARGO_TERM_COLOR=always`）。
     cmd.current_dir(build)
         .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+        .env("CARGO_TERM_COLOR", "never")
         .env("PATH", path);
     match mode {
         Mode::NoVerify => cmd.args(["verus", "focus", "--", "--no-verify"]),
@@ -183,11 +185,11 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let out = cmd
         .output()
         .map_err(|e| format!("cannot run `cargo verus`: {e}"))?;
-    let raw = format!(
+    let raw = strip_ansi(&format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
-    );
+    ));
     let mut errors = Vec::new();
     let mut text = String::new();
     let mut in_error = false;
@@ -225,6 +227,25 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     })
 }
 
+/// 端末の制御文字（`ESC [ .. 文字`）を除く。
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\u{1b}' && it.peek() == Some(&'[') {
+            it.next();
+            for d in it.by_ref() {
+                if d.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn package_name(dir: &Path) -> Option<String> {
     let t = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
     t.lines()
@@ -251,12 +272,25 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStatus {
     pub item: String,
-    /// `verified` / `failed` / `admit` / `unchecked`。
+    /// `verified` / `failed` / `admit` / `unchecked` / `unknown`（エラーがあるのに、どの項目のものか
+    /// 決められなかったとき。`verified` と表示しない）。
     pub status: &'static str,
 }
 
-/// エラーの位置から、項目ごとの状態を決める。
-pub fn statuses(files: &[OutFile], output: &Output, errors: &[(String, usize)]) -> Vec<ItemStatus> {
+/// エラーの位置から、項目ごとの状態を決める。`error_count` は Verus が数えたエラーの数。
+/// エラーがあるのに、どのエラーの位置もどの項目にも入らなければ、`verified` の代わりに `unknown` にする。
+pub fn statuses(
+    files: &[OutFile],
+    output: &Output,
+    errors: &[(String, usize)],
+    error_count: u64,
+) -> Vec<ItemStatus> {
+    let attributed = errors.iter().any(|(file, line)| {
+        files
+            .iter()
+            .any(|f| f.rel == *file && f.items.iter().any(|(s, e, _)| s <= line && line <= e))
+    });
+    let unknown = error_count > 0 && !attributed;
     let mut out = Vec::new();
     for f in files {
         for (start, end, item) in &f.items {
@@ -269,6 +303,8 @@ pub fn statuses(files: &[OutFile], output: &Output, errors: &[(String, usize)]) 
                 "unchecked"
             } else if failed {
                 "failed"
+            } else if unknown {
+                "unknown"
             } else {
                 "verified"
             };
@@ -323,10 +359,39 @@ mod tests {
             admitted: vec!["k::l".into()],
             unchecked: vec![],
         };
-        let st = statuses(&files, &output, &[("src/lib.rs".into(), 7)]);
+        let st = statuses(&files, &output, &[("src/lib.rs".into(), 7)], 1);
         assert_eq!(
             status_text(&st, Some((1, 1))),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
+        );
+    }
+
+    #[test]
+    fn fails_closed_when_errors_cannot_be_attributed() {
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![(1, 5, "k::f".into())],
+        }];
+        let output = Output {
+            files: files.clone(),
+            admitted: vec![],
+            unchecked: vec![],
+        };
+        // エラーが 1 件あるのに位置を読めなかった：verified と言わない。
+        let st = statuses(&files, &output, &[], 1);
+        assert_eq!(st[0].status, "unknown");
+        // エラーがなければ verified。
+        assert_eq!(statuses(&files, &output, &[], 0)[0].status, "verified");
+    }
+
+    #[test]
+    fn reads_error_locations_through_colors() {
+        let colored = "\u{1b}[1m\u{1b}[91merror\u{1b}[0m: postcondition not satisfied\n  \u{1b}[1m\u{1b}[94m--> \u{1b}[0msrc/lib.rs:33:13";
+        let plain = strip_ansi(colored);
+        assert_eq!(
+            plain,
+            "error: postcondition not satisfied\n  --> src/lib.rs:33:13"
         );
     }
 }

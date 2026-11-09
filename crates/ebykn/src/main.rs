@@ -205,7 +205,8 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let all = ebykn::verus::statuses(&output.files, &output, &r.errors);
+    let error_count = r.results.map_or(0, |(_, e)| e);
+    let all = ebykn::verus::statuses(&output.files, &output, &r.errors, error_count);
     let wanted = |i: &str| {
         items.is_empty()
             || items
@@ -249,7 +250,11 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             ),
         );
     }
-    if shown.iter().any(|s| s.status == "failed") || !r.success {
+    if shown
+        .iter()
+        .any(|s| matches!(s.status, "failed" | "unknown"))
+        || !r.success
+    {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
