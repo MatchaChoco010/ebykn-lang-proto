@@ -732,7 +732,7 @@ fn forbidden_crates_in_use_groups_inside_macro_arguments_are_rejected() {
     );
     let src = "fn f() { println!(\"{}\", { use {vstd as v}; v::prelude::admit(); 1 }) }";
     rejects(src, &format!("cannot refer to the crate `vstd` {DIRECT}"));
-    rejects(src, "`admit(..)` is Verus syntax");
+    rejects(src, "`v::prelude::admit(..)` is Verus syntax");
     rejects(
         "fn f() { vec![{ use {self::m, builtin as b}; 1 }] }",
         &format!("cannot refer to the crate `builtin` {DIRECT}"),
@@ -743,4 +743,32 @@ fn forbidden_crates_in_use_groups_inside_macro_arguments_are_rejected() {
     );
     // `use` のグループでない `{ }` の先頭はよい。
     ok("fn f() { assert!({ let builtin = 1; builtin > 0 }); }");
+}
+
+/// PR #20 のレビュー（B3）：Verus の句・証明の組み込み関数を本体の文として書くと、Verus はそれを
+/// 句として読む（glob の `use vstd::prelude::*;` の下では `requires(x == 0);` が黙って事前条件になる）。
+#[test]
+fn verus_clause_builtins_are_rejected_as_calls() {
+    for name in ebykn_syntax::VERUS_BUILTIN_CALLS {
+        let src = format!("pub fn f(x: u64) -> u64 {{ {name}(x == 0); x }}");
+        rejects(&src, &format!("`{name}(..)` is Verus syntax"));
+    }
+    // レビューの入力そのもの。
+    let src = "pub fn f(x: u64) -> u64 { requires(x == 0); ensures(|r: u64| r == 0); recommends(x == 0); decreases(x); opens_invariants_none(); opens_invariants_any(); no_unwind(); returns(x); invariant(x == 0); x }";
+    let d = diags(src);
+    assert_eq!(d.len(), 9, "{d:?}");
+    // std のマクロの引数（トークン列のまま持つ部分）でも拒否する。
+    rejects(
+        "pub fn f(x: u64) { println!(\"{}\", { requires(x == 0); 1 }); }",
+        "`requires(..)` is Verus syntax",
+    );
+    // パス付きの呼び出しとメソッドは利用者の関数として読む。
+    ok(
+        "mod m { pub fn requires(x: bool) {} }\npub fn f(s: &S) { m::requires(true); s.decreases(); }\npub struct S {}\nimpl S { pub fn decreases(&self) {} }",
+    );
+    // 中を読まないマクロの引数の中は名前解決しないので、パス付きでも拒否する（`OPEN.md`）。
+    rejects(
+        "pub fn f(x: u64) { println!(\"{}\", m::requires(x)); }",
+        "`m::requires(..)` is Verus syntax",
+    );
 }

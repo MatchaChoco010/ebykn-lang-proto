@@ -29,6 +29,9 @@ pub struct Parsed {
     pub file: ast::File,
     /// 位置の順に並べた診断。
     pub diags: Vec<Diagnostic>,
+    /// 構文解析では判定できなかった、[`crate::reserved`] の表の名前を最後に持つパス。
+    /// 検査（`ebykn_check`）が名前解決して決める。
+    pub deferred: Vec<(Span, crate::reserved::DeferredName)>,
 }
 
 impl Parsed {
@@ -51,6 +54,7 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
                     span: file.span(0, file.text.len()),
                 },
                 diags: vec![Diagnostic::new(span, Message::Lex)],
+                deferred: Vec::new(),
             };
         }
     };
@@ -85,9 +89,19 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
     let mut diags = cx.diags;
     diags.sort_by_key(|d| (d.span.lo, d.span.hi));
     diags.dedup();
+    // 判定を検査に任せる名前は、診断の流れに乗せて運んできた（先読みで捨てた分は捨てられる）。
+    let mut deferred = Vec::new();
+    diags.retain(|d| match &d.message {
+        Message::Deferred(n) => {
+            deferred.push((d.span, n.clone()));
+            false
+        }
+        _ => true,
+    });
     Parsed {
         file: parsed,
         diags,
+        deferred,
     }
 }
 
@@ -162,6 +176,41 @@ pub(crate) fn span_of_tokens(ts: &TokenStream) -> Option<Span> {
     let first = it.next()?;
     let last = it.last().unwrap_or_else(|| first.clone());
     Some(sp(first.span()).to(sp(last.span())))
+}
+
+/// パス（`r#` を外した名前の列）の最後の名前が表（[`crate::reserved`]）の `want` の種類なら、
+/// 裸の名前と先頭が `::` のものは診断にし、それ以外は検査に任せる。診断にしたら `true`。
+pub(crate) fn reserved_path(
+    segs: &[String],
+    leading_colon: bool,
+    want: fn(crate::reserved::ReservedKind) -> bool,
+    written: String,
+    span: Span,
+) -> bool {
+    use crate::reserved::{DeferredName, ReservedKind, kind_of};
+    let Some(kind) = segs.last().and_then(|n| kind_of(n)).filter(|k| want(*k)) else {
+        return false;
+    };
+    if segs.len() == 1 || leading_colon {
+        let name = segs.last().cloned().unwrap_or_default();
+        let m = match kind {
+            ReservedKind::ProofCall => Message::ProofSyntax { written },
+            ReservedKind::VerusCall => Message::VerusBuiltin { name, written },
+            ReservedKind::VerusMacro => Message::VerusOnly { written },
+            ReservedKind::EbyknTrait => Message::NotAllowedHere { written },
+        };
+        push(span, m);
+        return true;
+    }
+    push(
+        span,
+        Message::Deferred(DeferredName {
+            segments: segs.to_vec(),
+            kind,
+            written,
+        }),
+    );
+    false
 }
 
 /// 診断を足す（[`captured`] の中では貯める）。

@@ -1,0 +1,10 @@
+src/lib.eyk:12:25: E0503: the permission `p@` is already held here; put it back before taking it again
+src/lib.eyk:20:17: E0504: cannot free it with `.free()` because the permission `p@` is not held here
+src/lib.eyk:24:26: E0505: the permission(s) `p@` are still owned here; free, put back, move or `leak` them (only `gives` return values may remain)
+src/lib.eyk:31:9: E0506: cannot assign to `p` while its permission `p@` is held
+src/lib.eyk:38:13: E0507: cannot bind `p` again while its permission `p@` is held
+src/lib.eyk:44:9: E0508: cannot write through `p` because the permission `p@` is only borrowed (shared)
+src/lib.eyk:50:21: E0509: cannot free it with `.free()` inside `borrow` of `p`; the permission `p@` is only borrowed in the block
+src/lib.eyk:57:9: E0510: the branches end holding different permissions: `p@` (not held / owned)
+src/lib.eyk:65:21: E0511: the loop holds different permissions at the end of the loop body than at its start: `p@` (not held / owned)
+src/lib.eyk:73:21: E0512: permissions cannot be used inside a closure, but this uses `p`

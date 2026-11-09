@@ -8,9 +8,11 @@
 pub mod ast;
 pub mod diag;
 mod parse;
+pub mod reserved;
 pub mod span;
 
 pub use parse::{Parsed, parse_eyk};
+pub use reserved::VERUS_BUILTIN_CALLS;
 
 /// `.eyk` で呼べるマクロ（#16 の既定）。std のマクロと、vstd の仕様用のマクロ。
 /// 裸の名前か、std / core / alloc（vstd のマクロは vstd）から始まるパスで呼べる。
