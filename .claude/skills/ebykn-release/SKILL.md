@@ -18,15 +18,29 @@ description: ebykn-lang-proto でリリースを切る手順。develop の先頭
 ```bash
 bash -euo pipefail <<'EOF'
 git fetch origin --prune --tags
+
+# 前提：既定のブランチが develop（手順 2 の commits/<sha>/pulls が PR を返す条件）
+default=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+[ "$default" = develop ] || { echo "止まる：既定のブランチが develop ではなく $default"; exit 1; }
+
+# 前回のリリースの PR が main にマージコミットで入ったか
+last=$(gh pr list --base main --head release --state merged --limit 1 --json headRefOid --jq '.[0].headRefOid // empty')
+[ -z "$last" ] || git merge-base --is-ancestor "$last" origin/main \
+  || { echo "止まる：前回のリリースの PR が main にマージコミットで入っていない"; exit 1; }
+
 latest=$(git tag --list 'report/*' --sort=-v:refname | head -n1)
 
 # 止まったリリースがあれば、同じ識別子で再開する
 mode=new
 if [ -n "$latest" ]; then
-  if ! gh release view "$latest" > /dev/null 2>&1; then
-    mode=resume-release   # タグはあるが Release がない：手順 5 から
-  elif ! git merge-base --is-ancestor "$latest" origin/release 2> /dev/null; then
-    mode=resume-ff        # Release はあるが release が進んでいない：手順 6 から
+  if err=$(gh release view "$latest" 2>&1 > /dev/null); then
+    if ! git merge-base --is-ancestor "$latest" origin/release 2> /dev/null; then
+      mode=resume-ff        # Release はあるが release が進んでいない：手順 6 から
+    fi
+  elif [ "$err" = "release not found" ]; then
+    mode=resume-release     # タグはあるが Release がない：手順 5 から
+  else
+    echo "止まる：gh release view $latest が失敗した：$err"; exit 1
   fi
 fi
 
@@ -48,6 +62,8 @@ fi
 git merge-base --is-ancestor "$prev_sha" "$sha" || { echo "止まる：$prev が $sha の祖先ではない"; exit 1; }
 
 dir=<scratchpad>/release-$id
+# 新しく切るときは、前に止まった回の出力（古い PDF など）を消す。リモートにはまだ何もない
+[ "$mode" != new ] || rm -rf "$dir"
 mkdir -p "$dir"
 printf 'mode=%s\nid=%s\nsha=%s\nprev=%s\nprev_sha=%s\ndir=%s\n' \
   "$mode" "$id" "$sha" "$prev" "$prev_sha" "$dir" > "$dir/vars"
@@ -56,6 +72,10 @@ EOF
 ```
 
 - 「止まる」が出たら（`exit 1` で終わる）、そこで止まって報告する。`develop` が進んでいなければ、リリースは切らない。
+- 既定のブランチが `develop` でなければ止まる。GitHub の `commits/<sha>/pulls` は、既定のブランチの上のコミットにしか、マージ済みの PR を返さない。既定のブランチが変わると、手順 2 で範囲のすべてのコミットが「PR のないコミット」に見える。
+- 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。次の PR の差分に同じ変更がもう一度出るので、作者に報告する。
+- `gh release view` の失敗は、`release not found` のときだけ Release がないとみなす。通信の失敗などほかのエラーでは止まり、再開と取り違えない。
+- 新しく切るとき（`mode=new`）は、作業用のフォルダを消してから作る。前に手順 3 までで止まった回の出力を使わないため。
 - `mode` で、どこから進めるかが決まる。
 
 | `mode` | 状態 | 進める手順 |
@@ -89,7 +109,7 @@ PR の CI は、ほかの PR が先にマージされたあとの組み合わせ
 
 ## 2. 範囲の PR と Issue を集める
 
-`develop` の first-parent の各コミットについて、GitHub に、そのコミットでマージされた PR を聞く（`commits/<sha>/pulls` のうち `merge_commit_sha` がそのコミットのもの）。ベースが `main` のころに入った PR も、件数の上限なく取れる。コミットの題の `(#N)`（squash）と `Merge pull request #N`（取り込みの PR のマージコミット）とも突き合わせる。
+`develop` の first-parent の各コミットについて、GitHub に、そのコミットでマージされた PR を聞く（`commits/<sha>/pulls` のうち `merge_commit_sha` がそのコミットのもの）。ベースが `main` のころに入った PR も、件数の上限なく取れる。GitHub がマージ済みの PR を返すのは既定のブランチの上のコミットだけなので、既定のブランチが `develop` であることが前提になる（手順 1 で確かめる）。コミットの題の `(#N)`（squash）と `Merge pull request #N`（取り込みの PR のマージコミット）とも突き合わせる。
 
 ```bash
 bash -euo pipefail <<'EOF'
@@ -178,10 +198,13 @@ EOF
 ```
 
 ```bash
-gh release create "report/<id>" --verify-tag --prerelease \
-  --title "報告 <id>" --notes-file <scratchpad>/release-<id>/release-notes.md \
+bash -euo pipefail <<'EOF'
+. <scratchpad>/release-<id>/vars
+gh release create "report/${id}" --verify-tag --prerelease \
+  --title "報告 ${id}" --notes-file "$dir/release-notes.md" \
   "<PDF>#報告スライド（PDF）" "<元のファイル>#報告スライドの元のファイル"
-gh release view "report/<id>" --json url --jq .url
+gh release view "report/${id}" --json url --jq .url
+EOF
 ```
 
 `--verify-tag` で、手順 4 で押したタグがなければ失敗させる（`gh` に別のタグを作らせない）。
@@ -208,20 +231,17 @@ EOF
 
 ## 7. release → main の PR
 
-まず、前回のリリースの PR が `main` にマージコミットで入ったかを確かめる。
+開いたリリースの PR と、確認待ちのリリースを調べる（前回の PR がマージコミットで入ったかは、手順 1 で確かめてある）。
 
 ```bash
 bash -euo pipefail <<'EOF'
 . <scratchpad>/release-<id>/vars
 git fetch origin --prune
 gh pr list --base main --head release --state open --json number,url
-last=$(gh pr list --base main --head release --state merged --limit 1 --json headRefOid --jq '.[0].headRefOid // empty')
-[ -z "$last" ] || git merge-base --is-ancestor "$last" origin/main || { echo "止まる：前回のリリースの PR が main にマージコミットで入っていない"; exit 1; }
 git tag --list 'report/*' --merged "$sha" --no-merged origin/main --sort=v:refname   # 確認待ちのリリース
 EOF
 ```
 
-- 「止まる」が出たら、`main` が squash か rebase でマージされた。次の PR の差分に同じ変更がもう一度出るので、止まって作者に報告する。
 - 最後のコマンドの一覧が、本文の「確認待ちのリリース」に載せるものの全部。手順 6 のとおり `release` は Release のあるタグにしか進まないので、どれにも Release がある。
 
 本文とコメントを書き、`yomiyasu:yomiyasu` スキルの `--doc-type pr` で推敲する（lint → 書き直し → `run --final <ファイル> --doc-type pr` → `verify`）。verify を通した最終稿を変えずに使う。
@@ -267,14 +287,29 @@ GitHub の画面でマージするときは、PR の先頭のコミットがこ�
 <何が入ったかを 2〜4 文で>
 ```
 
+PR がないとき：
+
 ```bash
-# PR がないとき
+bash -euo pipefail <<'EOF'
 gh pr create --base main --head release --title "確認待ちのリリースを main に入れる" --body-file <本文の最終稿>
-# PR があるとき
+EOF
+```
+
+PR があるとき：
+
+```bash
+bash -euo pipefail <<'EOF'
 gh pr edit <PR 番号> --body-file <本文の最終稿>
-# どちらでも
+EOF
+```
+
+どちらでも：
+
+```bash
+bash -euo pipefail <<'EOF'
 gh pr comment <PR 番号> --body-file <コメントの最終稿>
 gh pr checks <PR 番号> --watch
+EOF
 ```
 
 `release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから報告する。
@@ -304,4 +339,4 @@ gh pr checks <PR 番号> --watch
 
 - リリースの PR は閉じる。次のリリースの手順 7 では開いた PR がないので、新しく作る。
 - 新しい PR の「確認待ちのリリース」には、`main` に入っていないタグだけが載る。
-- 手順 7 の最初の確認で、前回の PR がマージコミットで入ったことを確かめる。
+- 次のリリースの手順 1 で、前回の PR がマージコミットで入ったことを確かめる。
