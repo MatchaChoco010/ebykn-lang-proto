@@ -26,13 +26,20 @@ impl Walker<'_> {
                 }
             }
             ProofStmt::AssertForall {
-                binders, body, by, ..
+                binders,
+                triggers,
+                body,
+                by,
             } => {
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
                         self.expr(x);
+                        if self.is_map(x) {
+                            self.facts.map_binders.insert(x.span.into());
+                        }
                     }
                 }
+                self.triggers(triggers);
                 self.expr(body);
                 self.block(by);
             }
@@ -45,6 +52,15 @@ impl Walker<'_> {
                 }
             }
             ProofStmt::Hide(_) => {}
+        }
+    }
+
+    /// 量化子の `#![trigger e, ..]` の式。
+    pub(super) fn triggers(&mut self, triggers: &[ast::Trigger]) {
+        for t in triggers {
+            if let ast::Trigger::Exprs { exprs, .. } = t {
+                self.exprs(exprs);
+            }
         }
     }
 }

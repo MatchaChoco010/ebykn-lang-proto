@@ -13,7 +13,21 @@ use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
 
 fn mk(attrs: Vec<ast::Attr>, kind: ast::ExprKind, span: Span) -> ast::Expr {
+    // 式の `#[trigger]` は書ける位置（仕様 §5.7）。
+    for a in &attrs {
+        if !a.inner && attr_name(a) == Some("trigger") {
+            crate::parse::proof_attr_ok(a.span);
+        }
+    }
     ast::Expr { attrs, kind, span }
+}
+
+/// 一つの名前だけの属性のパスの名前（`r#` は外す）。
+pub(in crate::parse) fn attr_name(a: &ast::Attr) -> Option<&str> {
+    match a.path.segments.as_slice() {
+        [s] if !a.path.leading_colon => Some(s.ident.name.as_str()),
+        _ => None,
+    }
 }
 
 fn bx(e: syn::Expr) -> Box<ast::Expr> {

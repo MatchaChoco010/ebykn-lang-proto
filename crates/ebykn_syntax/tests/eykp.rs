@@ -113,14 +113,18 @@ fn misplaced_proof_syntax_in_eykp() {
         "fn f() { g(proof { 1 }) }",
         "`proof { .. }` can only be written as a statement",
     );
-    rejects_p(
-        "fn f() { vec![reveal(g)]; }",
-        "`reveal(..)` can only be written as a statement",
-    );
-    rejects_p(
-        "fn f() { vec![proof { }]; }",
-        "`proof { .. }` can only be written as a statement",
-    );
+    // マクロの引数の中は Ebykn が読まないので、`.eykp` でも証明構文を書けない。
+    for (src, written) in [
+        ("vec![reveal(g)]", "reveal(..)"),
+        ("vec![{ proof { } 1 }]", "proof { .. }"),
+        ("vec![{ assert x; 1 }]", "assert"),
+        ("vec![{ spec let y = 1; y }]", "spec let"),
+    ] {
+        rejects_p(
+            &format!("fn f() {{ {src}; }}"),
+            &format!("`{written}` cannot be written in code that Ebykn does not read"),
+        );
+    }
     rejects_p(
         "fn f() by(bit_vector) { }",
         "`by(..)` cannot be written here",
@@ -284,5 +288,122 @@ fn appendix_a2_reads() {
             "(assert (.no_duplicates (@ b order)))",
             "(assert-forall [i in (.. 0 (.len (@ b order)))] (== (. (index (@ b nodes) (index (@ b order) i)) prev) (.get (@ b order) (- i 1))) by {(if (< i (.len (@ a order))) {(assert (== (index (@ b order) i) (index (@ a order) i)))})})",
         ]
+    );
+}
+
+/// `.eykp` でも書けないものは、`.eyk` でも証明ファイルへ案内しない（E0303 にしない。#86 のレビュー）。
+#[test]
+fn eyk_does_not_point_to_eykp_for_what_eykp_rejects_too() {
+    for (src, want) in [
+        (
+            "fn f() { reveal_with_fuel(g, 2); }",
+            "in Ebykn write `reveal(f, n)`",
+        ),
+        (
+            "fn f() { let y = reveal_with_fuel(g, 2); }",
+            "in Ebykn write `reveal(f, n)`",
+        ),
+        (
+            "fn f() by(bit_vector) { }",
+            "`by(..)` cannot be written here",
+        ),
+        (
+            "spec fn f() -> int by(bit_vector) = 1;",
+            "`by(..)` cannot be written here",
+        ),
+        ("lemma fn l() by(nonsense);", "expected a prover mode"),
+        (
+            "unchecked lemma fn l() { }",
+            "`unchecked lemma fn .. { .. }` cannot be written here",
+        ),
+        (
+            "trait T { lemma fn l() { } }",
+            "`lemma fn .. { .. } in a trait` cannot be written here",
+        ),
+        ("#[auto] fn f() { }", "`#[auto]` cannot be written here"),
+        (
+            "#[memoize] fn f() { }",
+            "`#[memoize]` cannot be written here",
+        ),
+        ("#[rlimit(x)] fn f() { }", "write `#[rlimit(20)]`"),
+    ] {
+        for text in [diags(src), diags_p(src)] {
+            assert!(text.iter().any(|d| d.contains(want)), "{src}: {text:?}");
+            assert!(!text.iter().any(|d| d.contains("E0303")), "{src}: {text:?}");
+        }
+    }
+    // `.eykp` に書ける形は、`.eyk` では E0303 のまま。
+    for src in [
+        "lemma fn l() by(bit_vector);",
+        "#[opaque] spec fn f() -> int = 1;",
+        "#[rlimit(20)] fn f() { }",
+    ] {
+        assert!(diags(src).iter().any(|d| d.contains("E0303")), "{src}");
+        assert!(diags_p(src).is_empty(), "{src}: {:?}", diags_p(src));
+    }
+}
+
+/// 仕様 §5.7：`"spec" "let" Pat "=" Expr ";"`（#86 のレビュー）。
+#[test]
+fn spec_let_needs_an_initializer_and_no_else() {
+    rejects_p("fn f() { spec let x; }", "expected `= expr` in `spec let`");
+    rejects_p(
+        "fn f() { spec let Some(x) = o else { return; }; }",
+        "`spec let .. else { .. }` cannot be written here",
+    );
+}
+
+/// 証明の属性は、書ける位置（式の `#[trigger]`、量化子の本体の前の `#![trigger ..]` / `#![auto]`、
+/// `spec fn` の `#[opaque]` / `#[memoize]`、`fn` / `lemma fn` の `#[rlimit(n)]` / `#[spinoff_prover]`）と
+/// 正しい引数でだけ書ける（#86 のレビュー）。
+#[test]
+fn proof_attributes_are_checked_for_position_and_arguments() {
+    for (src, written) in [
+        ("#![auto]\nfn f() { }", "#![auto]"),
+        ("#![trigger x]\nfn f() { }", "#![trigger]"),
+        ("mod m { #![auto] }", "#![auto]"),
+        ("#[trigger] struct S { a: u8 }", "#[trigger]"),
+        ("struct S { #[trigger] a: u8 }", "#[trigger]"),
+        ("fn f() { #[trigger] let x = 1; }", "#[trigger]"),
+        ("#[memoize] fn f() { }", "#[memoize]"),
+        ("#[opaque] fn f() { }", "#[opaque]"),
+        (
+            "#[spinoff_prover] spec fn f() -> int = 1;",
+            "#[spinoff_prover]",
+        ),
+        (
+            "#[cfg_attr(all(), opaque)] spec fn f() -> int = 1;",
+            "#[opaque]",
+        ),
+    ] {
+        rejects_p(src, &format!("`{written}` cannot be written here"));
+    }
+    for (src, form) in [
+        ("#[rlimit(x)] fn f() { }", "#[rlimit(20)]"),
+        ("#[rlimit] fn f() { }", "#[rlimit(20)]"),
+        ("#[opaque(1)] spec fn f() -> int = 1;", "#[opaque]"),
+        ("fn f() { assert #[trigger(x)] g(x); }", "#[trigger]"),
+    ] {
+        rejects_p(src, &format!("write `{form}`"));
+    }
+    ok_p(
+        "#[memoize] #[opaque] spec fn f() -> int = 1;\n#[rlimit(20)] #[spinoff_prover] fn g() { }",
+    );
+}
+
+/// 「一つ以上」「一つだけ」の文法（#86 のレビュー）。
+#[test]
+fn at_least_one_and_at_most_one() {
+    rejects_p(
+        "lemma group g { }",
+        "expected at least one lemma in `lemma group g { .. }`",
+    );
+    rejects_p(
+        "fn f() { assert forall i: int, #![trigger] i == i; }",
+        "expected at least one expression in `#![trigger ..]`",
+    );
+    rejects_p(
+        "lemma fn l() by(bit_vector) by(nonlinear_arith) { }",
+        "`a second by(..)` cannot be written here",
     );
 }

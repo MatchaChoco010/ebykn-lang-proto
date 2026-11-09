@@ -23,11 +23,42 @@ const PROOF_ATTRS: &[&str] = &[
     "memoize",
 ];
 
-/// [`PROOF_ATTRS`] のうち、外部属性（`#[..]`）として書けるもの。
-const PROOF_OUTER_ATTRS: &[&str] = &["trigger", "opaque", "rlimit", "spinoff_prover", "memoize"];
+/// 項目の外部属性の証明の属性が、その項目に書けるか。`#[opaque]` / `#[memoize]` は `spec fn`、
+/// `#[rlimit(n)]` / `#[spinoff_prover]` は検証する関数（`fn`、`lemma fn`）に付く（Verus の
+/// `verifier::opaque` などと同じ）。`#[trigger]` は式に付く。
+pub(super) fn proof_attr_fits_item(name: &str, spec_fn: bool, verified_fn: bool) -> bool {
+    match name {
+        "opaque" | "memoize" => spec_fn,
+        "rlimit" | "spinoff_prover" => verified_fn,
+        _ => false,
+    }
+}
 
-/// [`PROOF_ATTRS`] のうち、内部属性（`#![..]`）として書けるもの。量化子の本体の前に置く。
-const PROOF_INNER_ATTRS: &[&str] = &["trigger", "auto"];
+/// 書ける位置の証明の属性の引数が崩れていれば、正しい形。`#![trigger ..]` の引数は構文解析が
+/// 式として読み、`#![auto]` の引数は構文解析が拒否する。
+pub(super) fn proof_attr_args_error(a: &super::ProofAttrUse) -> Option<&'static str> {
+    if a.inner {
+        return None;
+    }
+    match a.name.as_str() {
+        "rlimit" => {
+            let ok = match a.args.as_slice() {
+                [TokenTree::Group(g)] if g.delimiter() == Delimiter::Parenthesis => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    matches!(inner.as_slice(), [TokenTree::Literal(l)]
+                        if l.to_string().chars().all(|c| c.is_ascii_digit()))
+                }
+                _ => false,
+            };
+            (!ok).then_some("#[rlimit(20)]")
+        }
+        "trigger" => (!a.args.is_empty()).then_some("#[trigger]"),
+        "opaque" => (!a.args.is_empty()).then_some("#[opaque]"),
+        "spinoff_prover" => (!a.args.is_empty()).then_some("#[spinoff_prover]"),
+        "memoize" => (!a.args.is_empty()).then_some("#[memoize]"),
+        _ => None,
+    }
+}
 
 /// Verus の属性で、Ebykn に対応する書き方がないもの。
 const VERUS_ATTRS: &[&str] = &["all_triggers", "via_fn", "when_used_as_spec"];
@@ -224,21 +255,14 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
             }
         }
     } else if PROOF_ATTRS.contains(&name.as_str()) {
-        let written = if inner {
-            format!("#![{name}]")
-        } else {
-            format!("#[{name}]")
-        };
-        let allowed = if inner {
-            PROOF_INNER_ATTRS
-        } else {
-            PROOF_OUTER_ATTRS
-        };
-        if !super::in_proof() {
-            push(span, Message::ProofSyntax { written });
-        } else if !allowed.contains(&name.as_str()) {
-            push(span, Message::NotAllowedHere { written });
-        }
+        // 位置は字句では決まらないので記録だけする。構文解析が書ける位置で読んだかを、解析の
+        // 終わりに確かめる（[`super::check_proof_attrs`]）。
+        super::record_proof_attr(super::ProofAttrUse {
+            span,
+            name,
+            inner,
+            args: body[end..].to_vec(),
+        });
     } else if VERUS_ATTRS.contains(&name.as_str()) {
         push(
             span,
@@ -328,14 +352,32 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
         }
         let next = tts.get(i + 1);
         let span = sp(tt.span());
-        let m = if name == "proof" && group(next, Delimiter::Brace) {
-            // `.eykp` でも、中を読まないトークン列の中の証明は読めないので拒否する。
-            let written = "proof { .. }".to_string();
-            Some(if super::in_proof() {
-                Message::ProofStmtOnly { written }
-            } else {
-                Message::ProofSyntax { written }
+        // 中を読まないトークン列の中の証明構文は、`.eykp` でも読めない。`.eyk` でも証明ファイルへは
+        // 案内せず、読まないコードの中には書けないと伝える（#86）。
+        let at_stmt_start = prev.is_none() || punct(prev, ';') || group(prev, Delimiter::Brace);
+        let in_opaque = |w: &str| {
+            Some(Message::ProofInOpaque {
+                written: w.to_string(),
             })
+        };
+        let m = if name == "proof" && group(next, Delimiter::Brace) {
+            in_opaque("proof { .. }")
+        } else if name == "assert"
+            && at_stmt_start
+            && !matches!(next, Some(TokenTree::Punct(p)) if "!=.:,;".contains(p.as_char()))
+            && !group(next, Delimiter::Parenthesis)
+            && next.is_some()
+        {
+            // `assert x;`（`assert(..)` は下の呼び出しの判定が見る）。
+            in_opaque("assert")
+        } else if name == "spec" && ident(next).as_deref() == Some("let") {
+            in_opaque("spec let")
+        } else if crate::reserved::kind_of(&name) == Some(crate::reserved::ReservedKind::ProofCall)
+            && name != "reveal_with_fuel"
+            && !punct(prev, '.')
+            && group(next, Delimiter::Parenthesis)
+        {
+            in_opaque(&format!("{name}(..)"))
         } else if crate::reserved::kind_of(&name).is_some_and(crate::reserved::is_call)
             && !punct(prev, '.')
             && !punct(next, '!')

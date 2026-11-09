@@ -93,11 +93,18 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### `.eyk` の証明構文
 
-`.eyk` では、次を証明構文として `E0303` で拒否します（`.eykp` では §5.7 の証明構文として読む）。
+`.eyk` では、次を証明構文として `E0303` で拒否します（`.eykp` では §5.7 の証明構文として読む）。文言は、証明ファイル（`proof/*.eykp`）に書くよう案内します。
 
-- 文の先頭の `assert`（`assert!` は除く）、`proof { }`、`spec let`。
-- 式のどの位置でも、裸のパスの呼び出し `assert(..)`・`reveal(..)`・`reveal_with_fuel(..)`・`hide(..)`。
-- `assume(..)`・`admit(..)`。Ebykn にない Verus の関数として拒否し、`unchecked` を案内します。
+- 文の先頭の `assert`（`assert!` は除く）、`proof { }`、`spec let`、`reveal(..)`、`hide(..)`。
+- 式のどの位置でも、裸のパスの呼び出し `assert(..)`・`reveal(..)`・`hide(..)`。
+- §5.7 の書ける位置にある証明の属性、`lemma fn` の本体と `by(mode)`、`lemma group`、`use lemmas`、`=~=`。
+
+`.eykp` でも書けないものは、`.eyk` でも証明ファイルへ案内せず、`.eykp` と同じ `E0001` にします。案内に従って `.eykp` に移しても通らないからです。
+
+- `reveal_with_fuel(..)`：Verus の書き方として、`reveal(f, n)` を案内します。
+- `assume(..)`・`admit(..)`：Ebykn にない Verus の関数として拒否します（文言は「Verus の書き方で、書けません」。クレートの中に同じ名前の関数があれば、パスで呼べると案内します）。
+- 書けない位置の証明の属性と引数の崩れた属性、`fn` / `spec fn` の `by(..)`、証明器の名前の誤り、`unchecked lemma fn` と trait の `lemma fn` の本体（§5.7「証明構文の位置」）。
+- マクロの引数など、Ebykn が中を読まないコードの中の証明構文（`proof { }`、`assert`、`spec let`、`assert(..)`・`reveal(..)`・`hide(..)`）。文言は「Ebykn が読まないコードの中には書けない」です。
 
 パス付きの呼び出し（`m::assume(x)`）は、クレートの中の定義に解決するときだけ利用者の関数として読みます（§5「`.eyk` では Verus の構文を拒否する」。`std::hint::assume(true)` は `E0001`）。メソッドは利用者のメソッドとして読みます。
 
@@ -238,13 +245,19 @@ into_graph(a, b, uses g)                                         // 移動
 
 ### §5.7 証明構文の位置
 
-- 証明の文（`proof { }`、`assert`、`spec let`、`reveal`、`hide`）は文の位置にだけ書けます。式の位置（`f(proof { .. })`、`vec![reveal(g)]` のようなマクロの引数の中）に書くと `E0001` です。証明の文には属性を付けられません（`E0001`）。
-- `ProofAttr` のうち、外部属性（`#[..]`）として書けるのは `#[trigger]`・`#[opaque]`・`#[rlimit(n)]`・`#[spinoff_prover]`・`#[memoize]`、内部属性（`#![..]`）として書けるのは `#![trigger e, ..]`・`#![auto]` です。ほかの組み合わせ（`#[auto]`、`#![opaque]`）は `E0001` です。
-- `#![trigger e, ..]` / `#![auto]` は、量化子の束縛子の後の `,` と本体のあいだに書きます（`forall x: T, #![trigger f(x)] P`、`assert forall x: T, #![auto] P by { }`）。引数は Ebykn の式として読みます（`self@nodes[p]` などを書き下すため）。
-- `lemma group` はモジュールの直下にだけ書けます（Verus の `broadcast group` と同じ）。ブロックや `impl` の中では `E0001` です。
+- 証明の文（`proof { }`、`assert`、`spec let`、`reveal`、`hide`）は文の位置にだけ書けます。式の位置（`f(proof { .. })`）に書くと `E0001` です。マクロの引数の中（`vec![{ proof { } 1 }]`）は Ebykn が読まないので、文の形でも `E0001` です。証明の文には属性を付けられません（`E0001`）。
+- `ProofAttr` は、次の位置にだけ書けます。ほかの位置（ファイルや `mod` の先頭の内部属性、文・構造体・フィールドの属性、`cfg_attr` の中、マクロの引数の中など）は `E0001` です。
+  - `#[trigger]`：式に付ける。
+  - `#![trigger e, ..]` / `#![auto]`：量化子の束縛子の後の `,` と本体のあいだに書く（`forall x: T, #![trigger f(x)] P`、`assert forall x: T, #![auto] P by { }`）。`#![trigger]` の引数は Ebykn の式として読み（`self@nodes[p]` などを書き下すため）、一つ以上を要します。
+  - `#[opaque]`・`#[memoize]`：`spec fn` に付ける。
+  - `#[rlimit(n)]`・`#[spinoff_prover]`：`fn` と `lemma fn` に付ける（Verus が検証する関数）。
+- 引数の形：`#[rlimit(n)]` の `n` は整数のリテラル、ほかの外部属性は引数を持ちません。崩れた形（`#[rlimit(x)]`、`#[opaque(1)]`、`#[trigger(x)]`）は `E0001` で、正しい形を示します。
+- `lemma group` はモジュールの直下にだけ書けます（Verus の `broadcast group` と同じ）。ブロックや `impl` の中では `E0001` です。補題を一つ以上要します。
+- `spec let` は初期値（`= e`）を要し、`let-else` の形は書けません（§5.7 の `"spec" "let" Pat "=" Expr ";"`）。
+- `by(mode)` は一つの `lemma fn` に一つだけです。
 
-* 元の仕様：§5.7 は文法だけで、`ProofAttr` の位置、`lemma group` を置ける場所、式の位置の証明構文を定めていない。§5.1 の `Item` は `LemmaGroup` をどの項目の位置にも置ける。
-* 根拠：#64。式の位置の証明構文は、Verus に渡すと式として読まれ、`.eyk` の剥がし（§6.1）と書き下しの両方で扱いが一つに決まらない。`#![trigger]` の引数をトークン列のまま渡すと、Ebykn の式（`x@f`、領域添字）が書き下されない。
+* 元の仕様：§5.7 は文法だけで、`ProofAttr` の位置と引数、`lemma group` を置ける場所、式の位置の証明構文を定めていない。§5.1 の `Item` は `LemmaGroup` をどの項目の位置にも置ける。
+* 根拠：#64（PR #86 のレビュー）。`ProofAttr` の位置は Verus の属性（`verifier::opaque` など）が付く項目に合わせた。式の位置の証明構文は、Verus に渡すと式として読まれ、`.eyk` の剥がし（§6.1）と書き下しの両方で扱いが一つに決まらない。`#![trigger]` の引数をトークン列のまま渡すと、Ebykn の式（`x@f`、領域添字）が書き下されない。
 * 状態：基準で決めた。
 
 ## §6 静的検査

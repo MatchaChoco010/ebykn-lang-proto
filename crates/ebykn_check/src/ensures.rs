@@ -338,7 +338,12 @@ impl Visitor<'_> {
                     self.expr(b);
                 }
             }
-            ExprKind::Quant { binders, body, .. } => {
+            ExprKind::Quant {
+                binders,
+                triggers,
+                body,
+                ..
+            } => {
                 let mut names = BTreeSet::new();
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
@@ -346,7 +351,10 @@ impl Visitor<'_> {
                     }
                     names.insert(b.ident.name.clone());
                 }
-                self.shadowed(&names, |v| v.expr(body));
+                self.shadowed(&names, |v| {
+                    v.triggers(triggers);
+                    v.expr(body);
+                });
             }
             ExprKind::AndOr { exprs, .. } => self.exprs(exprs),
             ExprKind::Borrow { region, body, .. } => {
@@ -373,6 +381,15 @@ impl Visitor<'_> {
         }
     }
 
+    /// 量化子の `#![trigger e, ..]` の式（束縛子の名前で覆われた中で読む）。
+    fn triggers(&mut self, triggers: &[ast::Trigger]) {
+        for t in triggers {
+            if let ast::Trigger::Exprs { exprs, .. } = t {
+                self.exprs(exprs);
+            }
+        }
+    }
+
     fn proof(&mut self, p: &ast::ProofStmt) {
         use ast::{AssertBy, ProofStmt};
         match p {
@@ -386,7 +403,10 @@ impl Visitor<'_> {
                 }
             }
             ProofStmt::AssertForall {
-                binders, body, by, ..
+                binders,
+                triggers,
+                body,
+                by,
             } => {
                 let mut names = BTreeSet::new();
                 for b in binders {
@@ -396,6 +416,7 @@ impl Visitor<'_> {
                     names.insert(b.ident.name.clone());
                 }
                 self.shadowed(&names, |v| {
+                    v.triggers(triggers);
                     v.expr(body);
                     v.block(by);
                 });

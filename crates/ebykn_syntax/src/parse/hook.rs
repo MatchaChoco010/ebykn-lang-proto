@@ -295,12 +295,23 @@ fn parse_triggers(input: ParseStream) -> syn::Result<Vec<RawTrigger>> {
         let span = pound.span.join(bracket.span.close()).unwrap_or(pound.span);
         let name: proc_macro2::Ident = content.parse()?;
         if name == "trigger" {
-            let exprs = content
+            let exprs: Vec<syn::Expr> = content
                 .parse_terminated(syn::Expr::parse, Token![,])?
                 .into_iter()
                 .collect();
+            if exprs.is_empty() {
+                // 仕様 §5.7：`"#![trigger" ExprList "]"`。式を一つ以上持つ。
+                return Err(err(
+                    span,
+                    Message::Expected {
+                        what: Expected::TriggerExpr,
+                    },
+                ));
+            }
+            super::proof_attr_ok(super::sp(span));
             out.push(RawTrigger::Exprs { exprs, span });
         } else if name == "auto" && content.is_empty() {
+            super::proof_attr_ok(super::sp(span));
             out.push(RawTrigger::Auto(span));
         } else {
             return Err(err(
@@ -819,10 +830,8 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
             written: s.to_string(),
         })
     };
-    if super::in_proof()
-        && is_ident(t.first(), "reveal_with_fuel")
-        && is_group(t.get(1), Delimiter::Parenthesis)
-    {
+    // `.eykp` にも書けない Verus の書き方なので、`.eyk` でも証明ファイルへは案内しない。
+    if is_ident(t.first(), "reveal_with_fuel") && is_group(t.get(1), Delimiter::Parenthesis) {
         return Some(Message::VerusSyntax {
             written: "reveal_with_fuel(f, n)".into(),
             ebykn: "reveal(f, n)".into(),
@@ -837,7 +846,7 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
     if is_ident(t.first(), "spec") && is_ident(t.get(1), "let") {
         return proof("spec let");
     }
-    for kw in ["reveal", "reveal_with_fuel", "hide"] {
+    for kw in ["reveal", "hide"] {
         if is_ident(t.first(), kw) && is_group(t.get(1), Delimiter::Parenthesis) {
             return proof(kw);
         }
@@ -876,10 +885,31 @@ fn parse_proof(input: ParseStream, kind: ProofKind) -> syn::Result<RawProof> {
         ProofKind::Assert => parse_assert(input)?,
         ProofKind::SpecLet => {
             parse_kw(input, "spec")?;
-            match input.parse::<syn::Stmt>()? {
-                syn::Stmt::Local(l) => RawProof::SpecLet(l),
+            let l = match input.parse::<syn::Stmt>()? {
+                syn::Stmt::Local(l) => l,
                 _ => return Err(input.error("expected `let`")),
+            };
+            // 仕様 §5.7：`"spec" "let" Pat "=" Expr ";"`。初期値のないものと `let-else` は書けない。
+            match &l.init {
+                None => {
+                    return Err(err(
+                        l.semi_token.span,
+                        Message::Expected {
+                            what: Expected::SpecLetInit,
+                        },
+                    ));
+                }
+                Some(init) if init.diverge.is_some() => {
+                    return Err(err(
+                        init.diverge.as_ref().expect("diverge").0.span,
+                        Message::NotAllowedHere {
+                            written: "spec let .. else { .. }".into(),
+                        },
+                    ));
+                }
+                Some(_) => {}
             }
+            RawProof::SpecLet(l)
         }
         ProofKind::Reveal => {
             parse_kw(input, "reveal")?;

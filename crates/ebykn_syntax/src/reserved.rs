@@ -168,6 +168,27 @@ pub fn is_call(kind: ReservedKind) -> bool {
     matches!(kind, ReservedKind::VerusCall | ReservedKind::ProofCall)
 }
 
+/// 証明の構文の関数（[`PROOF_CALLS`]）を、クレートの定義でない名前として拒否する診断。
+///
+/// - `reveal_with_fuel` は Verus の書き方で、`.eyk` でも `.eykp` でも `reveal(f, n)` を案内する
+///   （`.eykp` に書いても通らないので、証明ファイルへは案内しない）。
+/// - `.eyk` のほかの名前は E0303（証明ファイルに書く）。
+/// - `.eykp` のほかの名前は、文の位置なら差し込み口が証明の文として読むので、ここに来るのは文で
+///   ない位置のもの。
+pub fn proof_call_message(name: &str, written: String, in_proof: bool) -> crate::diag::Message {
+    use crate::diag::Message;
+    if name == "reveal_with_fuel" {
+        Message::VerusSyntax {
+            written: "reveal_with_fuel(f, n)".into(),
+            ebykn: "reveal(f, n)".into(),
+        }
+    } else if in_proof {
+        Message::ProofStmtOnly { written }
+    } else {
+        Message::ProofSyntax { written }
+    }
+}
+
 /// 構文解析で判定できなかった、表の名前を最後に持つパス。検査が名前解決して決める。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredName {

@@ -225,8 +225,8 @@ fn expr_list(input: ParseStream) -> syn::Result<Vec<ast::Expr>> {
     Ok(out)
 }
 
-/// 契約。`by(..)` は `.eykp` だけの証明構文なので、`.eyk` では読んで診断にする。`lemma fn` の
-/// ほかに付いた `by(..)` は、項目を読む側（[`super::item`]）が診断にする。
+/// 契約。`by(..)` は句として読み、`.eyk` の `by(..)`（E0303）と `lemma fn` のほかに付いた
+/// `by(..)` は、項目を読む側（[`super::item`]）が診断にして取り除く。
 pub(super) fn contract(input: ParseStream) -> syn::Result<ast::Contract> {
     let mut clauses = Vec::new();
     loop {
@@ -254,16 +254,18 @@ pub(super) fn contract(input: ParseStream) -> syn::Result<ast::Contract> {
                 if !content.is_empty() {
                     return Err(content.error("expected `)`"));
                 }
-                if !super::in_proof() {
+                // 証明器の名前の誤りは `.eykp` でも通らないので、`.eyk` でも E0001 にする。
+                // `.eyk` の E0303 と、`lemma fn` のほかへの `by(..)` は項目を読む側が出す。
+                let Some(m) = ast::ProverMode::from_name(&mode.to_string()) else {
                     push(
-                        span_between(&begin, input),
-                        Message::ProofSyntax {
-                            written: "by(..)".into(),
+                        sp(mode.span()),
+                        Message::Expected {
+                            what: Expected::ProverMode,
                         },
                     );
                     continue;
-                }
-                ast::ClauseKind::By(super::convert::prover_mode(&mode))
+                };
+                ast::ClauseKind::By(m)
             }
             _ => unreachable!("peek_clause"),
         };

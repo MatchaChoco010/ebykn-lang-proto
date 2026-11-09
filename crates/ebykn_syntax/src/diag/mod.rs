@@ -144,6 +144,10 @@ pub enum Message {
     ProofSyntax { written: String },
     /// `.eykp` で、証明の文（`assert`、`proof { .. }` など）を文でない位置に書いた。
     ProofStmtOnly { written: String },
+    /// Ebykn が中を読まないコード（マクロの引数など）の中の証明構文。`.eykp` でも書けない。
+    ProofInOpaque { written: String },
+    /// 証明の属性の引数の形が違う。`form` は正しい形。
+    ProofAttrArgs { written: String, form: &'static str },
     /// 性質ファイル（仕様 §8）にだけ書ける。
     PropsOnly { written: String },
     /// 比較演算子の連鎖（Rust と同じく書けない）。
@@ -221,6 +225,12 @@ pub enum Expected {
     UsesArg,
     /// 証明器の指定（`by(..)` の中）。
     ProverMode,
+    /// `spec let` の初期値（`= e`）。
+    SpecLetInit,
+    /// `#![trigger ..]` の式（一つ以上）。
+    TriggerExpr,
+    /// `lemma group` の中の補題（一つ以上）。
+    LemmaGroupMember,
 }
 
 impl Expected {
@@ -272,6 +282,16 @@ impl Expected {
             }
             (Expected::ProverMode, Lang::En) => {
                 "a prover mode (`bit_vector`, `nonlinear_arith`, `integer_ring`, `compute` or `compute_only`)"
+            }
+            (Expected::LemmaGroupMember, Lang::En) => {
+                "at least one lemma in `lemma group g { .. }`"
+            }
+            (Expected::LemmaGroupMember, Lang::Ja) => "`lemma group g { .. }` の中に一つ以上の補題",
+            (Expected::TriggerExpr, Lang::En) => "at least one expression in `#![trigger ..]`",
+            (Expected::TriggerExpr, Lang::Ja) => "`#![trigger ..]` の中に一つ以上の式",
+            (Expected::SpecLetInit, Lang::En) => "`= expr` in `spec let` (`spec let p = e;`)",
+            (Expected::SpecLetInit, Lang::Ja) => {
+                "`spec let` の初期値の `= 式`（`spec let p = e;`）"
             }
             (Expected::ProverMode, Lang::Ja) => {
                 "証明器の指定（`bit_vector`、`nonlinear_arith`、`integer_ring`、`compute`、`compute_only` のどれか）"
@@ -346,6 +366,18 @@ impl Message {
             (Message::ProofSyntax { written }, Ja) => format!(
                 "`{written}` は証明構文で、`.eyk` には書けません。証明ファイル（`proof/*.eykp`）に書きます"
             ),
+            (Message::ProofInOpaque { written }, En) => format!(
+                "syntax error: `{written}` cannot be written in code that Ebykn does not read (such as the arguments of a macro)"
+            ),
+            (Message::ProofInOpaque { written }, Ja) => format!(
+                "構文エラー: `{written}` は、Ebykn が読まないコード（マクロの引数など）の中には書けません"
+            ),
+            (Message::ProofAttrArgs { written, form }, En) => {
+                format!("syntax error: the arguments of `{written}` are malformed; write `{form}`")
+            }
+            (Message::ProofAttrArgs { written, form }, Ja) => {
+                format!("構文エラー: `{written}` の引数の形が違います。`{form}` と書きます")
+            }
             (Message::ProofStmtOnly { written }, En) => {
                 format!("syntax error: `{written}` can only be written as a statement")
             }

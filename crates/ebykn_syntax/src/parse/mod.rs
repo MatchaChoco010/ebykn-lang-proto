@@ -76,6 +76,8 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
             pending: Vec::new(),
             unchecked_body: false,
             proof,
+            proof_attrs: Vec::new(),
+            attr_ok: std::collections::HashSet::new(),
         })
     });
     tokens::scan(&tokens);
@@ -83,6 +85,7 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
     let mut cx = CX
         .with(|cx| std::mem::replace(&mut *cx.borrow_mut(), prev))
         .expect("Cx");
+    check_proof_attrs(&mut cx);
     let parsed = match result {
         Ok(f) => f,
         Err(e) => {
@@ -131,6 +134,56 @@ struct Cx {
     unchecked_body: bool,
     /// `.eykp` を読んでいるか（証明構文を受理する）。
     proof: bool,
+    /// 字句の走査（[`tokens`]）が見つけた証明の属性（仕様 §5.7 の `ProofAttr`）。
+    proof_attrs: Vec<ProofAttrUse>,
+    /// 書ける位置で読んだ証明の属性の位置（[`ProofAttrUse::span`] の `lo`）。
+    attr_ok: std::collections::HashSet<usize>,
+}
+
+/// ファイルの中の証明の属性一つ。書ける位置（式の `#[trigger]`、量化子の本体の前の
+/// `#![trigger ..]` / `#![auto]`、項目の種類に合う属性）で読んだものだけを通し、ほかは
+/// 解析の終わりに E0001 にする（[`check_proof_attrs`]）。
+pub(crate) struct ProofAttrUse {
+    pub span: Span,
+    pub name: String,
+    pub inner: bool,
+    /// 名前の後ろのトークン列（`(20)` など）。
+    pub args: Vec<TokenTree>,
+}
+
+pub(crate) fn record_proof_attr(a: ProofAttrUse) {
+    with_cx(|cx| cx.proof_attrs.push(a));
+}
+
+/// 証明の属性を書ける位置で読んだ。
+pub(crate) fn proof_attr_ok(span: Span) {
+    with_cx(|cx| {
+        cx.attr_ok.insert(span.lo);
+    });
+}
+
+/// 解析の終わりに、証明の属性の位置と引数を確かめる。書ける位置で読まなかったもの（ファイルや
+/// `mod` の先頭の内部属性、文や構造体の属性、マクロの引数の中、`cfg_attr` の中など）は、`.eykp` でも
+/// 書けないので、`.eyk` でも E0001 にする（証明ファイルへ案内しない）。書ける位置で正しい形なら、
+/// `.eyk` では E0303。
+fn check_proof_attrs(cx: &mut Cx) {
+    for a in std::mem::take(&mut cx.proof_attrs) {
+        let written = if a.inner {
+            format!("#![{}]", a.name)
+        } else {
+            format!("#[{}]", a.name)
+        };
+        let m = if !cx.attr_ok.contains(&a.span.lo) {
+            Message::NotAllowedHere { written }
+        } else if let Some(form) = tokens::proof_attr_args_error(&a) {
+            Message::ProofAttrArgs { written, form }
+        } else if cx.proof {
+            continue;
+        } else {
+            Message::ProofSyntax { written }
+        };
+        cx.diags.push(Diagnostic::new(a.span, m));
+    }
 }
 
 /// `.eykp` を読んでいるか。
@@ -223,16 +276,9 @@ pub(crate) fn reserved_path(
     if segs.len() == 1 || leading_colon {
         let name = segs.last().cloned().unwrap_or_default();
         let m = match kind {
-            // `.eykp` の文の位置の `reveal(..)` / `hide(..)` / `assert ..` は差し込み口が読むので、
-            // ここに来るのは文でない位置のもの。
-            ReservedKind::ProofCall if in_proof() && name == "reveal_with_fuel" => {
-                Message::VerusSyntax {
-                    written: "reveal_with_fuel(f, n)".into(),
-                    ebykn: "reveal(f, n)".into(),
-                }
+            ReservedKind::ProofCall => {
+                crate::reserved::proof_call_message(&name, written, in_proof())
             }
-            ReservedKind::ProofCall if in_proof() => Message::ProofStmtOnly { written },
-            ReservedKind::ProofCall => Message::ProofSyntax { written },
             ReservedKind::VerusCall => Message::VerusBuiltin { name, written },
             ReservedKind::VerusMacro => Message::VerusOnly { written },
             ReservedKind::EbyknTrait => Message::NotAllowedHere { written },

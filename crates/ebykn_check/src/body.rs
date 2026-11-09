@@ -1121,7 +1121,12 @@ impl<'a> Walker<'a> {
                 d
             }
             ExprKind::Struct(lit) => self.struct_lit(e, lit),
-            ExprKind::Quant { binders, body, .. } => {
+            ExprKind::Quant {
+                binders,
+                triggers,
+                body,
+                ..
+            } => {
                 let prev = std::mem::replace(&mut self.logic, true);
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
@@ -1131,6 +1136,7 @@ impl<'a> Walker<'a> {
                         }
                     }
                 }
+                self.triggers(triggers);
                 self.expr(body);
                 self.logic = prev;
                 false
@@ -1167,8 +1173,9 @@ impl<'a> Walker<'a> {
                     && ebykn_syntax::reserved::is_call(kind)
                     && !self.locals.contains(&i.name)
                 {
-                    self.diags
-                        .push(e.span, crate::names::message(kind, &i.name, &i.name));
+                    // 検査するのは今は `.eyk` だけ（`.eykp` の検査は #67）。
+                    let m = crate::names::message(kind, &i.name, &i.name, false);
+                    self.diags.push(e.span, m);
                 }
                 false
             }

@@ -151,6 +151,9 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     }
     input.advance_to(&ahead);
     let kind = item_kind(input, ctx, &begin)?;
+    let spec_fn = matches!(kind, ast::ItemKind::SpecFn(_));
+    let verified_fn = matches!(kind, ast::ItemKind::Fn(_) | ast::ItemKind::LemmaFn(_));
+    proof_attrs_on_item(&a, spec_fn, verified_fn);
     // `pub use lemmas` はない（Verus の `broadcast use` は再公開しない）。
     if matches!(kind, ast::ItemKind::UseLemmas(_)) && !matches!(v, syn::Visibility::Inherited) {
         push(
@@ -392,7 +395,7 @@ fn item_kind(
         let kw = parse_kw(input, "unchecked")?;
         let unchecked = Some(sp(kw.span()));
         if peek_kw(input, "lemma") {
-            return lemma_fn(input, unchecked);
+            return lemma_fn(input, unchecked, ctx == Ctx::Trait);
         }
         let ahead = input.fork();
         let _ = qualifiers(&ahead)?;
@@ -439,7 +442,7 @@ fn item_kind(
         return spec_fn(input, ctx, None);
     }
     if is_ident(a, "lemma") && is_ident(b, "fn") {
-        return lemma_fn(input, None);
+        return lemma_fn(input, None, ctx == Ctx::Trait);
     }
     if is_ident(a, "lemma") && is_ident(b, "group") {
         if !super::in_proof() {
@@ -542,8 +545,8 @@ fn fn_item(
 ) -> syn::Result<ast::ItemKind> {
     let q = qualifiers(input)?;
     let sig = signature(input, q)?;
-    let contract = contract::contract(input)?;
-    by_only_on_lemma(&contract);
+    let mut contract = contract::contract(input)?;
+    by_only_on_lemma(&mut contract);
     let body = if input.peek(syn::token::Brace) {
         // 入れ子の `fn` は自分の `unchecked` で決め直す。
         let saved = super::set_unchecked_body(unchecked.is_some());
@@ -615,12 +618,12 @@ fn spec_fn(
         Some(_) => {}
     }
     // trait の spec fn は契約を持たない（仕様 §5.1 の TraitItem）。
-    let contract = if ctx == Ctx::Trait {
+    let mut contract = if ctx == Ctx::Trait {
         ast::Contract::default()
     } else {
         contract::contract(input)?
     };
-    by_only_on_lemma(&contract);
+    by_only_on_lemma(&mut contract);
     let body = if peek_eq(input) {
         input.parse::<Token![=]>()?;
         let e = expr(input.parse()?);
@@ -657,9 +660,22 @@ fn spec_fn(
     }))
 }
 
-/// `by(mode)` は `lemma fn` にだけ付く（仕様 §5.2）。
-fn by_only_on_lemma(contract: &ast::Contract) {
-    for c in &contract.clauses {
+/// 項目の外部属性のうち、その項目に書ける証明の属性に印を付ける（[`super::check_proof_attrs`]）。
+fn proof_attrs_on_item(a: &[syn::Attribute], spec_fn: bool, verified_fn: bool) {
+    for at in attrs(a) {
+        if let Some(name) = convert::attr_name(&at)
+            && !at.inner
+            && super::tokens::proof_attr_fits_item(name, spec_fn, verified_fn)
+        {
+            super::proof_attr_ok(at.span);
+        }
+    }
+}
+
+/// `by(mode)` は `lemma fn` にだけ付く（仕様 §5.2）。ほかに付いたものは、`.eykp` でも書けないので
+/// `.eyk` でも E0001 にし、契約から取り除く。
+fn by_only_on_lemma(contract: &mut ast::Contract) {
+    contract.clauses.retain(|c| {
         if matches!(c.kind, ast::ClauseKind::By(_)) {
             push(
                 c.span,
@@ -667,31 +683,74 @@ fn by_only_on_lemma(contract: &ast::Contract) {
                     written: "by(..)".into(),
                 },
             );
+            return false;
         }
-    }
+        true
+    });
+}
+
+/// `lemma fn` の `by(mode)`：一つだけ（仕様 §5.2 の `"by" "(" ProverMode ")"`）。`.eyk` では E0303 に
+/// して取り除く（`.eyk` の AST に証明構文を入れない）。
+fn lemma_by(contract: &mut ast::Contract) {
+    let mut seen = false;
+    let proof = super::in_proof();
+    contract.clauses.retain(|c| {
+        if !matches!(c.kind, ast::ClauseKind::By(_)) {
+            return true;
+        }
+        if seen {
+            push(
+                c.span,
+                Message::NotAllowedHere {
+                    written: "a second by(..)".into(),
+                },
+            );
+            return false;
+        }
+        seen = true;
+        if !proof {
+            push(
+                c.span,
+                Message::ProofSyntax {
+                    written: "by(..)".into(),
+                },
+            );
+        }
+        proof
+    });
 }
 
 fn lemma_fn(
     input: ParseStream,
     unchecked: Option<crate::span::Span>,
+    in_trait: bool,
 ) -> syn::Result<ast::ItemKind> {
     parse_kw(input, "lemma")?;
     let sig = signature(input, ast::FnQualifiers::default())?;
-    let contract = contract::contract(input)?;
+    let mut contract = contract::contract(input)?;
+    lemma_by(&mut contract);
     let mut body = None;
     if input.peek(syn::token::Brace) {
         // 本体は `.eykp` にだけ書ける（仕様 §5.1、§5.7）。`.eyk` では読んで診断にする。
+        // `unchecked lemma fn`（証明なしの前提。仕様 §7.2）と trait の `lemma fn`（本体は impl が
+        // 与える。§5.1）は `.eykp` でも本体を持てないので、`.eyk` でも E0001 にする。
         let b: syn::Block = input.parse()?;
-        if super::in_proof() {
-            if let Some(u) = unchecked {
-                // `unchecked lemma fn` は証明なしの前提で、本体を持たない（仕様 §7.2）。
-                push(
-                    u,
-                    Message::NotAllowedHere {
-                        written: "unchecked lemma fn .. { .. }".into(),
-                    },
-                );
-            }
+        let span = sp(b.brace_token.span.join());
+        if unchecked.is_some() {
+            push(
+                span,
+                Message::NotAllowedHere {
+                    written: "unchecked lemma fn .. { .. }".into(),
+                },
+            );
+        } else if in_trait {
+            push(
+                span,
+                Message::NotAllowedHere {
+                    written: "lemma fn .. { .. } in a trait".into(),
+                },
+            );
+        } else if super::in_proof() {
             body = Some(block(b));
         } else {
             push(
@@ -924,19 +983,8 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
             _ => unreachable!("spec fn"),
         }
     } else if is_ident(t.first(), "lemma") && is_ident(t.get(1), "fn") {
-        match lemma_fn(input, None)? {
-            ast::ItemKind::LemmaFn(f) => {
-                // trait の `lemma fn` は宣言だけで、本体は impl が与える（仕様 §5.1）。
-                if let Some(b) = &f.body {
-                    push(
-                        b.span,
-                        Message::NotAllowedHere {
-                            written: "lemma fn .. { .. } in a trait".into(),
-                        },
-                    );
-                }
-                ast::TraitItemKind::LemmaFn(f)
-            }
+        match lemma_fn(input, None, true)? {
+            ast::ItemKind::LemmaFn(f) => ast::TraitItemKind::LemmaFn(f),
             _ => unreachable!("lemma fn"),
         }
     } else if starts_fn(input) {
@@ -952,6 +1000,14 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
             },
         ));
     };
+    proof_attrs_on_item(
+        &a,
+        matches!(kind, ast::TraitItemKind::SpecFn(_)),
+        matches!(
+            kind,
+            ast::TraitItemKind::Fn(_) | ast::TraitItemKind::LemmaFn(_)
+        ),
+    );
     Ok(ast::TraitItem {
         attrs: attrs(&a),
         kind,
@@ -1106,11 +1162,20 @@ fn lemma_group(input: ParseStream, ctx: Ctx) -> syn::Result<ast::ItemKind> {
     let name: syn::Ident = input.parse()?;
     let content;
     syn::braced!(content in input);
-    let members = content
+    let members: Vec<ast::Path> = content
         .parse_terminated(syn::Path::parse_mod_style, Token![,])?
         .iter()
         .map(convert::path)
         .collect();
+    if members.is_empty() {
+        // 仕様 §5.1：`"lemma" "group" Ident "{" Path ("," Path)* ","? "}"`。補題を一つ以上持つ。
+        push(
+            sp(name.span()),
+            Message::Expected {
+                what: Expected::LemmaGroupMember,
+            },
+        );
+    }
     Ok(ast::ItemKind::LemmaGroup(ast::LemmaGroup {
         ident: ident(&name),
         members,
