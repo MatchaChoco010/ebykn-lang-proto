@@ -83,7 +83,9 @@ impl Pair {
 
 }
 
-pub struct Single { p: Ptr < Node >, __eyk_erased_items: Tracked < Region < Ptr < Node >>>, }
+pub struct Single {
+    p: Ptr < Node >, __eyk_erased_items: Tracked < Region < Ptr < Node >>>,
+}
 
 impl Single {
     pub closed spec fn invariant(&self) -> bool { self.__eyk_erased_items@.contains(self.p) }

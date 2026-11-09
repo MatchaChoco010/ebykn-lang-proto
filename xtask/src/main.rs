@@ -34,6 +34,7 @@ const USAGE: &str = "\
   verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
   verus-verify      ebykn_prelude と §6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
   golden-verify     golden の各ケースに ebykn verify をかけ、expected/status.txt と比べる。Verus の要るテストも走らせる
+  golden-bless [<ケース>...]  golden の書き下しの期待（expected/verus/ の src/ と Cargo.toml）を生成物から作り直す
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
   formal-oracle     §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ と比べる
   formal-oracle-write  §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ に書く
@@ -56,6 +57,11 @@ fn main() -> ExitCode {
         && cmd == "slides-build"
     {
         return exit(slides::build(&root(), dir));
+    }
+    if let [cmd, cases @ ..] = args.as_slice()
+        && cmd == "golden-bless"
+    {
+        return exit(golden_bless(cases));
     }
     let [cmd] = args.as_slice() else {
         eprint!("{USAGE}");
@@ -109,6 +115,22 @@ fn main() -> ExitCode {
         },
     };
     exit(ok)
+}
+
+/// golden の書き下しの期待を作り直す（`crates/ebykn/examples/golden_bless.rs`）。比べるテストと同じコードを
+/// 使うので、`ebykn` のテストの依存で動く example にしてある（xtask を `ebykn` に依存させない）。
+fn golden_bless(cases: &[String]) -> bool {
+    let mut args = vec![
+        "run",
+        "--quiet",
+        "-p",
+        "ebykn",
+        "--example",
+        "golden_bless",
+        "--",
+    ];
+    args.extend(cases.iter().map(String::as_str));
+    cargo(&args)
 }
 
 fn exit(ok: bool) -> ExitCode {

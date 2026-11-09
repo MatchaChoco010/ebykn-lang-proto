@@ -30,6 +30,22 @@ ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtas
 
 `vendor/` に手を入れたら、`vendor/` の変更だけのコミットにし、`vendor/` の外の変更と混ぜない（AGENTS.md の「外部から取り込むコード」）。混ぜると `check-vendor-commits` が落ちるので、rebase でコミットを分けて push し直す。pre-commit フックは作っているコミットの直前までの履歴を見るので、混ぜたコミットは、手元では次のコミットのときに、そうでなければ CI で落ちる。本文には、`vendor/` を変えるコミットを含むので、マージコミットでマージする必要があると書く。
 
+### 書き下しが変わったとき
+
+書き下し（`ebykn_lower`）を変えると、golden の書き下しの期待（`tests/golden/*/expected/verus/`）が合わなくなり、`lowered_verus_matches_expected` が落ちる。期待は手で直さず、生成物から作り直す。
+
+```bash
+ebykn-limited cargo xtask golden-bless            # 全ケース。ケースを挙げれば、そのケースだけ（golden-bless stack drop）
+git diff -- tests/golden                          # 意図した変更だけか読む
+ebykn-limited cargo test -p ebykn --test golden   # 作り直した期待が比較を通る
+ebykn-limited cargo xtask golden-verify           # Verus の結果（expected/status.txt）が変わらない
+```
+
+- 差分は 1 行ずつ読む。変えたつもりのない形が変わっていたら、作り直した期待をコミットせず、書き下しの方を直す。期待を作り直すと、どんな出力でも比較は通る。差分を読むのが検査になる。
+- `golden-verify` は Verus が要る（`cargo xtask verus-install`）。`status.txt` が変わったら、検証の結果が変わったということなので、それが意図したものかを PR 本文に書く。`status.txt` は作り直さない。
+- `golden-bless` は `Cargo.lock` に触らない。依存の版を変えたときは、別に作り直す（`OPEN.md` の依存の版の固定）。
+- 期待にはコメントを書かない。ケースの説明は、ケースの `README.md`（`tests/golden/stack/README.md` など）に書く。作り直すと消えるコメントが期待にあれば、`golden-bless` は何も書かずに止まる。そのときはコメントを `README.md` に移してから作り直す。
+
 ## 2. 本文を書く
 
 日本語で書き、ファイルに保存する（例：scratchpad の `pr-body.md`）。結論を先に書き、次を入れる。
