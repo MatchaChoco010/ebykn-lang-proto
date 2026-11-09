@@ -1001,17 +1001,15 @@ mod tests {
             ],
             ..Default::default()
         };
+        let ran2 = Summary::Ran {
+            verified: 2,
+            errors: 0,
+        };
         let checked: std::collections::BTreeSet<String> =
             ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
-        let st = statuses(&files, &output, &[], Some(&checked), Some(0));
+        let st = statuses(&files, &output, &[], Some(&checked), ran2, false);
         assert_eq!(
-            status_text(
-                &st,
-                Summary::Ran {
-                    verified: 2,
-                    errors: 0
-                }
-            ),
+            status_text(&st, ran2, &Cheating::Clean),
             "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
         );
         // 前提なので、項目を絞っても出る。
@@ -1025,14 +1023,7 @@ mod tests {
                 "macro tokio::main on k5::one"
             ]
         );
-        let json = status_json(
-            &shown,
-            Summary::Ran {
-                verified: 2,
-                errors: 0,
-            },
-            true,
-        );
+        let json = status_json(&shown, ran2, &Cheating::Clean, true);
         assert!(
             json.contains(
                 r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
@@ -1044,7 +1035,7 @@ mod tests {
             macros: vec![],
             ..output.clone()
         };
-        let st = statuses(&files, &none, &[], Some(&checked), Some(0));
+        let st = statuses(&files, &none, &[], Some(&checked), ran2, false);
         assert!(st.iter().all(|s| s.status != "macro"));
     }
 
