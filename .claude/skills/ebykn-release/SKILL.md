@@ -1,17 +1,61 @@
 ---
 name: ebykn-release
-description: ebykn-lang-proto でリリースを切る手順。develop の先頭が緑か確かめ、範囲の PR と Issue を集めて報告スライドの PDF を作り、タグ report/YYYY-MM-DD.N と Release を出してから release を早送りし、作者の確認用の release のワークスペースを進め、release → main の PR を更新して作者に報告する。リリースを切るとき（基本 1 日 1 回、作者が見つけた問題を直したあと）、途中で止まったリリースを再開するとき、作者が main にマージしたあとに使う。
+description: ebykn-lang-proto でリリースを切る手順。ワークツリーを最新にしてコーディネーターの Run を確かめ、develop の先頭が緑か確かめ、範囲の PR と Issue を集めて報告スライドの PDF を作り、タグ report/YYYY-MM-DD.N と Release を出してから release を早送りし、作者の確認用の release のワークスペースを進め、release → main の PR を更新して、結果をコーディネーターの Run に知らせる。作者には催促しない。毎朝 6 時のオートメーションが起こすエージェントが使う。コーディネーターが手で切るとき（作者が見つけた問題を直したあと）、途中で止まったリリースを再開するとき、毎朝のオートメーションを作るとき、止まった回を続けるとき、知らせの届かなかった回を見回るとき、作者が main にマージしたあとにも使う。
 ---
 
 # リリースを切る
 
-コーディネーターが行う。ブランチの役割と作者の確認は AGENTS.md の「作業の場所」と「リリースと作者の確認」。
+毎朝 6:00（日本時間）に Orca のオートメーションが起こすエージェントが、`origin/develop` から作った新しいワークツリーで行う（オートメーションの作り方は末尾の「毎朝のリリースのオートメーション」）。コーディネーターが手で切るときも同じ手順で、手順 0 と手順 9 の送信だけを飛ばす。ブランチの役割と作者の確認は AGENTS.md の「作業の場所」と「リリースと作者の確認」。
 
+- この手順で「止まって報告する」は、手順 9 の「止まったとき」の形でコーディネーターの Run に知らせて終わること。作者には報告しない。レビューや確認を催促しない。結果は Release と、リリースの PR の本文とコメントに残す。
 - 取り消せない操作（タグの push、Release、`release` の早送り）は、確認と PDF が済んでから手順 4〜6 でまとめて行う。手順 1〜3 で止まっても、リモートには何も残らない。
 - `release` は早送りだけで進める。force push しない。直接コミットしない。`release` の先頭は、いつも Release のある報告済みのタグにする。
-- 押したタグと Release は消さない。手順 6 までのどこかで止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。手順 7 以降で止まったら、その手順からやり直す（`release` はもうタグまで進んでいるので、手順 1 は新しいリリースとみなす）。
+- 押したタグと Release は消さない。手順 6 までのどこかで止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。手順 7 以降で止まったら、その手順からやり直す（`release` はもうタグまで進んでいるので、手順 1 は新しいリリースとみなす）。止まった点ごとの続け方は「止まった回を続ける」。
+- 取り消せない操作（タグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）が、権限の判定で拒否されたり確認を求められたりしたら、そこで止まる。別の方法で回り込まない。手順 9 の「止まったとき」の形で、止まった手順・`$dir`・PDF のパスを知らせる。残りの手順は、コーディネーターが「止まった回を続ける」の表に従って行う。コーディネーターは、同じマシンの `$dir` を読める。
+- 手順 0〜3 は、ローカルの操作と `gh` の読み取りだけなので、権限では止まらない想定。見つけた問題の `gh issue create` が拒否されたら、作る予定だった Issue の題と本文を `$dir/pending-issues/<番号>.md`（1 から数える）に残し、手順 9 の知らせに書く。リリースは止めない。
 - コマンドのブロックは、どれも `bash -euo pipefail <<'EOF'` … `EOF` で包んで打つ。Bash ツールのシェルは zsh のことがあり、zsh では `"$sha:refs/..."` の `:r` が修飾子として展開されるため。ブロックの中でも、`:` の前の変数は `${sha}` のように括る。
 - シェルの変数はブロックをまたいで残らないので、手順 1 で作る `vars` を各ブロックの最初に読み込む。`<scratchpad>` と `<id>` は実際の値に置き換える。
+
+## 0. ワークツリーを最新にし、コーディネーターの Run を確かめる
+
+オートメーションのエージェントだけが行う。コーディネーターが手で切るときは飛ばす。
+
+Orca は、ワークツリーを作る前の `git fetch` の結果を待たず、確かめもしない。そのため、ワークツリーが `origin/develop` より古いことがある。まず最新にし、スキルが変わっていたら読み直してから進む。
+
+```bash
+bash -euo pipefail <<'EOF'
+git fetch origin --prune --tags
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/develop)" ]; then
+  git merge --ff-only origin/develop \
+    || { echo "止まる：このワークツリーを origin/develop まで早送りできない"; exit 1; }
+  echo "origin/develop まで早送りした。.claude/skills/ebykn-release/SKILL.md を読み直してから進む"
+fi
+git log -1 --oneline
+EOF
+```
+
+次に、結果を知らせる先を確かめる。Run の id は、コーディネーターがオートメーションのプロンプトに書き込んである（「毎朝のリリースのオートメーション」）。`orca orchestration run-list` は、すべてのリポジトリの Run の一覧で、Run は消せないので、一覧から推して選ばない。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+run=<プロンプトにある Run の id>
+out=<scratchpad>/run-show.json
+: > <scratchpad>/coordinator-run
+if ! "$orca" orchestration run-show --id "$run" --json --full > "$out"; then
+  echo "Run を確かめられない：run-show が失敗した"; cat "$out"; exit 1
+fi
+[ "$(jq -r '.ok' "$out")" = true ] || { echo "Run を確かめられない：run-show が失敗した"; cat "$out"; exit 1; }
+[ "$(jq -r '.result.run.id' "$out")" = "$run" ] || { echo "Run を確かめられない：id が違う"; jq -c '.result.run' "$out"; exit 1; }
+[ "$(jq -r '.result.run.legacy' "$out")" = 0 ] || { echo "Run を確かめられない：legacy の Run"; jq -c '.result.run' "$out"; exit 1; }
+echo "$run" > <scratchpad>/coordinator-run
+jq -c '.result.run | {id, objective}' "$out"
+EOF
+```
+
+- 確かめられたら、`coordinator-run` に id が入る。手順 9 はそこへ送る。
+- 確かめられなくても（失敗が出て `coordinator-run` が空のまま）、リリースは止めずに手順 1 から進める。知らせが届かないことを目に見えるようにするため、手順 8 の PR のコメントに「知らせ：送れない（理由）」の行を足し、手順 9 では送らずに知らせの中身をこのターミナルに出す。コーディネーターは「見回り」で、この回を見つける。
+- Run の id が古くなる（コーディネーターが替わった）と、ここで確かめられなくなる。直し方は「毎朝のリリースのオートメーション」の「コーディネーターが替わったら」。
 
 ## 1. 識別子と範囲を決め、CI を確かめる
 
@@ -61,7 +105,7 @@ else
 fi
 git merge-base --is-ancestor "$prev_sha" "$sha" || { echo "止まる：$prev が $sha の祖先ではない"; exit 1; }
 
-dir=<scratchpad>/release-$id
+dir=<scratchpad>/release-$id   # 前の回の $dir を続けるときは、そのパス（「止まった回を続ける」）
 # 新しく切るときは、前に止まった回の出力（古い PDF など）を消す。リモートにはまだ何もない
 [ "$mode" != new ] || rm -rf "$dir"
 mkdir -p "$dir"
@@ -71,9 +115,9 @@ cat "$dir/vars"
 EOF
 ```
 
-- 「止まる」が出たら（`exit 1` で終わる）、そこで止まって報告する。`develop` が進んでいなければ、リリースは切らない。
+- 「止まる」が出たら（`exit 1` で終わる）、そこで止まって報告する。`develop` が進んでいなければ、リリースは切らない。これは失敗ではなく、何もすることがなかったという結果として手順 9 で知らせる。
 - 既定のブランチが `develop` でなければ止まる。GitHub の `commits/<sha>/pulls` は、既定のブランチの上のコミットにしか、マージ済みの PR を返さない。既定のブランチが変わると、手順 2 で範囲のすべてのコミットが「PR のないコミット」に見える。
-- 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。次の PR の差分に同じ変更がもう一度出るので、作者に報告する。
+- 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。次の PR の差分に同じ変更がもう一度出る。作者の操作が要るが、この時点ではリリースの PR がない（前回の PR は閉じ、今回の PR はまだ作っていない）ので、手順 9 の知らせにだけ書く。コーディネーターは、作者が次に話しかけたときに伝える（催促はしない）。
 - `gh release view` の失敗は、`release not found` のときだけ Release がないとみなす。通信の失敗などほかのエラーでは止まり、再開と取り違えない。
 - 新しく切るとき（`mode=new`）は、作業用のフォルダを消してから作る。前に手順 3 までで止まった回の出力を使わないため。
 - `mode` で、どこから進めるかが決まる。
@@ -140,7 +184,7 @@ EOF
 ```
 
 - `prs.txt`：`develop` に入った順の PR 番号。
-- `direct.txt`：PR のないコミット（`develop` への直接のコミット）。履歴は書き換えないので、止まらずに「PR のないコミット」としてスライドと報告に載せ、作者に知らせる。
+- `direct.txt`：PR のないコミット（`develop` への直接のコミット）。履歴は書き換えないので、止まらずに「PR のないコミット」としてスライド、Release の本文、手順 8 の PR のコメント、手順 9 の知らせに載せる。作者はスライドと PR で知る。
 - `mismatch.txt`：題の番号と GitHub の PR が食い違うコミット（題を書き換えたマージなど）。PR は GitHub の側を使い、食い違いをスライドと報告に載せる。
 - 範囲の行数が `commits.txt` = `prs.txt` + `direct.txt` になっていることを確かめる。
 - Issue は、閉じたかどうか（Issue の状態や `closedByPullRequestsReferences`）ではなく、PR の `closingIssuesReferences` から集める。Issue はあとから開き直されたり、手で閉じられたりするためで、PR が何を閉じると言ったかは PR の側にしか残らない。
@@ -154,7 +198,7 @@ PDF の作り方はそのスキルが受け持つ。スライドはリリース�
 
 範囲の PR を動かして実例を作る途中で問題が見つかったら、AGENTS.md の「見つけた問題」のとおり扱う。
 
-- `ebykn-issue` スキルで Issue にし、本文に `report/$id` のスライドを作る途中で見つかったと書く。番号を `$dir/found.txt` に 1 行に 1 つ書く。手順 5 の Release の本文、手順 8 の PR のコメント、手順 9 の報告に載せる。
+- `ebykn-issue` スキルで Issue にし、本文に `report/$id` のスライドを作る途中で見つかったと書く。番号を `$dir/found.txt` に 1 行に 1 つ書く。手順 5 の Release の本文、手順 8 の PR のコメント、手順 9 の知らせに載せる。
 - リリースは止めない。範囲は手順 1 で決めた `$sha` のまま進める。直す PR は `develop` に積み、次のリリースに入る。
 - 見つかった問題のせいで PDF が作れないときだけ、ここで止まって報告する。
 
@@ -348,8 +392,8 @@ EOF
 - `--setup skip`：リポジトリの setup のフックを走らせない。
 - `--agent` を付けない。orca は最初のターミナル（シェル）だけを開く。作者はそこで試す。
 - 表示名は `worktree create` では付けられないので、`worktree set --display-name` で付ける。
-- ワークスペースを作ったあとで止まったら（`作ったワークスペースが残っている` が出たら）、そのパスを報告し、作者に片付けを頼む。作者の了承を得てから、コーディネーターが `orca worktree rm --worktree "path:<パス>" --delete-branch` で消してもよい。片付けるまでは、やり直しても上の表の「止まる」に当たり、もう 1 つ作ることはない。
-- ローカルの `release` に `origin/release` にないコミットがあって止まったら、作者に、そのコミットが要るかを聞く。要らなければ、作者の了承を得てから `git branch -D release` で消し、この手順をやり直す。
+- ワークスペースを作ったあとで止まったら（`作ったワークスペースが残っている` が出たら）、そのパスを手順 8 の PR のコメントと手順 9 の知らせに書く。コーディネーターは、作者が次に話しかけたときに片付けてよいかを聞く。作者の了承を得てから、コーディネーターが `orca worktree rm --worktree "path:<パス>" --delete-branch` で消してもよい。片付けるまでは、やり直しても上の表の「止まる」に当たり、もう 1 つ作ることはない。
+- ローカルの `release` に `origin/release` にないコミットがあって止まったら、そのコミットを手順 8 の PR のコメントと手順 9 の知らせに書く。コーディネーターは、作者が次に話しかけたときに、そのコミットが要るかを聞く。要らなければ、作者の了承を得てから `git branch -D release` で消し、この手順をやり直す。
 
 ### 早送りする（2 回目以降）
 
@@ -388,9 +432,9 @@ EOF
 ```
 
 - 作業ツリーに変更（追跡していないファイルを含む）があれば、捨てずに止まる。作者が試しに書いたものかもしれないため。`git stash`・`git checkout -- .`・`git clean` はしない。
-- `--no-overwrite-ignore`：無視されたファイル（`playground/` の下など）は `git status --porcelain` に出ないが、`git merge` は既定で、それを上書きする。新しいコミットが同じパスのファイルを追跡していたら、作者が書き換えたファイルを黙って上書きしないよう、git に止めさせる。止まったら、そのパスを報告し、作者に片づけてもらう。
+- `--no-overwrite-ignore`：無視されたファイル（`playground/` の下など）は `git status --porcelain` に出ないが、`git merge` は既定で、それを上書きする。新しいコミットが同じパスのファイルを追跡していたら、作者が書き換えたファイルを黙って上書きしないよう、git に止めさせる。止まったら、そのパスを手順 8 の PR のコメントと手順 9 の知らせに書く。片付けは作者に任せ、コーディネーターが作者の次に話しかけたときに伝える。
 - 作者がワークスペースでコミットしていたら（`release` に `origin/release` にないコミットがある）、同じく止まる。
-- ここで止まっても、タグ・Release・`release` の早送りは済んでいる。ワークスペースは進めずに手順 8 に進み、手順 9 の報告に、止まった理由と `status` か `log` の出力を書く。作者が片づけたら、この手順だけをやり直す（何度やり直してもよい）。
+- ここで止まっても、タグ・Release・`release` の早送りは済んでいる。ワークスペースは進めずに手順 8 に進み、手順 8 の PR のコメントと手順 9 の知らせに、止まった理由と `status` か `log` の出力を書く。作者が片づけたら、この手順だけをやり直す（何度やり直してもよい）。
 
 ### 例を playground に写す
 
@@ -411,8 +455,8 @@ EOF
 ```
 
 - `playground/` は `.gitignore` に入っているので、作者が書き換えても、次の回の「早送りする」の「作業ツリーに変更がある」には当たらない。`playground/` の下のファイルは追跡しない（`check-examples` が、追跡されたファイルがあれば失敗にする）ので、早送りが作者のファイルを上書きすることもない。万一追跡されていても、「早送りする」の `--no-overwrite-ignore` で git が止まる。
-- すでにあるファイルは上書きしない。作者が書き換えたものは残り、新しく増えた例だけが足される。中身が `examples/` と違って残したファイルは、出力の「上書きせずに残した」に並ぶ。手順 9 の報告に添える。
-- ここで失敗しても（`ebykn` のビルドの失敗など）、タグ・Release・`release` の早送りは済んでいる。手順 8 に進み、手順 9 の報告に `playground.txt` の終わりを書く。
+- すでにあるファイルは上書きしない。作者が書き換えたものは残り、新しく増えた例だけが足される。中身が `examples/` と違って残したファイルは、出力の「上書きせずに残した」に並ぶ。手順 8 の PR のコメントと手順 9 の知らせに書く。
+- ここで失敗しても（`ebykn` のビルドの失敗など）、タグ・Release・`release` の早送りは済んでいる。手順 8 に進み、手順 8 の PR のコメントと手順 9 の知らせに `playground.txt` の終わりを書く。
 
 ### 確かめたこと・確かめていないこと
 
@@ -477,6 +521,10 @@ GitHub の画面でマージするときは、PR の先頭のコミットがこ�
 - 閉じた Issue：#<番号>, …
 - PR のないコミット：`<コミット 12 桁>` <題>, …（なければこの行を消す）
 - 報告スライドの作成で見つかった Issue：#<番号>, …（found.txt。なければこの行を消す）
+- release のワークスペース：<作った / 早送りした / 進めていない：理由と status か log の出力>（release-ws.txt）
+- 試せる例：`<ワークスペースのパス>/playground/`。上書きせずに残したファイル：<一覧>（playground.txt。手順 7 で失敗したら、その終わり。`playground=なし` ならこの行を消す）
+- 作れなかった Issue：`<$dir>/pending-issues/` の <件数> 件（`gh issue create` が拒否された。なければこの行を消す）
+- 知らせ：送れない（<手順 0 で Run を確かめられなかった理由>。確かめられたらこの行を消す）
 
 <何が入ったかを 2〜4 文で>
 ```
@@ -506,27 +554,129 @@ gh pr checks <PR 番号> --watch
 EOF
 ```
 
-`release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから報告する。
+`release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから手順 9 に進む。
 
-## 9. 作者に報告する
+本文とコメントは作者があとで読むためのもの。作者に読むよう促す言葉（「ご確認ください」など）は書かない。
 
-次の形で報告する。
+## 9. コーディネーターに知らせる
+
+作者には報告しない。終わったときも、途中で止まったときも（手順 1 で `develop` が進んでいなかったときを含む）、手順 0 で確かめた Run に結果を送る。コーディネーターは、見つかった Issue を直す作業を割り振り、このワークツリーを片付ける。
+
+知らせの中身を `<scratchpad>/notice.txt` に書く。終わったとき：
 
 ```text
-リリース report/<id> を切りました。
+結果：リリース report/<id> を切りました。
 - 範囲：<前回のタグ>（<前回のコミット>）..<コミット>（PR <件数> 件、閉じた Issue <件数> 件）
 - Release（報告スライド）：<Release の URL>
 - リリースの PR：<PR の URL>（確認待ち：report/<id>, …）
-- マージするとき：gh pr merge <PR 番号> --merge --match-head-commit <sha>
 - 判断待ちの Issue：#<番号> <題>, …（なければ「なし」）
 - PR のないコミット・題と PR の食い違い：<direct.txt と mismatch.txt の中身>（なければ「なし」）
-- スライドを作る途中で見つかった Issue：#<番号> <題>, …（found.txt。なければ「なし」）
+- スライドを作る途中で見つかった Issue：#<番号> <題>, …（found.txt。なければ「なし」。直す作業の割り振りを頼む）
+- 作れなかった Issue：<$dir>/pending-issues/ の <件数> 件（なければ「なし」。作って割り振るのを頼む）
 - release のワークスペース：<表示名>（<パス>）。<作った / 早送りした / 進めていない：理由>
 - 試せる例：<パス>/playground/（`export PATH="<パス>/target/debug:$PATH"` のあと、各例の README のコマンドを打つ）。上書きせずに残したファイル：<一覧>（なければ「なし」）
-- 確かめ方：スライドの最後のページ。release のワークスペースでターミナルを開くと、今回のコミットで動きます。
+- 作者に伝えること：<作者の操作が要るもの。なければ「なし」>
+- 作業用のフォルダ：<$dir>
+- このワークツリー：<パス>（片付けを頼む）
 ```
 
-- ワークスペースの行と試せる例の行は、手順 7 の `release-ws.txt` と `playground.txt` から書く。手順 7 で止まったときは「進めていない」とし、止まった理由と `status` か `log` の出力を添える。作者に片づけてもらう。
+止まったとき：
+
+```text
+結果：リリースが手順 <番号> で止まりました。
+- 理由：<「止まる：…」の行か、権限の判定で拒否された・確認を求められたコマンド。develop が進んでいないときは「前回のリリースから develop が進んでいない」>
+- 識別子と範囲：<vars の中身。手順 1 より前で止まったら「なし」>
+- 押したもの：<タグ・Release・release の早送り・PR の作成と更新・PR のコメントのうち済んだもの。なければ「なし」>
+- 作業用のフォルダ：<$dir。手順 1 より前で止まったら「なし」>
+- PDF：<PDF のパス。まだなければ「なし」>
+- 作れなかった Issue：<$dir>/pending-issues/ の <件数> 件（なければ「なし」）
+- 作者に伝えること：<作者の操作が要るもの。なければ「なし」>
+- 続けるには：<「止まった回を続ける」の表のどの行か。develop が進んでいないときは「なし」>
+- このワークツリー：<パス>（片付けを頼む）
+```
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+echo "このワークツリー：$(git rev-parse --show-toplevel)"
+run=$(cat <scratchpad>/coordinator-run)
+[ -n "$run" ] || { echo "送らない：手順 0 で Run を確かめられなかった。知らせの中身："; cat <scratchpad>/notice.txt; exit 1; }
+"$orca" orchestration send --to "run:${run}" \
+  --subject "<件名：例「リリース report/<id> を切った」「リリース：develop が進んでいない」「リリースが手順 <番号> で止まった」>" \
+  --body "$(cat <scratchpad>/notice.txt)"
+EOF
+```
+
+- 送るのは 1 回だけ。送ったら終わる。このワークツリーと `$dir` は消さない（コーディネーターが続きに使い、片付ける）。
+- 送れなかったら（Run を確かめられなかった、送信が失敗した）、`notice.txt` の中身をこのターミナルに出して終わる。PR のコメントまで進んだ回は、その「知らせ：送れない」の行が目印になる。コーディネーターは「見回り」で見つける。
+- コーディネーターが手で切ったときは送らない。同じ中身を手元で確かめ、見つかった Issue を割り振る。
+
+## コーディネーターが知らせを受けたら
+
+- 終わったとき：`found.txt` の Issue と `pending-issues/` の Issue を、AGENTS.md の着手順で割り振る（`pending-issues/` のものは、先に `ebykn-issue` で作る）。作者には報告しない（催促しない）。
+- 止まったとき：理由に応じて直し、次の「止まった回を続ける」の表に従って続ける。CI が赤ければ、直す PR を `develop` に積み、緑になったら手で切るか、次の朝に任せる。
+- 「作者に伝えること」は、作者が次に話しかけたときに伝える。催促しない。
+- どちらでも、続きが済んだら、知らせにあるワークツリーを片付ける。リリースのワークツリーはどこにも push しないブランチなので、ブランチごと消す。`$dir` はオートメーションのエージェントの scratchpad にあり、ワークツリーとは別なので残る。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" worktree rm --worktree "path:<知らせにあるワークツリーのパス>" --delete-branch --json
+EOF
+```
+
+## 止まった回を続ける
+
+コーディネーターが、自分のワークスペースで行う。`$dir` は同じマシンのパスなので、知らせにあるパスをそのまま読める。
+
+| 止まった点 | リモートの状態 | 続け方 |
+| --- | --- | --- |
+| 手順 0〜3 | 何も押していない | 次の朝に任せるか、`orca automations run <id>` で走らせる。手で切ってもよい（手順 1 から） |
+| 手順 4〜6 | タグか Release は押したが、`release` がタグまで進んでいない | 手で手順 1 を走らせると、`resume-release` か `resume-ff` で同じ識別子を再開する。そのとき、手順 1 のブロックの `dir=` を知らせの `$dir` にし、PDF と手順 2 の出力を使い回す。次の回に任せてもよい（次の回の手順 1 も同じように再開するが、`$dir` は新しくなるので、手順 2・3 を作り直す） |
+| 手順 7〜8 | `release` はタグまで進んだ | 手順 1 は新しいリリースとみなすので、走らせない。知らせの `$dir/vars` を読む。読めなければ、知らせの「識別子と範囲」から `vars` を作り直す（下のブロック）。手順 2 の出力が `$dir` になければ手順 2 のブロックを走らせ、止まった手順（7 か 8）から 9 の前まで行う |
+| 手順 9（知らせが届かない） | すべて済んだ | 「見回り」で見つける。結果は Release と PR のコメントにある |
+
+`vars` を作り直す（手順 7〜8 で止まり、`$dir/vars` が読めないとき）：
+
+```bash
+bash -euo pipefail <<'EOF'
+id=<識別子>
+dir=<scratchpad>/release-$id
+sha=$(git rev-parse "report/${id}^{commit}")
+msg=$(git tag --list --format='%(contents)' "report/${id}")
+prev=$(printf '%s\n' "$msg" | sed -n 's/^前回：\(.*\)（[0-9a-f]\{40\}）$/\1/p')
+prev_sha=$(printf '%s\n' "$msg" | sed -n 's/^前回：.*（\([0-9a-f]\{40\}\)）$/\1/p')
+[ -n "$prev_sha" ] || { echo "止まる：report/${id} のメッセージに前回のコミットがない"; exit 1; }
+mkdir -p "$dir"
+printf 'mode=%s\nid=%s\nsha=%s\nprev=%s\nprev_sha=%s\ndir=%s\n' \
+  continue "$id" "$sha" "$prev" "$prev_sha" "$dir" > "$dir/vars"
+cat "$dir/vars"
+EOF
+```
+
+## 見回り
+
+知らせが届かない回は、ワークツリーが残り、止まった点も分からない。知らせが届かないのは、手順 0 で Run を確かめられなかった、権限の確認で止まった、Orca が終了した、マシンがスリープした、エージェントの文脈が尽きた、などのとき。Orca は new-per-run のワークツリーを消さない。
+
+コーディネーターは、毎朝の知らせが届かなかった日と、手でリリースを切る前に見回る。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" automations list --json | jq -c '.. | objects | select(.name? == "ebykn-daily-release")'
+"$orca" automations runs --id <オートメーションの id> --limit 20 --json
+repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+"$orca" worktree list --repo "path:$repo" --limit 10000 --json \
+  | jq -r '.result.worktrees[] | "\(.path)\t\(.branch // "")\t\(.displayName // "")"'
+EOF
+```
+
+- `runs` の各回について、状態と、その回のワークスペースを読む。終わっていない回（実行中か待ち）には触らない。
+- 終わった回のワークスペースが `worktree list` に残っていて、その回の知らせを受け取っていなければ、「知らせのなかった回」とする。
+  - リモートの状態（`report/*` のタグ、Release、`release` の位置、リリースの PR のコメント）で止まった点を決め、「止まった回を続ける」の表に従って続ける。
+  - リリースの PR まで進んだ回なら、PR に「毎朝の回 <日時> は知らせを送らずに終わった（<分かった理由>）」とコメントして目印にする。PR まで進んでいなければ、作者が次に話しかけたときに伝える。催促はしない。
+- 続きが済んだら、知らせのなかった回のワークスペースも `orca worktree rm --worktree "path:<パス>" --delete-branch --json` で消す。
+- `runs` と `automations list` の JSON の形は、最初の試し走りで確かめる（下の「作ったあとに確かめる」）。形が上の読み方と違えば、この節を直す PR を出す。
 
 ## 作者が問題を見つけたとき
 
@@ -534,10 +684,130 @@ AGENTS.md の「見つけた問題」のとおり扱う。
 
 1. 問題を Issue にする（`ebykn-issue` スキル）。どのリリースで見つかったかを本文に書く。
 2. 直す PR を `develop` に積む。ワーカーに作らせ、AGENTS.md の「マージ」のとおりマージする。過去の履歴は直さない。
-3. もう一度リリースを切る（この手順の 1 から）。同じ日なら `N` が 1 つ増える。スライドは前回のタグからの差分になる。
+3. 直したものは次の朝のリリースに入る。急ぐときは、コーディネーターが手でリリースを切る（この手順の 1 から）。同じ日なら `N` が 1 つ増える。スライドは前回のタグからの差分になる。
 
 ## 作者が main にマージしたあと
 
 - リリースの PR は閉じる。次のリリースの手順 8 では開いた PR がないので、新しく作る。
 - 新しい PR の「確認待ちのリリース」には、`main` に入っていないタグだけが載る。
 - 次のリリースの手順 1 で、前回の PR がマージコミットで入ったことを確かめる。
+
+## 毎朝のリリースのオートメーション
+
+オートメーションは、リポジトリの外にある Orca の設定。コーディネーターが、コーディネーターのワークスペースで作る。
+
+作るのは、手順 3 が呼ぶ `ebykn-report-slides` スキルが `origin/develop` に入ってからにする。オートメーションのワークツリーは `origin/develop` から作るので、スキルがまだなければ、毎朝の回が手順 3 で止まる。
+
+| 設定 | 値 | 理由 |
+| --- | --- | --- |
+| 時刻 | 毎日 6:00（`Asia/Tokyo`） | 作者の指示。Orca は起動しているときだけ走らせるので、Orca が起動していない日は切らない |
+| 逃した回の猶予 | 15 分 | 6 時を少し過ぎて目覚めたときだけ走らせ、何時間もあとに取り戻して切らない（既定は 720 分） |
+| エージェント | `claude` | このリポジトリのスキル（`.claude/skills/`）と yomiyasu を使う |
+| ワークツリー | 走るたびに新しく作る（`new-per-run`）。元は `origin/develop` | 前の回のワークツリーの状態を引き継がない。使い終わったものはコーディネーターが片付ける |
+| setup | `skip` | リポジトリの setup のフックは空。走らせないと明示する |
+| precheck | 付けない | `develop` が進んだかは手順 1 が判断する。判断する場所を 1 つにする |
+| プロンプトの Run の id | コーディネーターの Run（`orca orchestration run-current --json`） | `run-list` はすべてのリポジトリの Run の一覧で、Run は消せない。一覧から推すと、Run が 1 つ増えただけで宛先を決められなくなる |
+
+### 無人の実行の権限
+
+無人で最後まで進むには、取り消せない手順（手順 4〜8 のタグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）を、確認なしで行える権限が要る。
+
+- 今の Orca の全体の設定（`agentPermissionDefault: "auto"`）では、オートメーションは Claude を `--permission-mode auto` で起動する。権限の判定でこのリポジトリへの push などが信頼されていなければ、拒否されるか確認待ちで止まる。確認待ちで止まると、知らせも届かない。
+- 権限をどうするかは作者が決める。作者が選ぶ方法は 2 つ：Orca の UI でこのオートメーションの権限のモードを設定する（CLI では設定できない）、またはプロジェクトの設定で、この手順のコマンドを許可する。エージェントとコーディネーターは、権限の設定のファイルを足したり変えたりしない。
+- 作者が決めるまでは、冒頭のとおり、拒否されたらそこで止まって知らせ、コーディネーターが「止まった回を続ける」で残りを行う。リリースは止まらない。
+- マシンがスリープすると、スライドを作る長い回が途中で切れうる。Orca の `keepComputerAwakeWhileAgentsRun` は今は `false`。切れた回は知らせが届かないので「見回り」で見つける。この設定を変えるかも作者が決める。
+
+### 作る
+
+まず、同じオートメーション（名前 `ebykn-daily-release`）がないかを確かめる。あれば作らず、下の「コーディネーターが替わったら」の `edit` で直す。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" automations list
+EOF
+```
+
+プロンプトを書き出す。全文は、このブロックの `PROMPT` のあいだ。`@RUN_ID@` を、コーディネーターの Run の id に置き換える。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+run=$("$orca" orchestration run-current --json | jq -r '.result.runId // empty')
+[ -n "$run" ] || { echo "止まる：このワークスペースに Run が結び付いていない"; exit 1; }
+"$orca" orchestration run-show --id "$run" --json --full | jq -e '.result.run.legacy == 0' > /dev/null \
+  || { echo "止まる：$run を確かめられない（legacy か、見つからない）"; exit 1; }
+prompt=$(cat <<'PROMPT'
+ebykn-lang-proto の毎朝のリリースです。このワークツリーは origin/develop から作られています。
+コーディネーターの Run の id：@RUN_ID@
+
+1. AGENTS.md を読み、ebykn-release スキルを手順 0 から最後まで実行してください。手順 0 の Run の id には、上の id を使ってください。
+2. develop が前回のリリースから進んでいなければ、手順 1 で止まります。それも結果として手順 9 で知らせてください。
+3. 終わったら、途中で止まったときも、スキルの手順 9 のとおり、コーディネーターの Run に結果を送ってください。手順 0 で Run を確かめられなくても、リリースは止めずに進め、スキルのとおり PR のコメントに書いてください。
+4. タグや release の push、gh release create、gh pr create・edit・comment が、権限の判定で拒否されたり確認を求められたりしたら、回り込まずにそこで止まり、手順 9 で、止まった手順・$dir・PDF のパスを知らせてください。
+5. 作者（ユーザー）に、レビューや確認を催促しないでください。結果は Release、リリースの PR の本文とコメント、コーディネーターへの知らせにだけ残します。
+6. develop・release・main に直接コミットしないでください。このワークツリーと $dir は消さずに残してください。コーディネーターが続きに使い、片付けます。
+PROMPT
+)
+printf '%s\n' "${prompt//@RUN_ID@/$run}" > <scratchpad>/automation-prompt.txt
+cat <scratchpad>/automation-prompt.txt
+EOF
+```
+
+作る。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")   # 元のリポジトリ
+"$orca" automations create --name ebykn-daily-release \
+  --trigger daily --time 06:00 --timezone Asia/Tokyo \
+  --missed-run-grace-minutes 15 \
+  --provider claude --prompt "$(cat <scratchpad>/automation-prompt.txt)" \
+  --repo "path:$repo" --workspace-mode new-per-run --base-branch origin/develop --setup skip \
+  --enabled --json
+EOF
+```
+
+### 作ったあとに確かめる
+
+出力の id で設定を確かめ、一度走らせる。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" automations show <id> --json
+"$orca" automations run <id> --json
+"$orca" automations runs --id <id> --json
+EOF
+```
+
+- `show` で、時刻・タイムゾーン・猶予・ワークツリーの作り方・元のブランチ・プロンプトの Run の id が、上の表のとおりかを見る。
+- `run` で一度走らせる。合格は、確認や拒否なしに手順 9 まで届き、コーディネーターに知らせが届いたときだけ。リリースが切られても、「develop が進んでいない」で止まってもよい。`gh` の認証がオートメーションの端末で効くことも、この回で確かめる。
+- 権限で止まったり、知らせが届かなかったりしたら、合格としない。「止まった回を続ける」で残りを行い、作者が権限を決めたあとでもう一度走らせる。
+- `runs` と `automations list` の JSON の形（回の状態とワークスペースの欄）を見て、「見回り」の読み方と合っているかを確かめる。
+
+### 手で切る前に
+
+オートメーションが走っている間は、手で切らない。同じ識別子を 2 つの回で切り合うため。最新の回が終わっているかを確かめる。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" automations runs --id <id> --limit 1 --json
+EOF
+```
+
+最新の回が終わっていない状態（実行中か待ち）なら、終わるまで待つ。
+
+### コーディネーターが替わったら
+
+コーディネーターの Run が替わると、プロンプトの Run の id が古くなり、毎朝の回が手順 0 で Run を確かめられなくなる（リリースは切るが、知らせが届かない）。新しいコーディネーターは、上の「プロンプトを書き出す」のブロックを自分のワークスペースで走らせてから、プロンプトを直す。
+
+```bash
+bash -euo pipefail <<'EOF'
+orca=${ORCA_CLI_COMMAND:-orca}
+"$orca" automations edit <id> --prompt "$(cat <scratchpad>/automation-prompt.txt)" --json
+"$orca" automations show <id> --json
+EOF
+```
