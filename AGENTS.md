@@ -123,7 +123,11 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 
 マージ後、コーディネーターはワーカーを解放し（orca の release）、ワークツリーを削除し、リモートのブランチを消す。
 
-GitHub の既定のブランチは `main` なので、`develop` への PR の `Closes #N` では Issue が閉じず、PR との紐づけもできない。マージ後、コーディネーターが本文の `Closes #N` の Issue を閉じる（`gh issue close <N> --comment "#<PR 番号> で develop に入りました"`）。
+マージ後、コーディネーターは PR が閉じるはずの Issue が閉じたかを確かめ、閉じていなければ閉じる。
+
+- GitHub は、既定のブランチ（`main`）にマージされた PR の `Closes #N` でしか、Issue を確実に閉じない。`develop` にマージした #22（Closes #18）では #18 が閉じず、#26（Closes #17）では #17 が閉じた。`main` を既定のブランチのままにするので、この手順が要る。
+- 閉じるはずの Issue は、PR の `closingIssuesReferences`（`gh pr view <番号> --json closingIssuesReferences`）と、本文の `Closes #N`。`develop` をベースにして作った PR では `closingIssuesReferences` が空になる（#32）ので、本文も読む。
+- 閉じていない Issue には `PR #<番号> で develop に入った` とコメントして `gh issue close` する。コマンドは [.claude/skills/ebykn-pr/SKILL.md](.claude/skills/ebykn-pr/SKILL.md) の 6。
 
 ## リリースと作者の確認
 

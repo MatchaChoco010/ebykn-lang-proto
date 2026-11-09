@@ -112,14 +112,15 @@ PR が閉じた Issue と、判断待ちの Issue を集める。
 . <scratchpad>/release-<id>/vars
 while read -r n; do
   gh pr view "$n" --json body,closingIssuesReferences \
-    --jq '.closingIssuesReferences[].number, .body' \
+    --jq '.closingIssuesReferences[].number, (.body | gsub("```[\\s\\S]*?```"; "") | gsub("`[^`\n]*`"; ""))' \
     | grep -oiE '(^[0-9]+$)|\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
     | grep -oE '[0-9]+$'
 done < "$dir/prs.txt" | awk '!seen[$0]++' > "$dir/issues.txt"
 gh issue list --label "needs review" --state open --limit 200 --json number,title,url > "$dir/needs-review.json"
 ```
 
-既定のブランチは `main` なので、`develop` への PR では `closingIssuesReferences` が空になる。そのため本文の `Closes #N`（close / fix / resolve とその活用形）も読み、両方を合わせる。
+- Issue は、閉じたかどうか（`closedByPullRequestsReferences` や Issue の状態）ではなく、PR の `closingIssuesReferences` から集める。既定のブランチは `main` なので、`develop` へのマージでは Issue が閉じないことがある。閉じていない Issue は、マージのときにコーディネーターが手で閉じている（AGENTS.md の「マージ」）。
+- `develop` をベースにして作った PR では `closingIssuesReferences` が空になる（#32）。そのため本文の `Closes #N`（close / fix / resolve とその活用形）も読み、両方を合わせる。本文は、コードのフェンスとインラインのコードを除いてから読む（例として書いた `Closes #N` を拾わないため）。
 
 ## 5. 報告スライドの PDF を作る
 
