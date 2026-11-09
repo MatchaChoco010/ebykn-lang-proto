@@ -610,7 +610,7 @@ impl Cx<'_> {
         }
         let recv = self.expr(receiver);
         if self.logic && args.is_empty() && turbofish.is_none() {
-            // `v.view()` ⇒ `v@`（§7.4）。`.first()` / `.last()` は vstd のまま（#11 の既定 B）。
+            // `v.view()` ⇒ `v@`（§7.4）。`.first()` / `.last()` は vstd のまま（#11 の決定：案 B）。
             if method.name == "view" {
                 return format!("{recv}@");
             }

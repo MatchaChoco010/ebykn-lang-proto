@@ -32,7 +32,7 @@ fn method_body(f: &File, n: usize, name: &str) -> Vec<String> {
 }
 
 /// 付録 B の `.first()`（`Option` と比べる）を、vstd の意味で正しい `.get(0)` に書き直した箇所（#11 の
-/// 既定 B。`OPEN.md`）。
+/// 決定：案 B。`OPEN.md`）。
 const STACK_FIRST: (&str, &str) = (
     "self.head == self@order.first(),",
     "self.head == self@order.get(0),",

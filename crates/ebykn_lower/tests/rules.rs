@@ -95,7 +95,7 @@ fn bare_mut_parameters_in_ensures_are_final() {
 
 #[test]
 fn first_and_last_are_written_as_is() {
-    // #11 の既定 B：論理文脈の `.first()` / `.last()` も vstd の意味（要素を返す）のまま写す。
+    // #11 の決定（案 B）：論理文脈の `.first()` / `.last()` も vstd の意味（要素を返す）のまま写す。
     // M2 で入れた旧既定 A（`first_opt` / `last_opt` への置き換え）を戻すと、ここで落ちる。
     let src = "pub spec fn f(s: Seq<u64>) -> u64 = s.first();\npub fn g(v: Vec<u64>) -> Option<&u64> { v.first() }";
     has(src, "{ s.first() }");
