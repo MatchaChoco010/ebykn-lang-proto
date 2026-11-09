@@ -41,9 +41,16 @@ fn verus_only(written: &str) -> Message {
     }
 }
 
+/// 証明構文。`.eyk` では E0303。`.eykp` でここに来るのは、文でない位置に書いたもの。
 fn proof(written: &str) -> Message {
-    Message::ProofSyntax {
-        written: written.into(),
+    if crate::parse::in_proof() {
+        Message::ProofStmtOnly {
+            written: written.into(),
+        }
+    } else {
+        Message::ProofSyntax {
+            written: written.into(),
+        }
     }
 }
 
@@ -503,6 +510,7 @@ fn binary(b: syn::ExprBinary, span: Span) -> ast::Expr {
         syn::BinOp::Exply(_) => return rejected(&b, verus("a <== b", "b ==> a")),
         syn::BinOp::BigEq(_) => return rejected(&b, verus("===", "==")),
         syn::BinOp::BigNe(_) => return rejected(&b, verus("!==", "!=")),
+        syn::BinOp::ExtEq(_) if crate::parse::in_proof() => B::ExtEq,
         syn::BinOp::ExtEq(_) => return rejected(&b, proof("=~=")),
         syn::BinOp::ExtNe(_) => return rejected(&b, verus_only("!~=")),
         syn::BinOp::ExtDeepEq(_) => return rejected(&b, verus_only("=~~=")),
@@ -759,6 +767,7 @@ pub(in crate::parse) fn raw_atom(raw: RawAtom) -> ast::ExprKind {
     match raw {
         RawAtom::Quant(q) => ast::ExprKind::Quant {
             kind: q.kind,
+            triggers: triggers(q.triggers),
             binders: q
                 .binders
                 .into_iter()
@@ -828,6 +837,22 @@ pub(in crate::parse) fn raw_atom(raw: RawAtom) -> ast::ExprKind {
     }
 }
 
+/// 量化子の本体の前の属性。`.eyk` では字句の検査が E0303 にしているので、AST には残さない。
+fn triggers(raw: Vec<hook::RawTrigger>) -> Vec<ast::Trigger> {
+    if !crate::parse::in_proof() {
+        return Vec::new();
+    }
+    raw.into_iter()
+        .map(|t| match t {
+            hook::RawTrigger::Exprs { exprs, span } => ast::Trigger::Exprs {
+                exprs: exprs.into_iter().map(expr).collect(),
+                span: sp(span),
+            },
+            hook::RawTrigger::Auto(span) => ast::Trigger::Auto(sp(span)),
+        })
+        .collect()
+}
+
 pub(in crate::parse) fn block(b: syn::Block) -> ast::Block {
     let span = sp(b.brace_token.span.join());
     let mut stmts = Vec::new();
@@ -840,35 +865,7 @@ pub(in crate::parse) fn block(b: syn::Block) -> ast::Block {
 fn stmt(s: syn::Stmt) -> ast::Stmt {
     let span = span_of(&s);
     let kind = match s {
-        syn::Stmt::Local(l) => {
-            if l.tracked.is_some() || l.ghost.is_some() {
-                push(span, verus_only("let ghost / let tracked"));
-            }
-            let (p, t) = match l.pat {
-                syn::Pat::Type(pt) => (pat(*pt.pat), Some(ty(&pt.ty))),
-                other => (pat(other), None),
-            };
-            let (init, else_) = match l.init {
-                Some(init) => {
-                    let else_ = init.diverge.map(|(_, e)| match *e {
-                        syn::Expr::Block(b) => block(b.block),
-                        other => ast::Block {
-                            span: span_of(&other),
-                            stmts: Vec::new(),
-                        },
-                    });
-                    (Some(expr(*init.expr)), else_)
-                }
-                None => (None, None),
-            };
-            ast::StmtKind::Let(ast::Local {
-                attrs: attrs(&l.attrs),
-                pat: p,
-                ty: t,
-                init,
-                else_,
-            })
-        }
+        syn::Stmt::Local(l) => ast::StmtKind::Let(local(l, span)),
         syn::Stmt::Item(syn::Item::Verbatim(ts)) => return stmt_verbatim(ts, span),
         syn::Stmt::Item(other) => {
             // 差し込み口が項目と見なさなかった項目。Ebykn の項目の文法で読み直す。
@@ -916,7 +913,97 @@ fn stmt(s: syn::Stmt) -> ast::Stmt {
     ast::Stmt { kind, span }
 }
 
-/// 文の位置の `Verbatim`（take / put / leak / borrow / ループ / 項目）。
+fn local(l: syn::Local, span: Span) -> ast::Local {
+    if l.tracked.is_some() || l.ghost.is_some() {
+        push(span, verus_only("let ghost / let tracked"));
+    }
+    let (p, t) = match l.pat {
+        syn::Pat::Type(pt) => (pat(*pt.pat), Some(ty(&pt.ty))),
+        other => (pat(other), None),
+    };
+    let (init, else_) = match l.init {
+        Some(init) => {
+            let else_ = init.diverge.map(|(_, e)| match *e {
+                syn::Expr::Block(b) => block(b.block),
+                other => ast::Block {
+                    span: span_of(&other),
+                    stmts: Vec::new(),
+                },
+            });
+            (Some(expr(*init.expr)), else_)
+        }
+        None => (None, None),
+    };
+    ast::Local {
+        attrs: attrs(&l.attrs),
+        pat: p,
+        ty: t,
+        init,
+        else_,
+    }
+}
+
+/// 証明の文（`.eykp` だけ。差し込み口は `.eykp` でだけこれを読む）。
+fn proof_stmt(raw: hook::RawProof, span: Span) -> ast::ProofStmt {
+    use hook::{RawAssertBy, RawProof};
+    match raw {
+        RawProof::Block(b) => ast::ProofStmt::Block(block(b)),
+        RawProof::Assert { expr: e, by } => ast::ProofStmt::Assert {
+            expr: expr(e),
+            by: by.map(|b| match b {
+                RawAssertBy::Block(b) => ast::AssertBy::Block(block(b)),
+                RawAssertBy::Prover { mode, requires } => {
+                    let mode_span = sp(mode.span());
+                    let m = prover_mode(&mode);
+                    ast::AssertBy::Prover {
+                        mode: m,
+                        mode_span,
+                        requires: requires.into_iter().map(expr).collect(),
+                    }
+                }
+            }),
+        },
+        RawProof::AssertForall { quant, by } => {
+            let ast::ExprKind::Quant {
+                binders,
+                triggers,
+                body,
+                ..
+            } = raw_atom(RawAtom::Quant(quant))
+            else {
+                unreachable!("raw_atom は量化子を量化子に写す")
+            };
+            ast::ProofStmt::AssertForall {
+                binders,
+                triggers,
+                body,
+                by: block(by),
+            }
+        }
+        RawProof::SpecLet(l) => ast::ProofStmt::SpecLet(local(l, span)),
+        RawProof::Reveal { path: p, fuel } => ast::ProofStmt::Reveal {
+            path: path(&p),
+            fuel: fuel.map(expr),
+        },
+        RawProof::Hide(p) => ast::ProofStmt::Hide(path(&p)),
+    }
+}
+
+/// 証明器の名前（仕様 §5.2 の `ProverMode`、OPEN-6 の既定の 5 つ）。ほかの名前は診断にする。
+pub(in crate::parse) fn prover_mode(name: &proc_macro2::Ident) -> ast::ProverMode {
+    let n = name.to_string();
+    ast::ProverMode::from_name(&n).unwrap_or_else(|| {
+        push(
+            sp(name.span()),
+            Message::Expected {
+                what: crate::diag::Expected::ProverMode,
+            },
+        );
+        ast::ProverMode::BitVector
+    })
+}
+
+/// 文の位置の `Verbatim`（take / put / leak / borrow / ループ / 項目 / 証明の文）。
 pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt {
     let kind = match hook::parse_stmt_verbatim.parse2(ts) {
         Ok((a, raw)) => match raw {
@@ -928,6 +1015,18 @@ pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt 
                 semi: false,
             },
             RawStmt::Item(i) => ast::StmtKind::Item(i),
+            RawStmt::Proof(raw) => {
+                // 証明の文には属性を付けられない（仕様 §5.7 の `ProofAttr` は式・項目に付く）。
+                if let Some(at) = attrs(&a).first() {
+                    push(
+                        at.span,
+                        Message::NotAllowedHere {
+                            written: "#[..]".into(),
+                        },
+                    );
+                }
+                ast::StmtKind::Proof(proof_stmt(raw, span))
+            }
         },
         Err(e) => {
             push_error(e);

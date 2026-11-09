@@ -83,7 +83,7 @@ fn lemma_fn_has_no_body_in_eyk() {
     assert_eq!(
         diags("lemma fn l() ensures true { }"),
         [
-            "src/lib.eyk:1:27: E0001: syntax error: `lemma fn .. { .. }` is proof syntax; it can only be written in `.eykp`, which is not supported yet"
+            "src/lib.eyk:1:27: E0303: `lemma fn .. { .. }` is proof syntax and cannot be written in `.eyk`; write it in the proof file (`proof/*.eykp`)"
         ]
     );
     rejects(
@@ -287,12 +287,9 @@ fn invariant_and_view_in_inherent_impl_are_e0403() {
 fn proof_items_are_rejected_in_eyk() {
     rejects(
         "lemma group g { a, b }",
-        "1:1: E0001: syntax error: `lemma group` is proof syntax",
+        "1:1: E0303: `lemma group` is proof syntax",
     );
-    rejects(
-        "use lemmas g;",
-        "1:5: E0001: syntax error: `use lemmas` is proof syntax",
-    );
+    rejects("use lemmas g;", "1:5: E0303: `use lemmas` is proof syntax");
     // `use lemmas::x;` は Rust の use。
     assert_eq!(heads("use lemmas::foo;"), ["use"]);
 }

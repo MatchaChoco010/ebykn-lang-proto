@@ -40,8 +40,17 @@ impl Parsed {
     }
 }
 
-/// `.eyk` を読む。
+/// `.eyk` を読む。証明構文（仕様 §5.7）は E0303 にする。
 pub fn parse_eyk(file: &SourceFile) -> Parsed {
+    parse(file, false)
+}
+
+/// `.eykp` を読む。文法は `.eyk` の文法に §5.7 の証明構文を足したもの。
+pub fn parse_eykp(file: &SourceFile) -> Parsed {
+    parse(file, true)
+}
+
+fn parse(file: &SourceFile, proof: bool) -> Parsed {
     syn::set_ebykn_hook(hook::hook);
     let tokens = match TokenStream::from_str(&file.text) {
         Ok(t) => t,
@@ -66,6 +75,7 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
             items: std::collections::HashMap::new(),
             pending: Vec::new(),
             unchecked_body: false,
+            proof,
         })
     });
     tokens::scan(&tokens);
@@ -119,6 +129,13 @@ struct Cx {
     pending: Vec<Message>,
     /// `unchecked fn` の本体を読んでいる間だけ真（`env!` / `option_env!` を許す。#27）。
     unchecked_body: bool,
+    /// `.eykp` を読んでいるか（証明構文を受理する）。
+    proof: bool,
+}
+
+/// `.eykp` を読んでいるか。
+pub(crate) fn in_proof() -> bool {
+    with_cx(|cx| cx.proof)
 }
 
 /// `unchecked fn` の本体を読んでいる間かを設定し、前の値を返す。
@@ -206,6 +223,15 @@ pub(crate) fn reserved_path(
     if segs.len() == 1 || leading_colon {
         let name = segs.last().cloned().unwrap_or_default();
         let m = match kind {
+            // `.eykp` の文の位置の `reveal(..)` / `hide(..)` / `assert ..` は差し込み口が読むので、
+            // ここに来るのは文でない位置のもの。
+            ReservedKind::ProofCall if in_proof() && name == "reveal_with_fuel" => {
+                Message::VerusSyntax {
+                    written: "reveal_with_fuel(f, n)".into(),
+                    ebykn: "reveal(f, n)".into(),
+                }
+            }
+            ReservedKind::ProofCall if in_proof() => Message::ProofStmtOnly { written },
             ReservedKind::ProofCall => Message::ProofSyntax { written },
             ReservedKind::VerusCall => Message::VerusBuiltin { name, written },
             ReservedKind::VerusMacro => Message::VerusOnly { written },

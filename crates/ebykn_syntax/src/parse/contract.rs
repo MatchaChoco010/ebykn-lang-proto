@@ -225,7 +225,8 @@ fn expr_list(input: ParseStream) -> syn::Result<Vec<ast::Expr>> {
     Ok(out)
 }
 
-/// 契約。`by(..)` は `.eykp` だけの証明構文なので、読んで診断にする。
+/// 契約。`by(..)` は `.eykp` だけの証明構文なので、`.eyk` では読んで診断にする。`lemma fn` の
+/// ほかに付いた `by(..)` は、項目を読む側（[`super::item`]）が診断にする。
 pub(super) fn contract(input: ParseStream) -> syn::Result<ast::Contract> {
     let mut clauses = Vec::new();
     loop {
@@ -249,14 +250,20 @@ pub(super) fn contract(input: ParseStream) -> syn::Result<ast::Contract> {
             "by" => {
                 let content;
                 syn::parenthesized!(content in input);
-                let _mode: syn::Ident = content.parse()?;
-                push(
-                    span_between(&begin, input),
-                    Message::ProofSyntax {
-                        written: "by(..)".into(),
-                    },
-                );
-                continue;
+                let mode: proc_macro2::Ident = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("expected `)`"));
+                }
+                if !super::in_proof() {
+                    push(
+                        span_between(&begin, input),
+                        Message::ProofSyntax {
+                            written: "by(..)".into(),
+                        },
+                    );
+                    continue;
+                }
+                ast::ClauseKind::By(super::convert::prover_mode(&mode))
             }
             _ => unreachable!("peek_clause"),
         };

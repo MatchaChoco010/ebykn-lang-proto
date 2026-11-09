@@ -123,6 +123,8 @@ pub enum ExprKind {
     Quant {
         kind: QuantKind,
         binders: Vec<Binder>,
+        /// 本体の前の `#![trigger ..]` / `#![auto]`（`.eykp` だけ）。
+        triggers: Vec<Trigger>,
         body: Box<Expr>,
     },
     /// `and { a, b }` / `or { a, b }`。
@@ -179,13 +181,15 @@ pub enum BinOp {
     Implies,
     /// `<==>`（`==>` より低い、非結合）。
     Iff,
+    /// `=~=`（`==` と同じ優先順位。`.eykp` だけ）。
+    ExtEq,
 }
 
 impl BinOp {
     pub fn is_comparison(self) -> bool {
         matches!(
             self,
-            BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Ne | BinOp::Ge | BinOp::Gt
+            BinOp::Eq | BinOp::Lt | BinOp::Le | BinOp::Ne | BinOp::Ge | BinOp::Gt | BinOp::ExtEq
         )
     }
 }
@@ -207,6 +211,15 @@ pub enum QuantKind {
 pub enum AndOrKind {
     And,
     Or,
+}
+
+/// 量化子の本体の前の属性（仕様 §5.7 の `ProofAttr`）。
+#[derive(Debug, Clone)]
+pub enum Trigger {
+    /// `#![trigger e, ..]`。
+    Exprs { exprs: Vec<Expr>, span: Span },
+    /// `#![auto]`。
+    Auto(Span),
 }
 
 /// 束縛子。
@@ -367,6 +380,43 @@ pub enum StmtKind {
     SpecAssign {
         target: Expr,
         value: Expr,
+    },
+    /// 証明の文（`.eykp` だけ。仕様 §5.7）。
+    Proof(ProofStmt),
+}
+
+/// 証明の文（仕様 §5.7 の `ProofStmt`）。`use lemmas g;` は項目（[`super::ItemKind::UseLemmas`]）
+/// として [`StmtKind::Item`] に置く。`lemma fn` の呼び出しは式の文。
+#[derive(Debug, Clone)]
+pub enum ProofStmt {
+    /// `proof { .. }`。
+    Block(Block),
+    /// `assert P;`、`assert P by { .. };`、`assert P by(mode) requires Q;`。
+    Assert { expr: Expr, by: Option<AssertBy> },
+    /// `assert forall x in r, P by { .. };`。`by` の中で束縛子を使える。
+    AssertForall {
+        binders: Vec<Binder>,
+        triggers: Vec<Trigger>,
+        body: Box<Expr>,
+        by: Block,
+    },
+    /// `spec let p = e;`。
+    SpecLet(Local),
+    /// `reveal(f);` / `reveal(f, fuel);`。
+    Reveal { path: Path, fuel: Option<Expr> },
+    /// `hide(f);`。
+    Hide(Path),
+}
+
+#[derive(Debug, Clone)]
+pub enum AssertBy {
+    /// `by { .. }`。
+    Block(Block),
+    /// `by(mode)`、`by(mode) requires Q`。
+    Prover {
+        mode: super::ProverMode,
+        mode_span: Span,
+        requires: Vec<Expr>,
     },
 }
 

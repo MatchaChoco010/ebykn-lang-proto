@@ -113,7 +113,7 @@ fn by_clause_is_eykp_only() {
     assert_eq!(
         diags("lemma fn l() by(nonlinear_arith) ensures true;"),
         [
-            "src/lib.eyk:1:14: E0001: syntax error: `by(..)` is proof syntax; it can only be written in `.eykp`, which is not supported yet"
+            "src/lib.eyk:1:14: E0303: `by(..)` is proof syntax and cannot be written in `.eyk`; write it in the proof file (`proof/*.eykp`)"
         ]
     );
 }

@@ -225,7 +225,17 @@ fn parse_region_arg(input: ParseStream) -> syn::Result<RawRegionArg> {
 pub(super) struct RawQuant {
     pub kind: ast::QuantKind,
     pub binders: Vec<RawBinder>,
+    pub triggers: Vec<RawTrigger>,
     pub body: syn::Expr,
+}
+
+/// 量化子の本体の前の `#![trigger ..]` / `#![auto]`（仕様 §5.7 の `ProofAttr`）。
+pub(super) enum RawTrigger {
+    Exprs {
+        exprs: Vec<syn::Expr>,
+        span: proc_macro2::Span,
+    },
+    Auto(proc_macro2::Span),
 }
 
 pub(super) struct RawBinder {
@@ -263,12 +273,45 @@ fn parse_quant(input: ParseStream, allow_struct: bool) -> syn::Result<RawQuant> 
             break;
         }
     }
+    let triggers = parse_triggers(input)?;
     let body = expr_in(input, allow_struct)?;
     Ok(RawQuant {
         kind,
         binders,
+        triggers,
         body,
     })
+}
+
+/// 本体の前の内部属性 `#![trigger e, ..]` / `#![auto]`。引数は Ebykn の式として読む。
+/// `.eyk` では、字句の検査（[`super::tokens`]）が E0303 にしている。
+fn parse_triggers(input: ParseStream) -> syn::Result<Vec<RawTrigger>> {
+    let mut out = Vec::new();
+    while input.peek(Token![#]) && input.peek2(Token![!]) {
+        let pound: Token![#] = input.parse()?;
+        input.parse::<Token![!]>()?;
+        let content;
+        let bracket = syn::bracketed!(content in input);
+        let span = pound.span.join(bracket.span.close()).unwrap_or(pound.span);
+        let name: proc_macro2::Ident = content.parse()?;
+        if name == "trigger" {
+            let exprs = content
+                .parse_terminated(syn::Expr::parse, Token![,])?
+                .into_iter()
+                .collect();
+            out.push(RawTrigger::Exprs { exprs, span });
+        } else if name == "auto" && content.is_empty() {
+            out.push(RawTrigger::Auto(span));
+        } else {
+            return Err(err(
+                span,
+                Message::NotAllowedHere {
+                    written: format!("#![{name}]"),
+                },
+            ));
+        }
+    }
+    Ok(out)
 }
 
 fn peek_binder(input: ParseStream) -> bool {
@@ -672,6 +715,44 @@ pub(super) enum RawStmt {
     /// 文の位置の `borrow` とループ。`;` は含まない（続く `;` は空の文になる）。
     Atom(RawAtom),
     Item(Box<ast::Item>),
+    /// 証明の文（`.eykp` だけ）。
+    Proof(RawProof),
+}
+
+/// 証明の文（仕様 §5.7 の `ProofStmt`）。
+pub(super) enum RawProof {
+    Block(syn::Block),
+    Assert {
+        expr: syn::Expr,
+        by: Option<RawAssertBy>,
+    },
+    AssertForall {
+        quant: RawQuant,
+        by: syn::Block,
+    },
+    SpecLet(syn::Local),
+    Reveal {
+        path: syn::Path,
+        fuel: Option<syn::Expr>,
+    },
+    Hide(syn::Path),
+}
+
+pub(super) enum RawAssertBy {
+    Block(syn::Block),
+    Prover {
+        mode: proc_macro2::Ident,
+        requires: Vec<syn::Expr>,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ProofKind {
+    Block,
+    Assert,
+    SpecLet,
+    Reveal,
+    Hide,
 }
 
 fn stmt(input: ParseStream) -> syn::Result<bool> {
@@ -688,6 +769,7 @@ pub(super) enum StmtKind {
     Leak,
     Atom(AtomKind),
     Item,
+    Proof(ProofKind),
 }
 
 /// 文の先頭を見る。証明構文と Verus の文はここでエラーにする。
@@ -711,6 +793,11 @@ pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
     {
         return Ok(Some(StmtKind::Leak));
     }
+    if super::in_proof()
+        && let Some(kind) = peek_proof_stmt(&t)
+    {
+        return Ok(Some(StmtKind::Proof(kind)));
+    }
     if let Some(m) = proof_or_verus_stmt(&t) {
         return Err(err(input.span(), m));
     }
@@ -732,6 +819,15 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
             written: s.to_string(),
         })
     };
+    if super::in_proof()
+        && is_ident(t.first(), "reveal_with_fuel")
+        && is_group(t.get(1), Delimiter::Parenthesis)
+    {
+        return Some(Message::VerusSyntax {
+            written: "reveal_with_fuel(f, n)".into(),
+            ebykn: "reveal(f, n)".into(),
+        });
+    }
     if is_ident(t.first(), "proof") && is_group(t.get(1), Delimiter::Brace) {
         return proof("proof { .. }");
     }
@@ -752,6 +848,124 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
         });
     }
     None
+}
+
+/// `.eykp` の文の先頭の証明構文（仕様 §5.7）。
+fn peek_proof_stmt(t: &[TokenTree]) -> Option<ProofKind> {
+    if is_ident(t.first(), "proof") && is_group(t.get(1), Delimiter::Brace) {
+        Some(ProofKind::Block)
+    } else if is_ident(t.first(), "assert") && !is_punct(t.get(1), '!') {
+        Some(ProofKind::Assert)
+    } else if is_ident(t.first(), "spec") && is_ident(t.get(1), "let") {
+        Some(ProofKind::SpecLet)
+    } else if is_ident(t.first(), "reveal") && is_group(t.get(1), Delimiter::Parenthesis) {
+        Some(ProofKind::Reveal)
+    } else if is_ident(t.first(), "hide") && is_group(t.get(1), Delimiter::Parenthesis) {
+        Some(ProofKind::Hide)
+    } else {
+        None
+    }
+}
+
+fn parse_proof(input: ParseStream, kind: ProofKind) -> syn::Result<RawProof> {
+    Ok(match kind {
+        ProofKind::Block => {
+            parse_kw(input, "proof")?;
+            RawProof::Block(input.parse()?)
+        }
+        ProofKind::Assert => parse_assert(input)?,
+        ProofKind::SpecLet => {
+            parse_kw(input, "spec")?;
+            match input.parse::<syn::Stmt>()? {
+                syn::Stmt::Local(l) => RawProof::SpecLet(l),
+                _ => return Err(input.error("expected `let`")),
+            }
+        }
+        ProofKind::Reveal => {
+            parse_kw(input, "reveal")?;
+            let content;
+            syn::parenthesized!(content in input);
+            let path: syn::Path = content.parse()?;
+            let fuel = if content.peek(Token![,]) {
+                content.parse::<Token![,]>()?;
+                Some(content.parse()?)
+            } else {
+                None
+            };
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            input.parse::<Token![;]>()?;
+            RawProof::Reveal { path, fuel }
+        }
+        ProofKind::Hide => {
+            parse_kw(input, "hide")?;
+            let content;
+            syn::parenthesized!(content in input);
+            let path: syn::Path = content.parse()?;
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            input.parse::<Token![;]>()?;
+            RawProof::Hide(path)
+        }
+    })
+}
+
+/// `assert P;`、`assert P by { .. };`、`assert P by(mode) requires Q;`、
+/// `assert forall x in r, P by { .. };`。
+fn parse_assert(input: ParseStream) -> syn::Result<RawProof> {
+    parse_kw(input, "assert")?;
+    // `assert forall .. by { .. }` は束縛子を `by` の中で使える形（Verus の `assert forall`）。
+    // `by { .. }` が続かない `assert forall ..` は、量化子の式の `assert`。
+    if matches!(peek_atom(input), Some(AtomKind::Quant)) && peek_kw(input, "forall") {
+        let ahead = input.fork();
+        if let Ok(quant) = parse_quant(&ahead, true)
+            && peek_kw(&ahead, "by")
+            && ahead.peek2(syn::token::Brace)
+        {
+            input.advance_to(&ahead);
+            parse_kw(input, "by")?;
+            let by = input.parse()?;
+            input.parse::<Token![;]>()?;
+            return Ok(RawProof::AssertForall { quant, by });
+        }
+    }
+    let expr: syn::Expr = input.parse()?;
+    let by = if peek_kw(input, "by") {
+        parse_kw(input, "by")?;
+        if input.peek(syn::token::Brace) {
+            Some(RawAssertBy::Block(input.parse()?))
+        } else if input.peek(syn::token::Paren) {
+            let content;
+            syn::parenthesized!(content in input);
+            let mode: proc_macro2::Ident = content.parse()?;
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            let mut requires = Vec::new();
+            if peek_kw(input, "requires") {
+                parse_kw(input, "requires")?;
+                loop {
+                    requires.push(input.parse()?);
+                    if !input.peek(Token![,]) {
+                        break;
+                    }
+                    input.parse::<Token![,]>()?;
+                    if input.peek(Token![;]) {
+                        break;
+                    }
+                }
+            }
+            Some(RawAssertBy::Prover { mode, requires })
+        } else {
+            return Err(input.error("expected `{` or `(` after `by`"));
+        }
+    } else {
+        None
+    };
+    input.parse::<Token![;]>()?;
+    Ok(RawProof::Assert { expr, by })
 }
 
 /// 文を読む。`lookahead_only` のとき（差し込み口から）は、項目を読むときの診断を捨てる。
@@ -779,6 +993,7 @@ pub(super) fn parse_stmt_kind(
             RawStmt::Leak(ident)
         }
         StmtKind::Atom(k) => RawStmt::Atom(parse_atom(input, k)?),
+        StmtKind::Proof(k) => RawStmt::Proof(parse_proof(input, k)?),
         StmtKind::Item => {
             if lookahead_only {
                 RawStmt::Item(Box::new(lookahead_item(input)?))

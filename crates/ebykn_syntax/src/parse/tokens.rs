@@ -23,6 +23,12 @@ const PROOF_ATTRS: &[&str] = &[
     "memoize",
 ];
 
+/// [`PROOF_ATTRS`] のうち、外部属性（`#[..]`）として書けるもの。
+const PROOF_OUTER_ATTRS: &[&str] = &["trigger", "opaque", "rlimit", "spinoff_prover", "memoize"];
+
+/// [`PROOF_ATTRS`] のうち、内部属性（`#![..]`）として書けるもの。量化子の本体の前に置く。
+const PROOF_INNER_ATTRS: &[&str] = &["trigger", "auto"];
+
 /// Verus の属性で、Ebykn に対応する書き方がないもの。
 const VERUS_ATTRS: &[&str] = &["all_triggers", "via_fn", "when_used_as_spec"];
 
@@ -223,7 +229,16 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
         } else {
             format!("#[{name}]")
         };
-        push(span, Message::ProofSyntax { written });
+        let allowed = if inner {
+            PROOF_INNER_ATTRS
+        } else {
+            PROOF_OUTER_ATTRS
+        };
+        if !super::in_proof() {
+            push(span, Message::ProofSyntax { written });
+        } else if !allowed.contains(&name.as_str()) {
+            push(span, Message::NotAllowedHere { written });
+        }
     } else if VERUS_ATTRS.contains(&name.as_str()) {
         push(
             span,
@@ -314,8 +329,12 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
         let next = tts.get(i + 1);
         let span = sp(tt.span());
         let m = if name == "proof" && group(next, Delimiter::Brace) {
-            Some(Message::ProofSyntax {
-                written: "proof { .. }".into(),
+            // `.eykp` でも、中を読まないトークン列の中の証明は読めないので拒否する。
+            let written = "proof { .. }".to_string();
+            Some(if super::in_proof() {
+                Message::ProofStmtOnly { written }
+            } else {
+                Message::ProofSyntax { written }
             })
         } else if crate::reserved::kind_of(&name).is_some_and(crate::reserved::is_call)
             && !punct(prev, '.')

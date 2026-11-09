@@ -151,6 +151,15 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     }
     input.advance_to(&ahead);
     let kind = item_kind(input, ctx, &begin)?;
+    // `pub use lemmas` はない（Verus の `broadcast use` は再公開しない）。
+    if matches!(kind, ast::ItemKind::UseLemmas(_)) && !matches!(v, syn::Visibility::Inherited) {
+        push(
+            super::span_of(&v),
+            Message::NotAllowedHere {
+                written: "pub use lemmas".into(),
+            },
+        );
+    }
     if ctx == (Ctx::Impl { inherent: true })
         && let Some(name) = item_name(&kind)
         && (name.is("invariant") || name.is("view"))
@@ -433,12 +442,15 @@ fn item_kind(
         return lemma_fn(input, None);
     }
     if is_ident(a, "lemma") && is_ident(b, "group") {
-        return Err(err(
-            input.span(),
-            Message::ProofSyntax {
-                written: "lemma group".into(),
-            },
-        ));
+        if !super::in_proof() {
+            return Err(err(
+                input.span(),
+                Message::ProofSyntax {
+                    written: "lemma group".into(),
+                },
+            ));
+        }
+        return lemma_group(input, ctx);
     }
     if starts_fn(input) {
         return fn_item(input, ctx, None);
@@ -531,6 +543,7 @@ fn fn_item(
     let q = qualifiers(input)?;
     let sig = signature(input, q)?;
     let contract = contract::contract(input)?;
+    by_only_on_lemma(&contract);
     let body = if input.peek(syn::token::Brace) {
         // 入れ子の `fn` は自分の `unchecked` で決め直す。
         let saved = super::set_unchecked_body(unchecked.is_some());
@@ -607,6 +620,7 @@ fn spec_fn(
     } else {
         contract::contract(input)?
     };
+    by_only_on_lemma(&contract);
     let body = if peek_eq(input) {
         input.parse::<Token![=]>()?;
         let e = expr(input.parse()?);
@@ -643,6 +657,20 @@ fn spec_fn(
     }))
 }
 
+/// `by(mode)` は `lemma fn` にだけ付く（仕様 §5.2）。
+fn by_only_on_lemma(contract: &ast::Contract) {
+    for c in &contract.clauses {
+        if matches!(c.kind, ast::ClauseKind::By(_)) {
+            push(
+                c.span,
+                Message::NotAllowedHere {
+                    written: "by(..)".into(),
+                },
+            );
+        }
+    }
+}
+
 fn lemma_fn(
     input: ParseStream,
     unchecked: Option<crate::span::Span>,
@@ -650,15 +678,29 @@ fn lemma_fn(
     parse_kw(input, "lemma")?;
     let sig = signature(input, ast::FnQualifiers::default())?;
     let contract = contract::contract(input)?;
+    let mut body = None;
     if input.peek(syn::token::Brace) {
-        // 本体は `.eykp` にだけ書ける（仕様 §5.1、§5.7）。読んで診断にする。
+        // 本体は `.eykp` にだけ書ける（仕様 §5.1、§5.7）。`.eyk` では読んで診断にする。
         let b: syn::Block = input.parse()?;
-        push(
-            sp(b.brace_token.span.join()),
-            Message::ProofSyntax {
-                written: "lemma fn .. { .. }".into(),
-            },
-        );
+        if super::in_proof() {
+            if let Some(u) = unchecked {
+                // `unchecked lemma fn` は証明なしの前提で、本体を持たない（仕様 §7.2）。
+                push(
+                    u,
+                    Message::NotAllowedHere {
+                        written: "unchecked lemma fn .. { .. }".into(),
+                    },
+                );
+            }
+            body = Some(block(b));
+        } else {
+            push(
+                sp(b.brace_token.span.join()),
+                Message::ProofSyntax {
+                    written: "lemma fn .. { .. }".into(),
+                },
+            );
+        }
     } else if input.peek(Token![;]) {
         input.parse::<Token![;]>()?;
     } else {
@@ -685,6 +727,7 @@ fn lemma_fn(
         unchecked,
         sig,
         contract,
+        body,
     }))
 }
 
@@ -882,7 +925,18 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
         }
     } else if is_ident(t.first(), "lemma") && is_ident(t.get(1), "fn") {
         match lemma_fn(input, None)? {
-            ast::ItemKind::LemmaFn(f) => ast::TraitItemKind::LemmaFn(f),
+            ast::ItemKind::LemmaFn(f) => {
+                // trait の `lemma fn` は宣言だけで、本体は impl が与える（仕様 §5.1）。
+                if let Some(b) = &f.body {
+                    push(
+                        b.span,
+                        Message::NotAllowedHere {
+                            written: "lemma fn .. { .. } in a trait".into(),
+                        },
+                    );
+                }
+                ast::TraitItemKind::LemmaFn(f)
+            }
             _ => unreachable!("lemma fn"),
         }
     } else if starts_fn(input) {
@@ -1036,17 +1090,50 @@ fn mod_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
     }))
 }
 
+/// `lemma group g { a, b }`（`.eykp` だけ）。モジュールの直下にだけ書ける（Verus の
+/// `broadcast group` と同じ）。
+fn lemma_group(input: ParseStream, ctx: Ctx) -> syn::Result<ast::ItemKind> {
+    let kw = parse_kw(input, "lemma")?;
+    parse_kw(input, "group")?;
+    if ctx != Ctx::Module {
+        push(
+            sp(kw.span()),
+            Message::NotAllowedHere {
+                written: "lemma group".into(),
+            },
+        );
+    }
+    let name: syn::Ident = input.parse()?;
+    let content;
+    syn::braced!(content in input);
+    let members = content
+        .parse_terminated(syn::Path::parse_mod_style, Token![,])?
+        .iter()
+        .map(convert::path)
+        .collect();
+    Ok(ast::ItemKind::LemmaGroup(ast::LemmaGroup {
+        ident: ident(&name),
+        members,
+    }))
+}
+
 fn use_item(input: ParseStream, begin: &syn::parse::ParseBuffer) -> syn::Result<ast::ItemKind> {
     input.parse::<Token![use]>()?;
     // `use lemmas g;`（`.eykp` だけ）と `use lemmas::x;`（Rust）を分ける。
     let t = peek_tts(input, 2);
     if is_ident(t.first(), "lemmas") && matches!(t.get(1), Some(TokenTree::Ident(_))) {
-        return Err(err(
-            input.span(),
-            Message::ProofSyntax {
-                written: "use lemmas".into(),
-            },
-        ));
+        if !super::in_proof() {
+            return Err(err(
+                input.span(),
+                Message::ProofSyntax {
+                    written: "use lemmas".into(),
+                },
+            ));
+        }
+        parse_kw(input, "lemmas")?;
+        let p = input.call(syn::Path::parse_mod_style)?;
+        input.parse::<Token![;]>()?;
+        return Ok(ast::ItemKind::UseLemmas(convert::path(&p)));
     }
     let tree: syn::UseTree = input.parse()?;
     check_use(&tree, &mut Vec::new());

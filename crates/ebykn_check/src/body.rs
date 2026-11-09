@@ -243,6 +243,13 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 論理のブロック（`.eykp` の `lemma fn` の本体）。
+    pub fn logic_block(&mut self, b: &Block) {
+        let prev = std::mem::replace(&mut self.logic, true);
+        self.block(b);
+        self.logic = prev;
+    }
+
     /// 論理の本体（`spec fn` の本体、`impl Invariant` の述語）。
     pub fn logic_expr(&mut self, e: &Expr) {
         let prev = std::mem::replace(&mut self.logic, true);
@@ -673,6 +680,55 @@ impl<'a> Walker<'a> {
                 self.logic = prev;
                 false
             }
+            StmtKind::Proof(p) => {
+                // 証明の文は論理の文脈で読む。`proof { }` の中の権限の扱いは、`.eykp` を検査する
+                // ときに決める（#67）。
+                let prev = std::mem::replace(&mut self.logic, true);
+                self.proof_stmt(p, s.span);
+                self.logic = prev;
+                false
+            }
+        }
+    }
+
+    fn proof_stmt(&mut self, p: &ast::ProofStmt, span: Span) {
+        use ast::{AssertBy, ProofStmt};
+        match p {
+            ProofStmt::Block(b) => {
+                self.block(b);
+            }
+            ProofStmt::Assert { expr, by } => {
+                self.expr(expr);
+                match by {
+                    Some(AssertBy::Block(b)) => {
+                        self.block(b);
+                    }
+                    Some(AssertBy::Prover { requires, .. }) => {
+                        self.exprs(requires);
+                    }
+                    None => {}
+                }
+            }
+            ProofStmt::AssertForall {
+                binders, body, by, ..
+            } => {
+                for b in binders {
+                    if let ast::BinderKind::In(x) = &b.kind {
+                        self.expr(x);
+                    }
+                }
+                self.expr(body);
+                self.block(by);
+            }
+            ProofStmt::SpecLet(l) => {
+                self.local(l, span);
+            }
+            ProofStmt::Reveal { fuel, .. } => {
+                if let Some(e) = fuel {
+                    self.expr(e);
+                }
+            }
+            ProofStmt::Hide(_) => {}
         }
     }
 

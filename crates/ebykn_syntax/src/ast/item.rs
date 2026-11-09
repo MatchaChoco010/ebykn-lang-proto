@@ -38,6 +38,10 @@ pub enum ItemKind {
     Static(Static),
     /// `use` 宣言。
     Use(Tokens),
+    /// `lemma group g { a, b }`（`.eykp` だけ。仕様 §5.1、§5.7）。
+    LemmaGroup(LemmaGroup),
+    /// `use lemmas g;`（`.eykp` だけ。モジュールとブロックの中に書ける）。
+    UseLemmas(Path),
     /// それ以外の Rust の項目（`extern crate`、`macro_rules!`、項目の位置のマクロ、
     /// `union`、`extern` ブロック）。
     Rust(Tokens),
@@ -124,6 +128,15 @@ pub struct LemmaFn {
     pub unchecked: Option<Span>,
     pub sig: Signature,
     pub contract: Contract,
+    /// 本体。`.eykp` でだけ `Some` になる。
+    pub body: Option<Block>,
+}
+
+/// `lemma group g { a, b }`。
+#[derive(Debug, Clone)]
+pub struct LemmaGroup {
+    pub ident: Ident,
+    pub members: Vec<Path>,
 }
 
 /// 契約。句は書かれた順に並ぶ。同じ種類の句は連結して読む（仕様 §5.2）。
@@ -205,6 +218,42 @@ pub enum ClauseKind {
     Returns(Expr),
     Decreases(Vec<Expr>),
     NoPanic,
+    /// `by(mode)`（`lemma fn` だけ、`.eykp` だけ）。
+    By(ProverMode),
+}
+
+/// 証明器の指定（仕様 §5.2 の `ProverMode`、OPEN-6 の既定の 5 つ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProverMode {
+    BitVector,
+    NonlinearArith,
+    IntegerRing,
+    Compute,
+    ComputeOnly,
+}
+
+impl ProverMode {
+    pub const ALL: [ProverMode; 5] = [
+        ProverMode::BitVector,
+        ProverMode::NonlinearArith,
+        ProverMode::IntegerRing,
+        ProverMode::Compute,
+        ProverMode::ComputeOnly,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProverMode::BitVector => "bit_vector",
+            ProverMode::NonlinearArith => "nonlinear_arith",
+            ProverMode::IntegerRing => "integer_ring",
+            ProverMode::Compute => "compute",
+            ProverMode::ComputeOnly => "compute_only",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<ProverMode> {
+        ProverMode::ALL.into_iter().find(|m| m.as_str() == name)
+    }
 }
 
 #[derive(Debug, Clone)]

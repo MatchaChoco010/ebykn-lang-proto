@@ -373,6 +373,50 @@ impl Visitor<'_> {
         }
     }
 
+    fn proof(&mut self, p: &ast::ProofStmt) {
+        use ast::{AssertBy, ProofStmt};
+        match p {
+            ProofStmt::Block(b) => self.block(b),
+            ProofStmt::Assert { expr, by } => {
+                self.expr(expr);
+                match by {
+                    Some(AssertBy::Block(b)) => self.block(b),
+                    Some(AssertBy::Prover { requires, .. }) => self.exprs(requires),
+                    None => {}
+                }
+            }
+            ProofStmt::AssertForall {
+                binders, body, by, ..
+            } => {
+                let mut names = BTreeSet::new();
+                for b in binders {
+                    if let ast::BinderKind::In(x) = &b.kind {
+                        self.expr(x);
+                    }
+                    names.insert(b.ident.name.clone());
+                }
+                self.shadowed(&names, |v| {
+                    v.expr(body);
+                    v.block(by);
+                });
+            }
+            ProofStmt::SpecLet(l) => {
+                if let Some(x) = &l.init {
+                    self.expr(x);
+                }
+                let mut names = BTreeSet::new();
+                pat_names(&l.pat, &mut names);
+                self.rebind(&names);
+            }
+            ProofStmt::Reveal { fuel, .. } => {
+                if let Some(e) = fuel {
+                    self.expr(e);
+                }
+            }
+            ProofStmt::Hide(_) => {}
+        }
+    }
+
     fn block(&mut self, b: &Block) {
         let saved = (self.muts.clone(), self.rebound.clone());
         for s in &b.stmts {
@@ -393,6 +437,7 @@ impl Visitor<'_> {
                     self.expr(target);
                     self.expr(value);
                 }
+                StmtKind::Proof(p) => self.proof(p),
                 StmtKind::Item(_)
                 | StmtKind::Empty
                 | StmtKind::Take(_)
