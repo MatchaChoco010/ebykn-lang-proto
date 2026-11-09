@@ -7,7 +7,9 @@ name = "ebykn"
 version = "0.1.0"
 dependencies = [
  "ebykn_check",
+ "ebykn_lower",
  "ebykn_syntax",
+ "proc-macro2",
  "toml",
 ]
 
@@ -23,6 +25,11 @@ dependencies = [
 [[package]]
 name = "ebykn_lower"
 version = "0.1.0"
+dependencies = [
+ "ebykn_check",
+ "ebykn_syntax",
+ "proc-macro2",
+]
 
 [[package]]
 name = "ebykn_props"

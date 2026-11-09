@@ -1,0 +1,18 @@
+verified lowering::set_val
+verified lowering::get_val
+verified lowering::mk
+verified lowering::use_it
+verified lowering::double
+admit lowering::helper
+unchecked lowering::ffi
+verified lowering::Pool::view
+verified lowering::Pool::new
+verified lowering::Pool::add
+verified lowering::Pool::bump
+verified lowering::Pool::peek
+verified lowering::with_region
+verified lowering::total
+verified lowering::quant
+verified lowering::all_pos
+verified lowering::some_pos
+results 14 verified, 0 errors

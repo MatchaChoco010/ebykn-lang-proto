@@ -2,6 +2,7 @@
 
 mod fetch;
 mod gates;
+mod golden;
 #[cfg(test)]
 mod testutil;
 mod verus;
@@ -22,9 +23,11 @@ const USAGE: &str = "\
   check-book        Ebykn Book の SUMMARY と ```eyk フェンスの形
   check-gate-tests  各ゲートに失敗を主張するテスト（fails_*）がある
   check-verus-pin   固定した Verus の値が読め、Verus のクレートが固定した vstd を使う
+  check-prelude-exports  ebykn_prelude が vstd を許した名前のほかに再公開しない
 
   verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
-  verus-verify      ebykn_prelude、手書きの stack、§6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
+  verus-verify      ebykn_prelude と §6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
+  golden-verify     golden の各ケースに ebykn verify をかけ、expected/status.txt と比べる
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
   formal-oracle     §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ と比べる
   formal-oracle-write  §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ に書く
@@ -59,6 +62,13 @@ fn main() -> ExitCode {
         "verus-install" => verus::install(&root()),
         "verus-verify" => verus::verify(&root()),
         "formal-oracle-write" => gates::formal_oracle::write(&root()),
+        "golden-verify" => match list_files(&root()) {
+            Ok(files) => golden::verify(&root(), &files),
+            Err(e) => {
+                eprintln!("error: {e}");
+                false
+            }
+        },
         name => match gates::ALL
             .iter()
             .chain(gates::VERUS)

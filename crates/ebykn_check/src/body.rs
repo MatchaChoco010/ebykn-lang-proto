@@ -157,9 +157,21 @@ impl<'a> Walker<'a> {
         let prev = std::mem::replace(&mut self.logic, true);
         for c in &contract.clauses {
             match &c.kind {
-                ast::ClauseKind::Requires(es)
-                | ast::ClauseKind::Ensures(es)
-                | ast::ClauseKind::Decreases(es) => {
+                ast::ClauseKind::Ensures(es) => {
+                    // `ensures` では `gives q@` の `q@` も持っている（戻り値の権限）。
+                    let saved = self.env.clone();
+                    for g in &self.cx.gives {
+                        self.env.entry(g.clone()).or_insert(Perm {
+                            state: PermState::Owned,
+                            block: false,
+                        });
+                    }
+                    for e in es {
+                        self.expr(e);
+                    }
+                    self.env = saved;
+                }
+                ast::ClauseKind::Requires(es) | ast::ClauseKind::Decreases(es) => {
                     for e in es {
                         self.expr(e);
                     }
