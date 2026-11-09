@@ -246,13 +246,13 @@ mod tests {
         with_table(&mut t);
         let broken = mutate(
             &real(INDEX),
-            "ebykn_syntax::macros::token_is_name(&i, \"cfg\")",
-            "i.to_string() == \"cfg\"",
+            "ebykn_syntax::macros::token_is_name(&i, \"repr\")",
+            "i.to_string() == \"repr\"",
         );
         t.write(INDEX, &broken);
         assert_fails(
             &t.run(run),
-            "トークンの識別子を属性の名前 `\"cfg\"` と `to_string()` の `==` で比べています",
+            "トークンの識別子を属性の名前 `\"repr\"` と `to_string()` の `==` で比べています",
         );
     }
 
