@@ -117,6 +117,12 @@ impl<L: Loc> Region<L> {
         L::perm_value(self.perms()[loc.key()])
     }
 
+    /// 論理文脈の `r[p]`（Verus は spec の `[]` を `spec_index` に読む）。`self@x` / 領域変数でない
+    /// 受け手（`b@items[p]`）の書き下し `b.items@[p]` がこれを呼ぶ（#103）。
+    pub open spec fn spec_index(&self, loc: L) -> L::Value {
+        self.index(loc)
+    }
+
     pub open spec fn dom(&self) -> Set<L::Key> {
         self.perms().dom()
     }

@@ -18,8 +18,9 @@ verified lowering::total
 verified lowering::quant
 verified lowering::all_pos
 verified lowering::some_pos
+verified lowering::Bag::adopt
 verified lowering::Bag::with_node
 verified lowering::wrap
 verified lowering::set_owned
 verified lowering::set_and_put
-results 20 verified, 0 errors
+results 21 verified, 0 errors
