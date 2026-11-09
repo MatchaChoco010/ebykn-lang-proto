@@ -37,6 +37,7 @@ unchecked shared-accounts::main
 results 5 verified, 0 errors
 ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): shared-accounts::main (unchecked)
 $ ebykn build
+ebykn: built `build/verus/target/debug/shared-accounts` without verifying it; run `ebykn verify` to verify (`build --verified` comes in M5)
 $ echo $?
 0
 $ ./build/verus/target/debug/shared-accounts

@@ -19,7 +19,7 @@ Ebykn: .eyk / .eykp を Verus のソースに書き下すトランスパイラ
   check         §6 の検査、build/verus/ への書き下し（§7）、verus --no-verify
   verify [item] check と Verus による検証。項目ごとの状態と、証明なしの前提（admit / unchecked）を出す。
                 Ebykn が出した前提のほかに紛れ込んだ前提がないかを --no-cheating で確かめる
-  build         check と cargo verus build（--verified は M5）
+  build         check と、検証しない cargo verus build（--verified は M5）
   sync          src/ の変更を proof/ の .eykp に 3-way merge で取り込む（git merge-file）。
                 衝突はファイルに残し、終了コード 1
   status        検証の状態（M5 で実装）
@@ -224,8 +224,33 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
     }
     if !r.success {
         eprint!("{}", r.text);
+        say(
+            opts,
+            "`cargo verus build` failed on the generated Verus",
+            "生成した Verus の `cargo verus build` が失敗しました",
+        );
         return ExitCode::from(1);
     }
+    // 検証していないことを、成功の行で必ず断る（ビルドできたことを verified と取り違えない）。
+    // 実行ファイルがあればそれを、ライブラリだけならその置き場所を示す。
+    let target = build.join("target/debug");
+    let out = if output.files.iter().any(|f| f.rel == "src/main.rs") {
+        target.join(&report.project.manifest.name)
+    } else {
+        target
+    };
+    // カレントディレクトリから見たパスで出す（打てばそのまま実行できる）。
+    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    let out = ebykn::verus::relative(&cwd, &out);
+    say(
+        opts,
+        &format!(
+            "built `{out}` without verifying it; run `ebykn verify` to verify (`build --verified` comes in M5)"
+        ),
+        &format!(
+            "`{out}` をビルドしました。検証はしていません。検証は `ebykn verify` で行います（`build --verified` は M5 で実装します）"
+        ),
+    );
     ExitCode::SUCCESS
 }
 

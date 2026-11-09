@@ -172,7 +172,7 @@ pub enum Mode {
     NoVerify,
     /// 検証する。
     Verify,
-    /// `cargo verus build`。
+    /// `cargo verus build -- --no-verify`（検証せずにビルドする。#80）。
     Build,
     /// `verus --no-cheating --no-verify`（証明の前提の拒否だけを見る。`crate::no_cheating`）。
     NoCheating,
@@ -269,7 +269,8 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
             "silent",
             "--output-json",
         ]),
-        Mode::Build => cmd.args(["verus", "build"]),
+        // `--verified` なしの `build` は、検証の結果によらずビルドする（現行仕様 §9。#80）。
+        Mode::Build => cmd.args(["verus", "build", "--", "--no-verify"]),
         Mode::NoCheating => cmd.args(["verus", "focus", "--", "--no-cheating", "--no-verify"]),
     };
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
