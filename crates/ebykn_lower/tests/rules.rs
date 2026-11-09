@@ -71,6 +71,18 @@ fn header_imports_names_explicitly() {
     has("pub fn f() {}", "use ebykn_prelude::*; verus!");
 }
 
+/// 修飾パス（#100）：`<T>::f` の `>` の後の `::` は一つ。`<T as Tr>::f` の `Tr` は先頭の `::` も残す。
+#[test]
+fn qualified_paths_keep_one_separator() {
+    let src = "pub fn f(x: u64) -> u64 { let v = <Vec<u64>>::new(); let w = <Vec<u64>>::with_capacity(2); let y = <u64 as Clone>::clone(&x); let s: <Vec<u64> as IntoIterator>::Item = 0; <u64 as ::core::clone::Clone>::clone(&y) }";
+    has(src, "let v = <Vec<u64>>::new();");
+    has(src, "let w = <Vec<u64>>::with_capacity(2);");
+    has(src, "let y = <u64 as Clone>::clone(&x);");
+    has(src, "let s: <Vec<u64> as IntoIterator>::Item = 0;");
+    has(src, "<u64 as ::core::clone::Clone>::clone(&y)");
+    lacks(src, ">::::");
+}
+
 /// 検査の誤りを見ずに書き下す（検査が拒む入力で、書き下しが何をするかを確かめる）。
 fn lowered_ignoring_errors(src: &str) -> String {
     let (p, d) = project::single(src);
