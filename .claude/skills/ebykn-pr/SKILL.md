@@ -28,7 +28,7 @@ ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtas
 
 落ちたら直す。ゲートを外したり、テストを `#[ignore]` にしたりして通さない。
 
-`vendor/` に手を入れたら、`vendor/` の変更だけのコミットにし、`vendor/` の外の変更と混ぜない（AGENTS.md の「外部から取り込むコード」）。混ぜると `check-vendor-commits` が落ちるので、rebase でコミットを分けて push し直す。本文には、`vendor/` を変えるコミットを含むので、マージコミットでマージする必要があると書く。
+`vendor/` に手を入れたら、`vendor/` の変更だけのコミットにし、`vendor/` の外の変更と混ぜない（AGENTS.md の「外部から取り込むコード」）。混ぜると `check-vendor-commits` が落ちるので、rebase でコミットを分けて push し直す。pre-commit フックは作っているコミットの直前までの履歴を見るので、混ぜたコミットは、手元では次のコミットのときに、そうでなければ CI で落ちる。本文には、`vendor/` を変えるコミットを含むので、マージコミットでマージする必要があると書く。
 
 ## 2. 本文を書く
 
@@ -84,6 +84,9 @@ pr=<PR 番号>
 gh pr view "$pr" --json mergeStateStatus,headRefOid   # BEHIND：develop に遅れている。DIRTY：衝突がある
 gh pr update-branch "$pr"             # BEHIND のときだけ打つ。DIRTY ならワーカーに rebase を頼む
 gh pr view "$pr" --json headRefOid --jq .headRefOid   # update-branch は非同期。最初の headRefOid から変わるまで打ち直す
+head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+git fetch -q origin develop "$head"
+git rev-list --count --no-merges --full-history "origin/develop..origin/$head" -- vendor/   # 0 でなければ vendor/ を変えるコミットを含む
 gh pr merge "$pr" --squash --auto     # vendor/ を変えるコミットを含む PR は --merge --auto
 gh pr checks "$pr" --watch            # update-branch のあとの CI
 gh pr view "$pr" --json state --jq .state   # MERGED になってから片付ける

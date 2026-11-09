@@ -159,7 +159,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 
 - squash でマージする。コミットの題は GitHub が付ける既定のまま変えない。題の末尾には `(#N)` が付く（題の本体は PR の題。PR のコミットが 1 つなら、そのコミットの題）。リリースのときに、この `(#N)` と GitHub の記録を突き合わせる。
 - `vendor/` を変えるコミット（取り込みのコミットと、フォークとして手を入れるコミット）を含む PR は例外で、マージコミットでマージする（「外部から取り込むコード」）。題は既定の `Merge pull request #N from ...` のまま。squash すると、`vendor/` だけのコミットがほかの変更と 1 つに畳まれる。
-- `develop` は strict なので、PR の head が `develop` の先頭に追いついていなければ、緑でもマージできない。衝突がなければ（`mergeStateStatus` が `BEHIND`）、コーディネーターが `gh pr update-branch <番号>` で追いつかせ、`gh pr merge <番号> --squash --auto` で自動マージを予約する。update-branch のあとに CI がもう一度走り、`ci-required` が緑になると GitHub がマージする。
+- `develop` は strict なので、PR の head が `develop` の先頭に追いついていなければ、緑でもマージできない。衝突がなければ（`mergeStateStatus` が `BEHIND`）、コーディネーターが `gh pr update-branch <番号>` で追いつかせ、`gh pr merge <番号> --squash --auto` で自動マージを予約する（`vendor/` を変えるコミットを含む PR は `--merge --auto`）。update-branch のあとに CI がもう一度走り、`ci-required` が緑になると GitHub がマージする。
 - `develop` と衝突したら（`DIRTY`）、update-branch に頼らず、ワーカーが feature ブランチを `develop` に rebase して push し直し、CI を見届け直す。
 - `needs review` の Issue の判断は、マージを止めない。既定で実装してマージし、作者の判断が既定と違えば、作り直しの PR を積む。
 - 開発ルールやゲートを変える PR も、同じ条件でマージする。3 文書をエージェントが変更しない規則はそのまま。

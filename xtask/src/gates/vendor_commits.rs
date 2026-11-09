@@ -4,10 +4,14 @@
 //! それを含む PR はマージコミットでマージする。上流を取り込み直すときに、手入れを `git log -- vendor/` から
 //! 取り出して当て直すため。
 //!
-//! `HEAD` から辿れる、マージでないコミットのうち `vendor/` の下を変えたものを集め、`vendor/` の外も変えていたら失敗にする。
-//! - PR の CI では `HEAD` は PR を `develop` にマージした形で、PR のコミットを含む。混ぜたコミットはマージの前に見つかる。
+//! `HEAD` から辿れる、マージでないコミットのうち `vendor/` の下を変えたものをすべて集め、`vendor/` の外も変えていたら失敗にする。
+//! - 履歴は簡略化せずに辿る（`rev-list --full-history`）。マージコミットの `vendor/` が片方の親と同じでも、
+//!   もう片方の親の側のコミットを見る。
+//! - PR の CI では `HEAD` は PR を `develop` にマージした形で、PR のコミットを含む。PR の中で混ぜたコミットは、
+//!   マージの前に見つかる。pre-commit フックは作っているコミットの直前までの履歴を見るので、手元では次のコミットで見つかる。
 //! - 手入れのコミットを分けた PR を squash でマージすると、`develop` に混ざったコミットができ、`develop` への push の CI で
 //!   見つかる。`develop` の履歴は書き換えないので、そのコミットを理由を添えて `EXEMPT` に足す。
+//! - git は plumbing（`rev-list`、`diff-tree -z`、`cat-file`）だけを使い、利用者の `log.*` などの設定で結果を変えない。
 //! - 履歴が浅い（shallow）と、コミットを辿れないので失敗にする。CI のゲートのジョブは `fetch-depth: 0` で取り出す。
 //! - `vendor/` の下のファイルを追跡しているのに、それを変えたコミットが見つからなければ失敗にする。
 
@@ -21,6 +25,27 @@ use super::{Repo, Report};
 pub const EXEMPT: &[(&str, &str)] = &[];
 
 const VENDOR: &str = "vendor/";
+
+/// `vendor/` を変えた、マージでないコミット。履歴を簡略化しない。
+const REV_LIST: &[&str] = &[
+    "rev-list",
+    "--no-merges",
+    "--full-history",
+    "HEAD",
+    "--",
+    VENDOR,
+];
+
+/// 1 つのコミットが変えたファイル（NUL 区切り）。ルートのコミットも親のない差分として出す。
+const DIFF_TREE: &[&str] = &[
+    "diff-tree",
+    "-r",
+    "-z",
+    "--name-only",
+    "--no-commit-id",
+    "--no-renames",
+    "--root",
+];
 
 pub fn run(repo: &Repo) -> Report {
     check(&repo.root, &repo.files, EXEMPT)
@@ -54,31 +79,7 @@ fn check(root: &Path, files: &[String], exempt: &[(&str, &str)]) -> Report {
             return r;
         }
     }
-    let log = match git(
-        root,
-        &[
-            "-c",
-            "core.quotePath=false",
-            "-c",
-            "log.showSignature=false",
-            "log",
-            "--no-merges",
-            "--no-renames",
-            "--full-diff",
-            "--name-only",
-            "--format=%x00%H %s",
-            "HEAD",
-            "--",
-            VENDOR,
-        ],
-    ) {
-        Ok(l) => l,
-        Err(e) => {
-            r.errors.push(e);
-            return r;
-        }
-    };
-    let commits = match parse(&log) {
+    let commits = match collect(root) {
         Ok(c) => c,
         Err(e) => {
             r.errors.push(e);
@@ -115,7 +116,7 @@ fn check(root: &Path, files: &[String], exempt: &[(&str, &str)]) -> Report {
         ));
     }
     r.notes.push(format!(
-        "vendor/ を変えたコミット {} 件（HEAD から、マージを除く）",
+        "vendor/ を変えたコミット {} 件（HEAD から、マージを除く。履歴を簡略化しない）",
         commits.len()
     ));
     let listed: Vec<String> = exempt
@@ -141,42 +142,63 @@ fn outside(c: &Commit) -> Vec<&str> {
         .collect()
 }
 
-/// `--format=%x00%H %s --name-only` の出力を読む。コミットの行は NUL で始まり、続く空でない行がそのファイル。
-fn parse(log: &str) -> Result<Vec<Commit>, String> {
-    let mut commits: Vec<Commit> = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        if let Some(head) = line.strip_prefix('\0') {
-            let (sha, subject) = head.split_once(' ').unwrap_or((head, ""));
-            if sha.len() < 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(format!(
-                    "git log の {} 行目のコミットを読めません: {line:?}",
-                    i + 1
-                ));
-            }
-            commits.push(Commit {
-                sha: sha.to_string(),
-                subject: subject.to_string(),
-                files: Vec::new(),
-            });
-        } else if !line.is_empty() {
-            match commits.last_mut() {
-                Some(c) => c.files.push(line.to_string()),
-                None => {
-                    return Err(format!(
-                        "git log の {} 行目がどのコミットのものか分かりません: {line:?}",
-                        i + 1
-                    ));
-                }
-            }
-        }
-    }
-    if let Some(c) = commits.iter().find(|c| c.files.is_empty()) {
-        return Err(format!(
-            "git log のコミット {} に変えたファイルがありません",
-            c.sha
-        ));
+/// `vendor/` を変えたコミットを、変えたファイルと件名と一緒に集める。
+fn collect(root: &Path) -> Result<Vec<Commit>, String> {
+    let mut commits = Vec::new();
+    for sha in parse_shas(&git(root, REV_LIST)?)? {
+        let mut args = DIFF_TREE.to_vec();
+        args.push(&sha);
+        let files = parse_files(&sha, &git(root, &args)?)?;
+        let subject = subject(&git(root, &["cat-file", "commit", &sha])?);
+        commits.push(Commit {
+            sha,
+            subject,
+            files,
+        });
     }
     Ok(commits)
+}
+
+/// `rev-list` の出力（1 行に 1 つの SHA）を読む。
+fn parse_shas(out: &str) -> Result<Vec<String>, String> {
+    out.lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if (line.len() == 40 || line.len() == 64) && line.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                Ok(line.to_string())
+            } else {
+                Err(format!(
+                    "git rev-list の {} 行目を SHA として読めません: {line:?}",
+                    i + 1
+                ))
+            }
+        })
+        .collect()
+}
+
+/// `diff-tree -z --name-only` の出力（NUL で終わるパスの並び）を読む。
+fn parse_files(sha: &str, out: &str) -> Result<Vec<String>, String> {
+    let Some(body) = out.strip_suffix('\0') else {
+        return Err(format!(
+            "git diff-tree の {sha} の出力が NUL で終わっていません: {out:?}"
+        ));
+    };
+    let files: Vec<String> = body.split('\0').map(str::to_string).collect();
+    if files.iter().any(String::is_empty) {
+        return Err(format!(
+            "git diff-tree の {sha} の出力に空のパスがあります: {out:?}"
+        ));
+    }
+    Ok(files)
+}
+
+/// `cat-file commit` の出力から、メッセージの 1 行目を取る。
+fn subject(raw: &str) -> String {
+    raw.split_once("\n\n")
+        .and_then(|(_, msg)| msg.lines().next())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// `root` で git を走らせ、標準出力を返す。フックが設定する変数で、別のリポジトリを見ないようにする。
@@ -355,26 +377,74 @@ mod tests {
     }
 
     #[test]
-    fn fails_when_the_log_is_unreadable() {
-        let t = repo();
-        let log = sh(
-            t.root(),
-            &[
-                "log",
-                "--no-merges",
-                "--no-renames",
-                "--full-diff",
-                "--name-only",
-                "--format=%x00%H %s",
-                "HEAD",
-                "--",
-                VENDOR,
-            ],
+    fn fails_when_a_mixed_commit_is_hidden_by_history_simplification() {
+        // PR a と PR b が同じ vendor/ の手入れを別のコミットで持ち、b の手入れは crates/ も変える。
+        // a、b の順にマージコミットで入れると、b のマージの vendor/ は第 1 親と同じになる。
+        let mut t = repo();
+        let base = sh(t.root(), &["rev-parse", "HEAD"]);
+        let base = base.trim();
+        sh(t.root(), &["checkout", "-q", "-b", "a", base]);
+        commit(&mut t, &[("vendor/syn/lib.rs", "same\n")], "手入れ a");
+        sh(t.root(), &["checkout", "-q", "-b", "b", base]);
+        let mixed = commit(
+            &mut t,
+            &[("vendor/syn/lib.rs", "same\n"), ("crates/b/lib.rs", "b\n")],
+            "手入れ b",
         );
-        assert!(parse(&log).is_ok());
-        let broken = mutate(&log, "\0", "");
+        sh(t.root(), &["checkout", "-q", "develop"]);
+        sh(t.root(), &["merge", "-q", "--no-ff", "-m", "Merge a", "a"]);
+        assert_passes(&t.run(run));
+        sh(t.root(), &["merge", "-q", "--no-ff", "-m", "Merge b", "b"]);
+        assert_fails(&t.run(run), &mixed[..12]);
+    }
+
+    #[test]
+    fn passes_regardless_of_the_users_log_config() {
+        // ルートのコミットが vendor/ を含み、パスに引用符と日本語がある。log.* などの設定は効かない。
+        let mut t = TempRepo::new();
+        sh(t.root(), &["init", "-q", "-b", "develop"]);
+        for (k, v) in [
+            ("log.follow", "true"),
+            ("log.showRoot", "false"),
+            ("core.quotePath", "true"),
+            ("diff.renames", "copies"),
+        ] {
+            sh(t.root(), &["config", k, v]);
+        }
+        commit(
+            &mut t,
+            &[("vendor/odd/a\"b.rs", "x\n"), ("vendor/odd/日本.rs", "y\n")],
+            "取り込み",
+        );
+        commit(&mut t, &[("README.md", "a\n")], "ほか");
+        let r = t.run(run);
+        assert_passes(&r);
+        assert!(r.notes.iter().any(|n| n.contains("1 件")), "{:?}", r.notes);
+    }
+
+    #[test]
+    fn fails_when_the_rev_list_is_unreadable() {
+        let t = repo();
+        let out = git(t.root(), REV_LIST).unwrap();
+        assert_eq!(parse_shas(&out).unwrap().len(), 2);
+        let broken = mutate(&out, "\n", " x\n");
         assert!(
-            parse(&broken).is_err_and(|e| e.contains("どのコミットのものか分かりません")),
+            parse_shas(&broken).is_err_and(|e| e.contains("SHA として読めません")),
+            "{broken:?}"
+        );
+    }
+
+    #[test]
+    fn fails_when_the_diff_tree_is_unreadable() {
+        let t = repo();
+        let sha = parse_shas(&git(t.root(), REV_LIST).unwrap()).unwrap()[0].clone();
+        let mut args = DIFF_TREE.to_vec();
+        args.push(&sha);
+        let out = git(t.root(), &args).unwrap();
+        assert_eq!(parse_files(&sha, &out).unwrap(), ["vendor/syn/lib.rs"]);
+        let broken = mutate(&out, "\0", "");
+        assert!(
+            parse_files(&sha, &broken).is_err_and(|e| e.contains("NUL で終わっていません")),
             "{broken:?}"
         );
     }
