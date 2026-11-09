@@ -1118,14 +1118,14 @@ fn subst(ty: &ast::Type, map: &BTreeMap<&str, &ast::Type>) -> ast::Type {
 pub fn has_repr(attrs: &[ast::Attr]) -> bool {
     fn mentions_repr(ts: &TokenStream) -> bool {
         ts.clone().into_iter().any(|t| match t {
-            TokenTree::Ident(i) => i == "repr",
+            TokenTree::Ident(i) => ebykn_syntax::macros::token_is_name(&i, "repr"),
             TokenTree::Group(g) => mentions_repr(&g.stream()),
             _ => false,
         })
     }
     attrs.iter().any(|a| match a.path.segments.last() {
-        Some(seg) if seg.ident.is("repr") => true,
-        Some(seg) if seg.ident.is("cfg_attr") => mentions_repr(&a.args),
+        Some(seg) if seg.ident.is_name("repr") => true,
+        Some(seg) if seg.ident.is_name("cfg_attr") => mentions_repr(&a.args),
         _ => false,
     })
 }
@@ -1134,16 +1134,13 @@ pub fn has_repr(attrs: &[ast::Attr]) -> bool {
 pub fn has_cfg(attrs: &[ast::Attr]) -> bool {
     fn mentions_cfg(ts: &TokenStream) -> bool {
         ts.clone().into_iter().any(|t| match t {
-            TokenTree::Ident(i) => i == "cfg",
+            TokenTree::Ident(i) => ebykn_syntax::macros::token_is_name(&i, "cfg"),
             TokenTree::Group(g) => mentions_cfg(&g.stream()),
             _ => false,
         })
     }
-    attrs.iter().any(|a| match a.path.segments.last() {
-        Some(seg) if a.path.segments.len() == 1 && seg.ident.is("cfg") => true,
-        Some(seg) if a.path.segments.len() == 1 && seg.ident.is("cfg_attr") => {
-            mentions_cfg(&a.args)
-        }
-        _ => false,
-    })
+    // 名前は raw の綴り（`#[r#cfg]`）も同じに比べる（#122）。
+    attrs
+        .iter()
+        .any(|a| a.is_builtin("cfg") || a.is_builtin("cfg_attr") && mentions_cfg(&a.args))
 }

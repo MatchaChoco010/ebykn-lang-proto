@@ -190,6 +190,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
   - 内側の属性 `#![..]`（ファイルの先頭、`mod` の中）：上の Rust の組み込みの属性のうち、名前を覆い隠せないもの（`test`・`derive`・`global_allocator` を除く）だけです。依存クレートの属性マクロ、ツールの属性、`#![feature(..)]` は書けません。安定版の Rust は内側の属性マクロを許しませんが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で動くので、`verify` では内側の属性マクロが走ります（`mod m { #![evil::x] }` が一覧にない `impl` を足せる）。`#![feature(..)]` を拒否するのは、`#![feature(proc_macro_hygiene)]` で文・式の属性マクロも走るようになるためです。
   - 文・式・`let`・match の腕の外側の属性：内側と同じ組み込みの属性と、ツールの属性（`#[rustfmt::skip] let ..`）です。ここに付く属性マクロは、Verus でも E0658（`proc_macro_hygiene` は有効でない）で大きく失敗します。`E0001` は、`#![feature]` の拒否の後ろの二重の守りです。
 - `#[override]` は `override` が予約語なので構文解析が読めず（`E0001`）、`#[r#override]` は利用者が束縛した名前として前提に出します。
+- raw の綴り：予約語の raw の綴り（`r#unsafe`、`r#override`）は予約語とは別の名前で、利用者が束縛した名前として扱います（`#[r#unsafe(..)]` は組み込みの `unsafe(..)` の包みではない）。予約語でない名前の raw の綴り（`r#derive`、`r#cfg`、`r#repr`、`r#test`）は、素の名前と同じです（rustc と同じ）。組み込みの属性の名前を比べる検査（関数の中の `#[cfg]` の `E0003`、`#[repr]`、`#[test]` の `external` など）も、すべて raw の綴りを素の名前と同じに比べます（#122。`check-attr-names` が、`Ident::is` やトークンの `==` で属性の名前を比べる箇所がないことを検査する）。
 
 * 元の仕様：マクロの扱いを定めていない。
 * 根拠：#49（PR #57）、#53。`tests/golden/external_macros/`（属性マクロを付けた `ensures r == 1` の関数が verified と出ても、Verus なしのビルドでは 0 を返す。前提の一覧に `macro` の行が出る）、`crates/ebykn_syntax/tests/macros.rs`（綴りの総当たり）、`crates/ebykn_check/tests/attr_positions.rs`（位置の拒否）、プローブ `external_impl_of_spec_trait.rs`・`std_derive_no_spec.rs`・`automatically_derived_body.rs`（OPEN.md の「M0 の実測」）。

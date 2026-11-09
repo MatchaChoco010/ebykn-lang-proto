@@ -37,8 +37,7 @@ fn attrs(a: &[ast::Attr]) -> String {
 }
 
 fn is_test(a: &[ast::Attr]) -> bool {
-    a.iter()
-        .any(|x| x.path.segments.len() == 1 && x.path.segments[0].ident.is("test"))
+    a.iter().any(|x| x.is_builtin("test"))
 }
 
 fn item_pieces(cx: &Cx, item: &ast::Item, indent: usize, out: &mut Vec<Piece>) {

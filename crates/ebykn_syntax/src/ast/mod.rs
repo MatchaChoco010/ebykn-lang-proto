@@ -33,8 +33,20 @@ pub struct Ident {
 }
 
 impl Ident {
+    /// 文脈キーワードなど、raw の綴り（`r#old`）を別の名前として扱う比較。属性の名前には使わない
+    /// （[`Ident::is_name`]。`check-attr-names` が検査する）。
     pub fn is(&self, name: &str) -> bool {
         !self.raw && self.name == name
+    }
+
+    /// キーワードでない名前（属性の名前など）を、raw かどうかによらず比べる。rustc は `r#cfg` を
+    /// `cfg` とまったく同じに読む（#122）。キーワードは渡さない（raw の綴り `r#unsafe` は別の名前）。
+    pub fn is_name(&self, name: &str) -> bool {
+        debug_assert!(
+            !crate::macros::is_keyword(name),
+            "`{name}` はキーワード。raw の綴りが別の名前になる"
+        );
+        self.name == name
     }
 }
 
@@ -162,6 +174,16 @@ pub struct Attr {
     /// パスの後ろ（`(..)` や `= ..`）。無ければ空。
     pub args: TokenStream,
     pub span: Span,
+}
+
+impl Attr {
+    /// 属性のパスが 1 語の `name`（先頭の `::` なし）か。`name` は組み込みの属性の名前で、raw の
+    /// 綴り（`#[r#cfg]`）も同じ名前として比べる（[`Ident::is_name`]、#122）。
+    pub fn is_builtin(&self, name: &str) -> bool {
+        !self.path.leading_colon
+            && self.path.segments.len() == 1
+            && self.path.segments[0].ident.is_name(name)
+    }
 }
 
 /// 可視性。

@@ -456,6 +456,9 @@ fn tests_are_external_and_listed() {
     let c = ebykn_check::check(&p);
     let out = lower(&p, &c).unwrap();
     assert_eq!(out.external, ["single::t"]);
+    // raw の綴りも同じ名前（#122）。
+    let src = "#[r#test]\nfn t() {}";
+    has(src, "#[verifier::external] #[r#test] fn t() {}");
 }
 
 #[test]
