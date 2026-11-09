@@ -13,7 +13,7 @@
 - 不変条件：`order` のすべての節点の権限が `nodes` にあり、`head` が `order` の先頭で、各節点の `next` が `order` の次を指す。
 - `new` / `push` / `pop`：`put` / `take` で領域に権限を出し入れし、`self@order` を更新する。
 
-付録 B との違いは、不変条件の `self@order.first()` を `self@order.get(0)` と書いた 1 か所だけです。vstd の `first()` は `Option` を返さないためです（#11、`OPEN.md`）。
+付録 B との違いは、不変条件の `self@order.first()` を `self@order.get(0)` と書いた 1 か所だけです。vstd の `first()` は `Option` を返さないためです（#11、[現行仕様](../../docs/current-spec.md)の「§7.1 `Seq` の `first()` / `last()` は vstd の意味」）。
 
 ## 試せる機能
 
@@ -44,7 +44,7 @@ $ echo $?
 - `push`：新しい節点 `n` が古い `nodes` にないことと、`order` の添字が 1 つずれることから、`forall` の 2 項を示す必要がある。
 - `pop`：`order` に重複がないこと（`next` をたどると末尾の `None` に着くことからの帰納法）から、取り出した `h` が残りの `order` にないことと、添字のずれを示す必要がある。
 
-この証明は `.eyk` には書けません（`.eyk` には証明の構文を書かない）。M3 の `.eykp`（証明ファイル）で足す予定です。経緯は `OPEN.md` の「`stack` が `.eyk` だけでは verified にならない」の行にあります。
+この証明は `.eyk` には書けません（`.eyk` には証明の構文を書かない）。M3 の `.eykp`（証明ファイル）で足す予定です。経緯は[現行仕様](../../docs/current-spec.md)の「`stack` が verified になるのは M3」にあります。
 
 ## 試してみること
 
