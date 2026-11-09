@@ -388,3 +388,128 @@ fn proof_files_resolve_reserved_names_like_their_module() {
     assert_eq!(d.len(), 1, "{d:?}");
     assert!(d[0].starts_with("proof/lib.eykp:2:18: E0001"), "{d:?}");
 }
+
+/// 記号のあいだの空白はトークンの区切りを変える。`a && b` は短絡するが、`a & &b` は両方を評価する
+/// （#136 のレビューの B1）。
+#[test]
+fn spaces_between_symbols_that_change_the_tokens_are_compared() {
+    let src = "fn bump(c: &mut u64) -> bool { true }\npub fn g(a: bool, c: &mut u64) -> bool requires *c < 100 { a && bump(c) }\n";
+    let d = run(src, &replace(src, "a && bump(c)", "a & &bump(c)"));
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].contains("E0304") && d[0].contains("`&&`"), "{d:?}");
+    // 演算子のまとまりが同じなら、まわりの空白は比べない。
+    matches(src, &replace(src, "a && bump(c)", "a&&bump( c )"));
+    // `::`、`->`、`..=`、`==>` も一つの記号として比べる。
+    let src2 = "spec fn f(x: int) -> bool = x > 0 ==> x >= 1;\n";
+    matches(src2, "spec fn f(x:int)->bool=x>0==>x>=1;\n");
+    let d = run(src2, "spec fn f(x: int) -> bool = x > 0 == > x >= 1;\n");
+    assert_eq!(d.len(), 1, "{d:?}");
+}
+
+/// `{` の前のカンマを捨てるのは本体を開く `{` の前だけ。`(S, {})` は `(S {})` と別の式（B2）。
+#[test]
+fn a_comma_before_a_brace_inside_parentheses_is_kept() {
+    for (src, proof) in [
+        (
+            "struct S {}\nfn g() { let t = (S {}); }\n",
+            "struct S {}\nfn g() { let t = (S, {}); }\n",
+        ),
+        (
+            "struct S {}\nfn g() { let t = [S {}]; }\n",
+            "struct S {}\nfn g() { let t = [S, {}]; }\n",
+        ),
+        (
+            "fn h<F: Fn(u64)>(f: F) {}\nfn g(y: u64) { h(|x: u64| y {}); }\n",
+            "fn h<F: Fn(u64)>(f: F) {}\nfn g(y: u64) { h(|x: u64| y, {}); }\n",
+        ),
+    ] {
+        let d = run(src, proof);
+        assert_eq!(d.len(), 1, "{proof}: {d:?}");
+        assert!(d[0].contains("E0304"), "{proof}: {d:?}");
+    }
+    // 本体を開く `{` の前の末尾のカンマは捨てる。
+    matches(
+        "fn f(x: u8) requires x < 10 ensures x == x { }\n",
+        "fn f(x: u8) requires x < 10, ensures x == x, { }\n",
+    );
+}
+
+/// `.eykp` だけの項目は、`.eyk` に現れる名前を持てない。glob の import（暗黙の `ebykn_prelude::*` を含む）
+/// を覆い、`.eyk` の契約の意味を変えうる（S1）。
+#[test]
+fn proof_only_items_cannot_take_names_the_source_uses() {
+    let src = "mod a { pub spec fn ok(x: u64) -> bool = x > 0; }\nuse a::*;\nfn g(x: u64) -> (r: u64) ensures ok(r) { 1 }\n";
+    rejects(
+        src,
+        &format!("{src}spec fn ok(x: u64) -> bool = true;\n"),
+        "proof/lib.eykp:4:9: E0304",
+        &["`spec fn ok`", "another name"],
+    );
+    // `.eyk` の `fn foo` と同じ名前の `.eykp` だけの補題。
+    let d = run(
+        "fn foo() {}\n",
+        "fn foo() {}\nlemma fn foo() ensures true { }\n",
+    );
+    assert!(
+        d.iter()
+            .any(|l| l.starts_with("proof/lib.eykp:2:10: E0304")),
+        "{d:?}"
+    );
+    // `.eykp` だけの項目どうしで同じ名前。
+    let d = run(
+        "fn f() {}\n",
+        "fn f() {}\nspec fn s() -> int = 1;\nspec fn s() -> int = 2;\n",
+    );
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(
+        d[0].starts_with("proof/lib.eykp:3:9: E0304") && d[0].contains("another proof-only item"),
+        "{d:?}"
+    );
+    // `impl T` の `spec fn` は、同じ名前のトレイトのメソッドより先に選ばれる。
+    let src = "struct S {}\nimpl S {\n}\nspec fn m(x: int) -> int = x;\n";
+    rejects(
+        src,
+        &src.replace(
+            "impl S {\n}",
+            "impl S {\n    spec fn m(&self) -> int = 0;\n}",
+        ),
+        "proof/lib.eykp:3:13: E0304",
+        &["`spec fn m`"],
+    );
+}
+
+/// 契約の `!(..)` はマクロの呼び出しではない（S2）。中の証明の属性を剥がして比べる。
+#[test]
+fn negation_after_a_clause_keyword_is_not_a_macro() {
+    matches(
+        "spec fn f(x: int) -> bool = x > 0;\nfn g() ensures !(forall x: int, f(x)) {}\n",
+        "spec fn f(x: int) -> bool = x > 0;\nfn g() ensures !(forall x: int, #[trigger] f(x)) {}\n",
+    );
+}
+
+/// 呼び出しと引数の並びの末尾のカンマは捨てる。タプルの `(a,)` は残す。
+#[test]
+fn trailing_commas_in_calls_and_parameters_are_ignored() {
+    let src = "fn h(x: u64) {}\nfn g(x: u64) { h(1); }\n";
+    matches(src, "fn h(x: u64,) {}\nfn g(x: u64,) { h(1,); }\n");
+    let d = run(
+        "fn g() -> (u64,) { return (1,); }\n",
+        "fn g() -> (u64,) { return (1); }\n",
+    );
+    assert_eq!(d.len(), 1, "{d:?}");
+}
+
+/// 属性の並びの順は、組み込みの属性だけの並びなら無視し、属性マクロを含む並びは書いた順に比べる
+/// （#144 の既定）。
+#[test]
+fn attribute_order_is_ignored_only_among_builtin_attributes() {
+    matches(
+        "#[inline]\n#[must_use]\npub fn f() -> u8 { 1 }\n",
+        "#[must_use]\n#[inline]\npub fn f() -> u8 { 1 }\n",
+    );
+    let d = run(
+        "#[tokio::main]\n#[inline]\npub fn f() -> u8 { 1 }\n",
+        "#[inline]\n#[tokio::main]\npub fn f() -> u8 { 1 }\n",
+    );
+    assert!(d.iter().any(|l| l.contains("E0304")), "{d:?}");
+}

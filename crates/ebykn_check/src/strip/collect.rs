@@ -45,6 +45,8 @@ pub struct Shape {
     pub stmts: Vec<Span>,
     /// `.eyk` の側で集めた宣言。
     pub decls: Decls,
+    /// `.eykp` だけの項目として剥がした、名前を定める項目（名前の位置、`spec fn ok` などの表示、名前）。
+    pub proof_only: Vec<(Span, String, String)>,
 }
 
 /// `proof` は `.eykp` の側なら、対応する `.eyk` の宣言。
@@ -72,6 +74,12 @@ fn squash(s: &str) -> String {
 impl W<'_> {
     fn slice(&self, s: Span) -> String {
         squash(self.text.get(s.lo..s.hi).unwrap_or_default())
+    }
+
+    fn proof_only(&mut self, id: &ast::Ident, kw: &str) {
+        self.shape
+            .proof_only
+            .push((id.span, format!("{kw} {}", id.name), id.name.clone()));
     }
 
     fn cut(&mut self, s: Span, put: Option<&'static str>) {
@@ -129,6 +137,7 @@ impl W<'_> {
                 }
                 // `.eykp` だけの `spec fn` は項目ごと剥がす。
                 if proof && !declared("spec", &f.sig.ident.name) {
+                    self.proof_only(&f.sig.ident, "spec fn");
                     self.cut(item.span, None);
                     return;
                 }
@@ -145,6 +154,7 @@ impl W<'_> {
                 if let Some(b) = &f.body {
                     if !declared("lemma", &f.sig.ident.name) {
                         // `.eyk` に宣言のない本体付きの `lemma fn` は項目ごと剥がす。
+                        self.proof_only(&f.sig.ident, "lemma fn");
                         self.cut(item.span, None);
                         return;
                     }
@@ -154,6 +164,11 @@ impl W<'_> {
                 self.cut_by(&f.contract);
             }
             ItemKind::LemmaGroup(_) | ItemKind::UseLemmas(_) => {
+                if let ItemKind::LemmaGroup(g) = &item.kind
+                    && proof
+                {
+                    self.proof_only(&g.ident, "lemma group");
+                }
                 if proof {
                     self.cut(item.span, None);
                 }

@@ -153,6 +153,15 @@ pub enum LoopPoint {
     Break,
 }
 
+/// `.eykp` だけの項目の名前が何とぶつかったか（E0304）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProofOnlyClash {
+    /// `.eyk` に現れる名前か、Ebykn がソースのために使う名前。
+    Source,
+    /// 同じファイルのほかの `.eykp` だけの項目。
+    ProofOnly,
+}
+
 /// 未実装の機能（`E0003`）。各マイルストーンで実装する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unimpl {
@@ -423,6 +432,12 @@ pub enum CheckMsg {
         found: Option<String>,
         expected: Option<String>,
     },
+    /// `.eykp` だけの項目（剥がす `spec fn`・本体付きの `lemma fn`・`lemma group`）の名前が使えない。
+    /// `item` は `spec fn ok` などの表示。
+    ProofOnlyName {
+        item: String,
+        clash: ProofOnlyClash,
+    },
     /// ループの `.eyk` 側の句（`invariant e` / `decreases e`）が、`.eykp` 側の句の列に順序を保って
     /// 現れない。`clause` は見つからなかった `.eyk` 側の句、`other` はその位置。
     LoopClauseNotKept {
@@ -648,7 +663,7 @@ impl CheckMsg {
             Unimplemented(_) => Code::E0003,
             ProofWithoutSource { .. } => Code::E0301,
             ProofMisplaced { .. } => Code::E0302,
-            StripMismatch { .. } => Code::E0304,
+            StripMismatch { .. } | ProofOnlyName { .. } => Code::E0304,
             LoopClauseNotKept { .. } => Code::E0305,
             BareMutInEnsures { .. } | BareMutInMacro { .. } | FinalInMacro | OldFinalArg => {
                 Code::E0004
@@ -817,6 +832,18 @@ impl CheckMsg {
                     tok(expected)
                 )
             }
+            (ProofOnlyName { item, clash: ProofOnlyClash::Source }, En) => format!(
+                "the proof-only item `{item}` uses a name that the source (`.eyk`) uses or that Ebykn uses for it (`invariant`, `view` and the names of `ebykn_prelude`); an item only in the proof file could hide what the source refers to (a glob import or a trait method) and change the meaning of its code and contracts, so give it another name"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::Source }, Ja) => format!(
+                "証明ファイルだけの項目 `{item}` の名前は、ソース（`.eyk`）が使う名前か、Ebykn がソースのために使う名前（`invariant`、`view`、`ebykn_prelude` の名前）です。証明ファイルだけの項目は、ソースが指すもの（glob の import やトレイトのメソッド）を覆い、コードと契約の意味を変えうるので、別の名前にします"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::ProofOnly }, En) => format!(
+                "the proof-only item `{item}` has the same name as another proof-only item in this file; give it another name"
+            ),
+            (ProofOnlyName { item, clash: ProofOnlyClash::ProofOnly }, Ja) => format!(
+                "証明ファイルだけの項目 `{item}` の名前が、このファイルのほかの証明ファイルだけの項目と同じです。別の名前にします"
+            ),
             (LoopClauseNotKept { clause, other }, En) => format!(
                 "the loop clause `{clause}` of the source (`{other}`) is missing here or out of order; the proof file may only add `invariant` / `decreases` clauses to a loop, keeping the source's clauses in the same order"
             ),

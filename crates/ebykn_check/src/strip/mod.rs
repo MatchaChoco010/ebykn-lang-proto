@@ -16,7 +16,7 @@ mod collect;
 mod tokens;
 
 use ebykn_syntax::ast::{self, LoopClauseKind};
-use ebykn_syntax::diag::{CheckMsg, Message};
+use ebykn_syntax::diag::{CheckMsg, Message, ProofOnlyClash};
 use ebykn_syntax::span::{SourceFile, Span};
 
 use crate::Diags;
@@ -24,8 +24,32 @@ use crate::project::Project;
 use collect::{LoopSite, Shape};
 use tokens::Tok;
 
+/// `.eykp` だけの項目に付けられない名前のうち、`.eyk` に書かれていなくても使われるもの。§6.4 の展開と
+/// 書き下しが呼ぶ Ebykn のトレイトのメソッド（`impl T` に同じ名前の `spec fn` があると、トレイトの
+/// メソッドより先に選ばれる）と、書き下しが glob で取り込む `ebykn_prelude` の名前。
+const IMPLICIT_NAMES: &[&str] = &[
+    "invariant",
+    "view",
+    "Cell",
+    "CellId",
+    "CellPointsTo",
+    "PointsTo",
+    "Ptr",
+    "Loc",
+    "Region",
+    "SeqExt",
+    "View",
+];
+
 /// プロジェクトのすべての証明ファイルを検査する。
 pub fn check(project: &Project, diags: &mut Diags) {
+    // `.eyk` に現れる名前。`.eykp` だけの項目がこの名前を持つと、glob の import（暗黙の
+    // `use ebykn_prelude::*;` を含む）やトレイトのメソッドを覆い、`.eyk` の契約とコードの意味を変えうる。
+    let mut taken = std::collections::HashSet::new();
+    for m in &project.modules {
+        tokens::idents(&project.file(m.file).text, &mut taken);
+    }
+    taken.extend(IMPLICIT_NAMES.iter().map(|s| s.to_string()));
     for pf in &project.proofs {
         let ok = |f: ebykn_syntax::span::FileId| project.parsed_ok[f.0 as usize];
         if !ok(pf.file) || !ok(pf.src) {
@@ -39,6 +63,7 @@ pub fn check(project: &Project, diags: &mut Diags) {
             src_ast,
             project.file(pf.file),
             proof_ast,
+            &taken,
             diags,
         );
     }
@@ -50,16 +75,33 @@ pub fn check_pair(
     src_ast: &ast::File,
     proof: &SourceFile,
     proof_ast: &ast::File,
+    taken: &std::collections::HashSet<String>,
     diags: &mut Diags,
 ) {
     let s_shape = collect::collect(&src.text, src_ast, None);
     let p_shape = collect::collect(&proof.text, proof_ast, Some(&s_shape.decls));
-    let (Some(s_toks), Some(p_toks)) = (
-        tokens::flatten(&src.text, &s_shape.cuts, false),
-        tokens::flatten(&proof.text, &p_shape.cuts, true),
-    ) else {
-        return;
-    };
+    // `.eykp` だけの項目の名前：`.eyk` に現れる名前と、ほかの `.eykp` だけの項目の名前は使えない。
+    let mut seen = std::collections::HashSet::new();
+    for (span, item, name) in &p_shape.proof_only {
+        let clash = if taken.contains(name) {
+            Some(ProofOnlyClash::Source)
+        } else if !seen.insert(name.clone()) {
+            Some(ProofOnlyClash::ProofOnly)
+        } else {
+            None
+        };
+        if let Some(clash) = clash {
+            diags.push(
+                *span,
+                Message::Check(CheckMsg::ProofOnlyName {
+                    item: item.clone(),
+                    clash,
+                }),
+            );
+        }
+    }
+    let s_toks = tokens::flatten(&src.text, &s_shape.cuts, false);
+    let p_toks = tokens::flatten(&proof.text, &p_shape.cuts, true);
     let a = Side::new(src, &s_shape, s_toks);
     let b = Side::new(proof, &p_shape, p_toks);
     let (mut i, mut j) = (0, 0);

@@ -109,12 +109,25 @@ fn pin_mismatches(project: &Project) -> Vec<Diagnostic> {
 /// `check` がまだ実行しない段階（仕様 §9 の `check` のうち、M2 の後半と M3 で足すもの）。
 pub const CHECK_SKIPPED: &[&str] = &["self-contained check (§6.6)"];
 
+/// 証明ファイルがあるときに、さらに実行しない段階（`.eykp` の本体の検査は #67）。
+pub const CHECK_SKIPPED_WITH_PROOFS: &str = "checks of the `.eykp` bodies (§6.2–§6.5)";
+
 impl CheckReport {
+    /// 実行しなかった段階。
+    pub fn skipped(&self) -> Vec<&'static str> {
+        let mut out = CHECK_SKIPPED.to_vec();
+        if !self.project.proofs.is_empty() {
+            out.push(CHECK_SKIPPED_WITH_PROOFS);
+        }
+        out
+    }
+
     /// `--json` の最後に出す 1 行：結果の件数と、実行しなかった段階。
     pub fn summary_json(&self) -> String {
         let errors = self.diags.iter().filter(|d| !d.code().is_warning()).count();
         let warnings = self.diags.len() - errors;
-        let skipped = CHECK_SKIPPED
+        let skipped = self
+            .skipped()
             .iter()
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()

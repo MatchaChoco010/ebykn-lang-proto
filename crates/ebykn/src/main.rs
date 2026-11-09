@@ -223,14 +223,23 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             );
             return ExitCode::from(1);
         }
+        // 証明ファイルがあれば、剥がし一致のほかに、まだ `.eykp` の本体を検査していないことも伝える。
+        let (en, ja) = if report.project.proofs.is_empty() {
+            ("", "")
+        } else {
+            (
+                "; the checks §6.2–§6.5 of the `.eykp` bodies come with #67",
+                "。`.eykp` の本体の §6.2〜§6.5 の検査は #67 で足します",
+            )
+        };
         say(
             opts,
             &format!(
-                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3)",
+                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3{en})",
                 build.display()
             ),
             &format!(
-                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します）",
+                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します{ja}）",
                 build.display()
             ),
         );

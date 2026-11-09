@@ -18,7 +18,7 @@
 
 ```console
 $ ebykn check
-ebykn: check passed (lowered to `$PWD/build/verus`; the self-contained check §6.6 comes with `.eykp` in M3)
+ebykn: check passed (lowered to `$PWD/build/verus`; the self-contained check §6.6 comes with `.eykp` in M3; the checks §6.2–§6.5 of the `.eykp` bodies come with #67)
 $ ebykn verify
 proof/lib.eykp:1:1: E0003: not implemented yet: `verify` and `build` with proof files (`.eykp`) are implemented in M3: the lowering does not read `.eykp` yet, so it would drop the proofs written there (`check` reads `.eykp` and checks that stripping it gives the `.eyk`)
 $ echo $?

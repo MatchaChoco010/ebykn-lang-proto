@@ -8,7 +8,7 @@ mod check;
 
 use std::fmt::Write as _;
 
-pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, Unimpl};
+pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
 
 use crate::span::{SourceFile, Span};
 
