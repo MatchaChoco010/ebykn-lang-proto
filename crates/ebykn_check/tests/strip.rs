@@ -145,7 +145,7 @@ fn a_one_element_tuple_keeps_its_comma() {
         "fn f() -> (u8,) { (1,) }\n",
         "fn f() -> (u8,) { (1) }\n",
         "proof/lib.eykp:1:21: E0304",
-        &["in `fn f`", "here it has `)`", "`src/lib.eyk:1:19` has `,`"],
+        &["in `fn f`", "here it has `)`", "`src/lib.eyk:1:21` has `,`"],
     );
 }
 
@@ -155,7 +155,7 @@ fn macro_arguments_are_compared_as_written() {
         "fn f() -> Vec<u8> { vec![1, 2,] }\n",
         "fn f() -> Vec<u8> { vec![1, 2] }\n",
         "proof/lib.eykp:1:30: E0304",
-        &["here it has `]`", "`src/lib.eyk:1:21` has `,`"],
+        &["here it has `]`", "`src/lib.eyk:1:30` has `,`"],
     );
 }
 
@@ -460,9 +460,11 @@ fn proof_only_items_cannot_take_names_the_source_uses() {
         "fn f() {}\n",
         "fn f() {}\nspec fn s() -> int = 1;\nspec fn s() -> int = 2;\n",
     );
-    assert_eq!(d.len(), 1, "{d:?}");
+    // 書き下す `.eykp` の索引も、同じ名前の二つの定義を E0003 にする。
     assert!(
-        d[0].starts_with("proof/lib.eykp:3:9: E0304") && d[0].contains("another proof-only item"),
+        d.iter()
+            .any(|l| l.starts_with("proof/lib.eykp:3:9: E0304")
+                && l.contains("another proof-only item")),
         "{d:?}"
     );
     // `impl T` の `spec fn` は、同じ名前のトレイトのメソッドより先に選ばれる。
@@ -622,4 +624,15 @@ fn every_prelude_export_is_a_taken_name() {
         );
         assert!(d.iter().any(|l| l.contains("E0304")), "{leaf}: {d:?}");
     }
+}
+
+/// カンマで食い違ったら、文の先頭ではなくカンマの位置を出す（#136 のレビューの nit）。
+#[test]
+fn a_comma_difference_is_reported_at_the_comma() {
+    rejects(
+        "fn h(a: u8, b: u8) {}\nfn g() {\n    h(1, 2);\n}\n",
+        "fn h(a: u8, b: u8) {}\nfn g() {\n    h(1, 2,);\n}\n",
+        "proof/lib.eykp:3:11: E0304",
+        &["here it has `,`", "`src/lib.eyk:3:11` has `)`"],
+    );
 }

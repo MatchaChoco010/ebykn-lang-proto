@@ -8,6 +8,7 @@
 mod expr;
 mod item;
 pub mod print;
+mod proof;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -114,12 +115,16 @@ pub(crate) struct Cx<'a> {
     /// 関数の戻り値の型の形（`borrow mut` の中の `?` を展開するとき）。
     pub try_kind: Option<expr::TryKind>,
     pub logic: bool,
+    /// 証明の文脈（`proof { }` の中、`lemma fn` の本体）か。証明の文を `proof { }` で包まない。
+    pub proof: bool,
     pub ensures: bool,
     pub report: &'a RefCell<Report>,
     /// クレートで束縛している名前（手続きマクロの判定に使う。#49）。
     pub bindings: &'a ebykn_syntax::macros::Bindings,
     /// 書き下している `.rs` の `build/verus/` からの相対パス。
     pub rel: &'a str,
+    /// `lemma group` の要素の補題（`broadcast proof fn` にする）。
+    pub broadcast: &'a std::collections::BTreeSet<ItemPath>,
 }
 
 impl<'a> Cx<'a> {
@@ -196,19 +201,37 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// `.eykp` だけの構文（仕様 §5.7）。書き下しの入力は `.eyk` の AST だけで、`parse_eyk` は証明構文を
-/// AST に入れない（E0303 にする）ので、ここには来ない。`.eykp` の書き下しは #67 で足す。
-pub(crate) fn eykp_only(what: &str) -> ! {
-    unreachable!("{what} は .eykp にだけ現れる（.eykp の書き下しは #67）")
-}
-
 /// 属性の並び（各属性の後に空白）。どの位置の属性も、書き下しで落とさない（#95）。
 pub(crate) fn attrs(a: &[ast::Attr]) -> String {
     a.iter().map(|x| attr(x) + " ").collect()
 }
 
-/// 属性を書き出す。
+/// 属性を書き出す。項目の証明の属性（仕様 §5.7 の `#[opaque]`・`#[rlimit(n)]`・`#[spinoff_prover]`・
+/// `#[memoize]`）は `#[verifier::..]` にする（§7.4）。式の `#[trigger]` はそのまま。
 pub(crate) fn attr(a: &ast::Attr) -> String {
+    if !a.inner
+        && !a.path.leading_colon
+        && let [seg] = a.path.segments.as_slice()
+        && matches!(
+            seg.ident.name.as_str(),
+            "opaque" | "rlimit" | "spinoff_prover" | "memoize"
+        )
+    {
+        return format!("#[verifier::{}{}]", seg.ident.name, a.args);
+    }
+    // 式の `#[trigger]`。構文解析器（verus_syn）は空の引数 `()` を付けて持つので、Verus の形に戻す。
+    if !a.inner
+        && !a.path.leading_colon
+        && let [seg] = a.path.segments.as_slice()
+        && seg.ident.name == "trigger"
+        && a.args
+            .to_string()
+            .replace(' ', "")
+            .trim_matches(|c| c == '(' || c == ')')
+            .is_empty()
+    {
+        return "#[trigger]".into();
+    }
     let path = a
         .path
         .segments
@@ -266,12 +289,32 @@ pub fn lower_with_crates(
         bindings.crate_names_unknown();
     }
     for m in &project.modules {
-        let ts = TokenStream::from_str(&project.file(m.file).text)
+        let ts = TokenStream::from_str(&project.file(m.lowered).text)
             .map_err(|e| format!("{}: トークンに分けられません（{e}）", m.rel))?;
         bindings.scan(&ts);
     }
+    // `lemma group` の要素の補題は `broadcast proof fn` にする（Verus の `broadcast group` は
+    // `broadcast proof fn` だけを受け付ける）。
+    let mut broadcast = std::collections::BTreeSet::new();
+    project.for_each_module(|module, _, items| {
+        for it in items {
+            if let ast::ItemKind::LemmaGroup(g) = &it.kind {
+                for p in &g.members {
+                    let segs: Vec<String> =
+                        p.segments.iter().map(|s| s.ident.name.clone()).collect();
+                    if let ebykn_check::index::Resolved::Fn(path) =
+                        checked.index.resolve(module, p.leading_colon, &segs, None)
+                    {
+                        broadcast.insert(path);
+                    }
+                }
+            }
+        }
+    });
     for m in &project.modules {
-        let Some(ast) = project.ast(m.file) else {
+        // `.eykp` があればそれを書き下す（仕様 §7.5。剥がし一致を通ったものだけ。検査にエラーが
+        // あれば書き下さない）。
+        let Some(ast) = project.ast(m.lowered) else {
             continue;
         };
         let rel = m
@@ -293,10 +336,12 @@ pub fn lower_with_crates(
             exits: Vec::new(),
             try_kind: None,
             logic: false,
+            proof: false,
             ensures: false,
             report: &report,
             bindings: &bindings,
             rel: &rel,
+            broadcast: &broadcast,
         };
         let mut pieces = Vec::new();
         for a in &ast.attrs {

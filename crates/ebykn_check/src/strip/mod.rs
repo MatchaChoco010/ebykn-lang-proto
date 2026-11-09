@@ -258,7 +258,8 @@ fn mismatch(a: &Side, i: usize, b: &Side, j: usize, diags: &mut Diags) {
     let item = b.item(b_at).or_else(|| a.item(a_at)).map(|s| s.to_string());
     // 閉じ括弧で食い違ったら（ブロックの終わりに文を足した、消した）、その括弧の位置を出す。囲む文の
     // 先頭は、食い違いから遠い。
-    let closing = |t: &Option<String>| matches!(t.as_deref(), Some("}" | ")" | "]"));
+    // カンマで食い違ったとき（余分なカンマ、足りないカンマ）も、その位置を出す。
+    let closing = |t: &Option<String>| matches!(t.as_deref(), Some("}" | ")" | "]" | ","));
     let span = match b.stmt(b_at).filter(|_| !closing(&found)) {
         Some(s) => s,
         None => {

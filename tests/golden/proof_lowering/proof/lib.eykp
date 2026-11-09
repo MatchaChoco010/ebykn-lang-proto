@@ -1,0 +1,62 @@
+// .eykp からの書き下し（仕様 §7.2、§7.4、§7.5。#67）。証明は proof/lib.eykp にある。本体のある補題は
+// Verus の結果で verified になり、本体のない補題 `unproven` は admit のまま。
+
+#[opaque]
+pub spec fn double(x: int) -> int = x + x;
+
+pub spec fn sq(x: int) -> int = x * x;
+
+/// 平方は単調に増える（非線形の算術。`by(nonlinear_arith)` で証明する）。
+lemma fn sq_monotonic(a: int, b: int)
+    by(nonlinear_arith)
+    requires 0 <= a, a <= b
+    ensures sq(a) <= sq(b)
+{
+}
+
+lemma fn double_is_twice(x: int)
+    ensures double(x) == 2 * x
+{
+    reveal(double);
+}
+
+/// 証明ファイルだけの補題（剥がす）。
+lemma fn sum_below(n: int)
+    requires 0 <= n
+    ensures forall i: int, #![trigger sq(i)] 0 <= i && i <= n ==> 0 <= sq(i)
+{
+    assert forall i in 0..n + 1, 0 <= sq(i) by {
+        sq_monotonic(0, i);
+    };
+}
+
+lemma fn unproven(x: int)
+    ensures x == x + 0;
+
+/// 0 から n までを数える。
+pub fn count(n: u64) -> (r: u64)
+    ensures r == n
+{
+    let mut i: u64 = 0;
+    spec let start = i;
+    while i < n
+        invariant i <= n
+        invariant start == 0
+        decreases n - i
+    {
+        i = i + 1;
+        assert i <= n;
+    }
+    proof {
+        assert(i == n);
+    }
+    i
+}
+
+pub fn twice(x: u64) -> (r: u64)
+    requires x < 1000
+    ensures r == double(x as int)
+{
+    proof { double_is_twice(x as int); }
+    x + x
+}

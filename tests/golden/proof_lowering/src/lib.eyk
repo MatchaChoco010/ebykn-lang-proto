@@ -1,0 +1,38 @@
+// .eykp からの書き下し（仕様 §7.2、§7.4、§7.5。#67）。証明は proof/lib.eykp にある。本体のある補題は
+// Verus の結果で verified になり、本体のない補題 `unproven` は admit のまま。
+
+pub spec fn double(x: int) -> int = x + x;
+
+pub spec fn sq(x: int) -> int = x * x;
+
+/// 平方は単調に増える（非線形の算術。`by(nonlinear_arith)` で証明する）。
+lemma fn sq_monotonic(a: int, b: int)
+    requires 0 <= a, a <= b
+    ensures sq(a) <= sq(b);
+
+lemma fn double_is_twice(x: int)
+    ensures double(x) == 2 * x;
+
+lemma fn unproven(x: int)
+    ensures x == x + 0;
+
+/// 0 から n までを数える。
+pub fn count(n: u64) -> (r: u64)
+    ensures r == n
+{
+    let mut i: u64 = 0;
+    while i < n
+        invariant i <= n
+        decreases n - i
+    {
+        i = i + 1;
+    }
+    i
+}
+
+pub fn twice(x: u64) -> (r: u64)
+    requires x < 1000
+    ensures r == double(x as int)
+{
+    x + x
+}

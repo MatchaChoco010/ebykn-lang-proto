@@ -22,7 +22,7 @@ use ebykn_syntax::span::Span;
 use body::{FnCx, Walker};
 use facts::Facts;
 use index::{ImplTrait, Index, ItemPath};
-use project::Project;
+use project::{Project, View};
 use sig::SigCx;
 
 /// 名前が `Invariant` / `View`（[`ebykn_syntax::reserved`] の Ebykn のトレイト）か。
@@ -52,19 +52,42 @@ pub struct Checked {
 }
 
 /// 読み込んだプロジェクトを検査する。
+///
+/// 書き下すファイル（`.eykp` があればそれ）の AST から索引と事実を作り、§6.2〜§6.5 の検査をかける。
+/// `.eykp` のあるモジュールは、`.eyk` の AST にも同じ検査をかけ、診断は `.eyk` の位置で出す。
+/// `.eykp` の側の診断は、`.eyk` の側に同じ文言の診断がないもの（証明の中のもの）だけを足す。
 pub fn check(project: &Project) -> Checked {
+    let (index, facts, mut list) = check_view(project, View::Lowered);
+    if !project.proofs.is_empty() {
+        let (_, _, source) = check_view(project, View::Source);
+        list = merge_views(project, source, list);
+    }
+    let mut diags = Diags { list };
+    names::check(project, &index, &mut diags);
+    strip::check(project, &mut diags);
+    let mut list = diags.list;
+    sort_diags(&mut list);
+    Checked {
+        index,
+        facts,
+        diags: list,
+    }
+}
+
+/// モジュールを `view` のファイルで見て、索引・事実・診断を作る。
+fn check_view(project: &Project, view: View) -> (Index, Facts, Vec<Diagnostic>) {
     let mut index = Index::default();
-    project.for_each_module(|m, f, items| index.add_module(m, f, items));
+    project.for_each_module_in(view, |m, f, items| index.add_module(m, f, items));
     // モジュールのファイルの先頭の `#![cfg(..)]`。
     for m in &project.modules {
-        if let Some(ast) = project.ast(m.file)
+        if let Some(ast) = project.ast(m.file_in(view))
             && index::has_cfg(&ast.attrs)
             && !m.module.is_empty()
         {
             index.gated.insert(m.module.clone());
         }
     }
-    project.for_each_module(|m, f, items| index.add_impls(m, f, items));
+    project.for_each_module_in(view, |m, f, items| index.add_impls(m, f, items));
     let mut facts = Facts::default();
     for ty in index.invariants.keys() {
         let nested = sig::nested(&index, ty);
@@ -79,17 +102,40 @@ pub fn check(project: &Project) -> Checked {
             Message::Check(CheckMsg::Unimplemented(Unimpl::CfgDuplicate)),
         );
     }
-    project.for_each_module(|m, _, items| check_items(&index, m, items, &mut diags, &mut facts));
-    names::check(project, &index, &mut diags);
-    zst::check(project, &index, &mut diags);
-    strip::check(project, &mut diags);
-    let mut list = diags.list;
-    sort_diags(&mut list);
-    Checked {
-        index,
-        facts,
-        diags: list,
+    project.for_each_module_in(view, |m, _, items| {
+        check_items(&index, m, items, &mut diags, &mut facts)
+    });
+    zst::check(project, view, &index, &mut diags);
+    (index, facts, diags.list)
+}
+
+/// `.eyk` の側の診断をすべて残し、`.eykp` の側の診断は、対応する `.eyk` に同じ文言の診断がないもの
+/// だけを足す（剥がし一致を通れば、証明の外のコードは同じなので、同じ診断が両方に出る）。
+fn merge_views(
+    project: &Project,
+    source: Vec<Diagnostic>,
+    lowered: Vec<Diagnostic>,
+) -> Vec<Diagnostic> {
+    let mut unmatched: Vec<&Diagnostic> = source.iter().collect();
+    let mut extra = Vec::new();
+    for d in lowered {
+        let Some(pf) = project.proofs.iter().find(|p| p.file == d.span.file) else {
+            // `.eykp` のないモジュールの診断は、`.eyk` の側と同じ。
+            continue;
+        };
+        match unmatched
+            .iter()
+            .position(|s| s.span.file == pf.src && s.message == d.message)
+        {
+            Some(k) => {
+                unmatched.remove(k);
+            }
+            None => extra.push(d),
+        }
     }
+    let mut out = source;
+    out.extend(extra);
+    out
 }
 
 /// 診断をファイル・位置の順に並べ、重複を除く。

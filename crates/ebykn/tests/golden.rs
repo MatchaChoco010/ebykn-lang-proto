@@ -166,10 +166,10 @@ fn fails_when_the_verus_pin_differs() {
     );
 }
 
-/// `.eykp` があれば、`check` は剥がし一致を確かめて通し、`verify` / `build` は E0003 で止める
-/// （書き下しが `.eykp` を読むのは #67。それまで証明を黙って捨てない）。
+/// `.eykp` があれば、そのモジュールは `.eykp` から書き下す（仕様 §7.5）。証明の文は書き下しに残り、
+/// `.eykp` を消すと `.eyk` から書き下す。
 #[test]
-fn verify_and_build_stop_when_there_are_proof_files() {
+fn modules_with_a_proof_file_are_lowered_from_it() {
     let tmp = std::env::temp_dir().join(format!("ebykn-eykp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("src")).unwrap();
@@ -179,23 +179,26 @@ fn verify_and_build_stop_when_there_are_proof_files() {
         tmp.join("Ebykn.toml"),
     )
     .unwrap();
-    std::fs::write(tmp.join("src/lib.eyk"), "pub fn f() {}\n").unwrap();
-    let before = check_project(&tmp);
-    assert!(ebykn::proofs_not_lowered(&before).is_empty());
-    std::fs::write(tmp.join("proof/lib.eykp"), "pub fn f() { proof { } }\n").unwrap();
-    let report = check_project(&tmp);
-    let blocked: Vec<String> = ebykn::proofs_not_lowered(&report)
-        .iter()
-        .map(|d| d.render(report.project.file(d.span.file), Lang::En))
-        .collect();
+    std::fs::write(tmp.join("src/lib.eyk"), "pub fn f(x: u8) -> u8 { x }\n").unwrap();
+    let lowered = |tmp: &Path| {
+        let report = check_project(tmp);
+        assert!(report.diags.is_empty(), "{:?}", report.render(Lang::En));
+        let out = ebykn::lower_report(&report).unwrap().unwrap();
+        out.files[0].text.clone()
+    };
+    let plain = lowered(&tmp);
+    assert!(!plain.contains("assert"), "{plain}");
+    std::fs::write(
+        tmp.join("proof/lib.eykp"),
+        "pub fn f(x: u8) -> u8 { assert x == x; x }\n",
+    )
+    .unwrap();
+    let with_proof = lowered(&tmp);
     let _ = std::fs::remove_dir_all(&tmp);
-    assert!(report.diags.is_empty(), "{:?}", report.render(Lang::En));
-    assert_eq!(blocked.len(), 1, "{blocked:?}");
+    let squashed: String = with_proof.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        blocked[0].starts_with(
-            "proof/lib.eykp:1:1: E0003: not implemented yet: `verify` and `build` with proof files"
-        ),
-        "{blocked:?}"
+        squashed.contains("proof { assert(x == x); } x"),
+        "{with_proof}"
     );
 }
 

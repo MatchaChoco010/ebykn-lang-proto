@@ -1,0 +1,9 @@
+verified proof_lowering::double
+verified proof_lowering::sq
+verified proof_lowering::sq_monotonic
+verified proof_lowering::double_is_twice
+verified proof_lowering::sum_below
+admit proof_lowering::unproven
+verified proof_lowering::count
+verified proof_lowering::twice
+results 7 verified, 0 errors

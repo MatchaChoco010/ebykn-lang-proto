@@ -647,11 +647,7 @@ impl<'a> Walker<'a> {
                 false
             }
             StmtKind::Proof(p) => {
-                // 証明の文は論理の文脈で読む。`proof { }` の中の権限の扱いは、`.eykp` を検査する
-                // ときに決める（#67）。
-                let prev = std::mem::replace(&mut self.logic, true);
-                self.proof_stmt(p, s.span);
-                self.logic = prev;
+                self.proof_stmt_in_logic(p, s.span);
                 false
             }
         }

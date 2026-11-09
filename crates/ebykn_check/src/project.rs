@@ -43,6 +43,9 @@ pub struct Manifest {
 #[derive(Debug, Clone)]
 pub struct FileModule {
     pub file: FileId,
+    /// 書き下すファイル：`proof/<p>.eykp` があればそれ、なければ `file`（仕様 §7.5）。§6 の検査の
+    /// 事実もこのファイルの AST から集める。
+    pub lowered: FileId,
     /// クレートルートからのモジュールのパス（ルートは空）。
     pub module: Vec<String>,
     /// プロジェクトのルートからの相対パス（`src/foo/mod.eyk`）。
@@ -59,6 +62,24 @@ pub struct ProofFile {
     pub module: Vec<String>,
     /// プロジェクトのルートからの相対パス（`proof/foo/mod.eykp`）。
     pub rel: String,
+}
+
+/// モジュールをどのファイルで見るか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    /// `src/` の `.eyk`。
+    Source,
+    /// 書き下すファイル（`.eykp` があればそれ）。
+    Lowered,
+}
+
+impl FileModule {
+    pub fn file_in(&self, view: View) -> FileId {
+        match view {
+            View::Source => self.file,
+            View::Lowered => self.lowered,
+        }
+    }
 }
 
 /// 読み込んだプロジェクト。
@@ -122,8 +143,17 @@ impl Project {
         self.asts[id.0 as usize].as_ref()
     }
 
-    /// 全モジュール（インラインの `mod` を含む）の項目を、モジュールのパスと一緒に渡す。
-    pub fn for_each_module<'a>(&'a self, mut f: impl FnMut(&[String], FileId, &'a [ast::Item])) {
+    /// 全モジュール（インラインの `mod` を含む）の書き下すファイルの項目を、モジュールのパスと一緒に渡す。
+    pub fn for_each_module<'a>(&'a self, f: impl FnMut(&[String], FileId, &'a [ast::Item])) {
+        self.for_each_module_in(View::Lowered, f);
+    }
+
+    /// [`Self::for_each_module`] の、どのファイルで見るかを選ぶ版。
+    pub fn for_each_module_in<'a>(
+        &'a self,
+        view: View,
+        mut f: impl FnMut(&[String], FileId, &'a [ast::Item]),
+    ) {
         fn walk<'a>(
             path: &mut Vec<String>,
             file: FileId,
@@ -142,9 +172,10 @@ impl Project {
             }
         }
         for m in &self.modules {
-            if let Some(ast) = self.ast(m.file) {
+            let file = m.file_in(view);
+            if let Some(ast) = self.ast(file) {
                 let mut path = m.module.clone();
-                walk(&mut path, m.file, &ast.items, &mut f);
+                walk(&mut path, file, &ast.items, &mut f);
             }
         }
     }
@@ -172,6 +203,7 @@ pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
         cfg_uses: parsed.cfg_uses,
         modules: vec![FileModule {
             file: FileId(1),
+            lowered: FileId(1),
             module: Vec::new(),
             rel: "src/lib.eyk".into(),
         }],
@@ -191,6 +223,7 @@ pub fn single_with_proof(src: &str, proof: &str) -> (Project, Vec<Diagnostic>) {
     p.files.push(file);
     p.asts.push(Some(parsed.file));
     p.deferred.push(parsed.deferred);
+    p.modules[0].lowered = FileId(2);
     p.proofs.push(ProofFile {
         file: FileId(2),
         src: FileId(1),
@@ -278,6 +311,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         };
         p.modules.push(FileModule {
             file: id,
+            lowered: id,
             module: module.clone(),
             rel,
         });
@@ -360,6 +394,9 @@ fn load_proofs(p: &mut Project, found: &[String], diags: &mut Vec<Diagnostic>) {
         let Some(id) = parse_file(p, rel, true, diags) else {
             continue;
         };
+        if let Some(fm) = p.modules.iter_mut().find(|x| x.file == m.file) {
+            fm.lowered = id;
+        }
         p.proofs.push(ProofFile {
             file: id,
             src: m.file,

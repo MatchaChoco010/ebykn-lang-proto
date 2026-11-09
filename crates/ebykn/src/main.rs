@@ -163,20 +163,6 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
-    if step != Step::Check {
-        let blocked = ebykn::proofs_not_lowered(&report);
-        if !blocked.is_empty() {
-            for d in &blocked {
-                let file = report.project.file(d.span.file);
-                if opts.json {
-                    println!("{}", d.to_json(file, opts.lang));
-                } else {
-                    eprintln!("{}", d.render(file, opts.lang));
-                }
-            }
-            return ExitCode::from(1);
-        }
-    }
     let output = match ebykn::lower_report(&report) {
         Some(Ok(o)) => o,
         Some(Err(e)) => {
@@ -223,23 +209,14 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             );
             return ExitCode::from(1);
         }
-        // 証明ファイルがあれば、剥がし一致のほかに、まだ `.eykp` の本体を検査していないことも伝える。
-        let (en, ja) = if report.project.proofs.is_empty() {
-            ("", "")
-        } else {
-            (
-                "; the checks §6.2–§6.5 of the `.eykp` bodies come with #67",
-                "。`.eykp` の本体の §6.2〜§6.5 の検査は #67 で足します",
-            )
-        };
         say(
             opts,
             &format!(
-                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3{en})",
+                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3)",
                 build.display()
             ),
             &format!(
-                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します{ja}）",
+                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します）",
                 build.display()
             ),
         );

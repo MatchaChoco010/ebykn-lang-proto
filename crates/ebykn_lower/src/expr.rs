@@ -489,12 +489,7 @@ impl Cx<'_> {
                 binders,
                 triggers,
                 body,
-            } => {
-                if !triggers.is_empty() {
-                    crate::eykp_only("#![trigger ..]");
-                }
-                self.quant(*kind, binders, body)
-            }
+            } => self.quant(*kind, binders, triggers, body),
             ExprKind::AndOr { kind, exprs } => {
                 let op = match kind {
                     AndOrKind::And => " && ",
@@ -792,14 +787,23 @@ impl Cx<'_> {
             LoopKind::For { pat, iter } => format!("for {} in {}", self.pat(pat), self.expr(iter)),
             LoopKind::Loop => "loop".into(),
         };
+        // 同じ種類の句は連結して読む（§5.2）。Verus は種類ごとにキーワードを一つだけ受け付け、
+        // `invariant` を `decreases` の前に置く。
         let mut clauses = String::new();
-        for c in &l.clauses {
-            let kw = match c.kind {
-                ast::LoopClauseKind::Invariant => "invariant",
-                ast::LoopClauseKind::Decreases => "decreases",
-            };
-            let es: Vec<String> = c.exprs.iter().map(|e| self.in_logic(e)).collect();
-            clauses.push_str(&format!(" {kw} {},", es.join(", ")));
+        for (kind, kw) in [
+            (ast::LoopClauseKind::Invariant, "invariant"),
+            (ast::LoopClauseKind::Decreases, "decreases"),
+        ] {
+            let es: Vec<String> = l
+                .clauses
+                .iter()
+                .filter(|c| c.kind == kind)
+                .flat_map(|c| c.exprs.iter())
+                .map(|e| self.in_logic(e))
+                .collect();
+            if !es.is_empty() {
+                clauses.push_str(&format!(" {kw} {},", es.join(", ")));
+            }
         }
         self.exits.push(ExitScope::Frame {
             label: l.label.as_ref().map(|x| x.name.clone()),
@@ -923,12 +927,26 @@ impl Cx<'_> {
         )
     }
 
-    fn quant(&mut self, kind: QuantKind, binders: &[ast::Binder], body: &Expr) -> String {
-        let prev = std::mem::replace(&mut self.logic, true);
+    /// 量化子の本体の前の `#![trigger ..]` / `#![auto]`（§7.4。Verus と同じ形）。
+    fn triggers(&mut self, triggers: &[ast::Trigger]) -> String {
+        let mut out = String::new();
+        for t in triggers {
+            match t {
+                ast::Trigger::Exprs { exprs, .. } => {
+                    let es: Vec<String> = exprs.iter().map(|e| self.in_logic(e)).collect();
+                    out.push_str(&format!("#![trigger {}] ", es.join(", ")));
+                }
+                ast::Trigger::Auto(_) => out.push_str("#![auto] "),
+            }
+        }
+        out
+    }
+
+    /// 束縛子の名前（型付き）と、範囲の条件（`x in r` の展開）。束縛した名前は `rename` から外す
+    /// （呼び出し側が `rename` を戻す）。
+    fn binders(&mut self, binders: &[ast::Binder]) -> (Vec<String>, Vec<String>) {
         let mut names = Vec::new();
         let mut conds = Vec::new();
-        // 束縛した名前は、外の `gives` の付け替えを隠す（シャドウ）。
-        let saved = self.rename.clone();
         for b in binders {
             let n = ident(&b.ident);
             match &b.kind {
@@ -936,7 +954,6 @@ impl Cx<'_> {
                 BinderKind::Bare => names.push(n.clone()),
                 BinderKind::In(r) => {
                     conds.push(self.membership(&n, r));
-                    // 範囲の束縛子には型を付ける（端のリテラルの接尾辞、なければ `int`）。
                     match range_type(r) {
                         Some(t) => names.push(format!("{n}: {t}")),
                         None => names.push(n.clone()),
@@ -945,6 +962,57 @@ impl Cx<'_> {
             }
             self.rename.remove(&b.ident.name);
         }
+        (names, conds)
+    }
+
+    /// `assert forall x in r, P by { .. };`（§7.4）。範囲の条件は `implies` の前に置き、`by` の中で
+    /// 仮定できるようにする（Verus の `assert forall|x| A implies B by { .. }`）。
+    pub(crate) fn assert_forall(
+        &mut self,
+        binders: &[ast::Binder],
+        triggers: &[ast::Trigger],
+        body: &Expr,
+        by: &Block,
+    ) -> String {
+        let prev = std::mem::replace(&mut self.logic, true);
+        let saved = self.rename.clone();
+        let (names, conds) = self.binders(binders);
+        let trig = self.triggers(triggers);
+        let body_s = self.expr(body);
+        let by_s = self.proof_block(by);
+        self.rename = saved;
+        self.logic = prev;
+        let head = format!("assert forall|{}| {trig}", names.join(", "));
+        if conds.is_empty() {
+            format!("{head}{body_s} by {by_s};")
+        } else {
+            format!("{head}{} implies {body_s} by {by_s};", conds.join(" && "))
+        }
+    }
+
+    /// 証明の文脈のブロック（`proof { }` の中身、`assert .. by { }`）。
+    pub(crate) fn proof_block(&mut self, b: &Block) -> String {
+        let (pl, pp) = (self.logic, self.proof);
+        self.logic = true;
+        self.proof = true;
+        let s = self.block(b);
+        (self.logic, self.proof) = (pl, pp);
+        s
+    }
+
+    fn quant(
+        &mut self,
+        kind: QuantKind,
+        binders: &[ast::Binder],
+        triggers: &[ast::Trigger],
+        body: &Expr,
+    ) -> String {
+        let prev = std::mem::replace(&mut self.logic, true);
+        // 束縛した名前は、外の `gives` の付け替えを隠す（シャドウ）。範囲の束縛子には型を付ける
+        // （端のリテラルの接尾辞、なければ `int`）。
+        let saved = self.rename.clone();
+        let (names, conds) = self.binders(binders);
+        let trig = self.triggers(triggers);
         let body_s = self.expr(body);
         self.rename = saved;
         self.logic = prev;
@@ -954,7 +1022,7 @@ impl Cx<'_> {
             QuantKind::Exists => "exists",
         };
         if conds.is_empty() {
-            return format!("({q}|{}| {body_s})", names.join(", "));
+            return format!("({q}|{}| {trig}{body_s})", names.join(", "));
         }
         let cond = conds.join(" && ");
         let body_s = match kind {
@@ -969,7 +1037,7 @@ impl Cx<'_> {
             QuantKind::Forall => "==>",
             QuantKind::Exists => "&&",
         };
-        format!("({q}|{}| {cond} {op} {body_s})", names.join(", "))
+        format!("({q}|{}| {trig}{cond} {op} {body_s})", names.join(", "))
     }
 
     /// `x in r` の展開（§7.4）。範囲は不等式、`Map`（型で分かるとき）は `dom().contains`、
@@ -1163,7 +1231,7 @@ impl Cx<'_> {
             }
             // `leak p@;` は何も出さない（§7.3）。
             StmtKind::Leak(_) => String::new(),
-            StmtKind::Proof(_) => crate::eykp_only("証明の文"),
+            StmtKind::Proof(p) => self.proof_stmt(p),
             StmtKind::SpecAssign { target, value } => {
                 let ExprKind::Erased { base, field } = &target.kind else {
                     return String::new();

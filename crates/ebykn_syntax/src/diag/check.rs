@@ -176,8 +176,6 @@ pub enum ProofOnlyClash {
 /// 未実装の機能（`E0003`）。各マイルストーンで実装する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unimpl {
-    /// `.eykp` があるときの `verify` / `build`（書き下しが `.eykp` を使うのは M3 の #67）。
-    EykpLowering,
     /// `props/` の性質ファイル（M5）。
     PropsDir,
     /// `Ebykn.toml` の `[props]`（M5）。
@@ -239,12 +237,6 @@ pub enum Unimpl {
 impl Unimpl {
     fn text(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Unimpl::EykpLowering, Lang::En) => {
-                "`verify` and `build` with proof files (`.eykp`) are implemented in M3: the lowering does not read `.eykp` yet, so it would drop the proofs written there (`check` reads `.eykp` and checks that stripping it gives the `.eyk`)"
-            }
-            (Unimpl::EykpLowering, Lang::Ja) => {
-                "証明ファイル（`.eykp`）があるときの `verify` と `build` は M3 で実装します。書き下しがまだ `.eykp` を読まないので、そこに書いた証明を捨ててしまうためです（`check` は `.eykp` を読み、剥がすと `.eyk` に一致することを確かめます）"
-            }
             (Unimpl::PropsDir, Lang::En) => "props files (`props/`) are implemented in M5",
             (Unimpl::PropsDir, Lang::Ja) => "性質ファイル（`props/`）は M5 で実装します",
             (Unimpl::PropsTable, Lang::En) => "`[props]` in `Ebykn.toml` is implemented in M5",
@@ -686,6 +678,13 @@ pub enum CheckMsg {
         region: String,
     },
 
+    // E0520：証明の文の中の権限（#67）
+    /// 証明の文（`proof { }`、`assert .. by { }` など）の中で、権限か領域の状態を変えた。`names` は
+    /// 状態の変わった権限・領域の名前。
+    PermChangedInProof {
+        names: Vec<String>,
+    },
+
     // W0601
     RefinementNested {
         ty: String,
@@ -750,6 +749,7 @@ impl CheckMsg {
             | RegionNotMovable { .. }
             | RegionSharedAsMut { .. }
             | RegionPassedTwice { .. } => Code::E0519,
+            PermChangedInProof { .. } => Code::E0520,
             RefinementNested { .. } => Code::W0601,
         }
     }
@@ -825,6 +825,14 @@ impl CheckMsg {
                 "`Ebykn.toml` の依存クレート `{name}` に、`{name}` という名前は付けられません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude`、`verus_builtin`、`verus_builtin_macros` は依存クレートの名前にできません（`my_{name} = {{ package = \"..\" }}` のように別の名前にします）"
             ),
 
+            (PermChangedInProof { names }, En) => format!(
+                "this proof changes the state of {}; a proof in the proof file (`proof {{ }}`, `assert .. by {{ }}`, ..) may read permissions and regions but not take, put, free, leak, create or move them, because the source without its proofs must hold the same permissions",
+                names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+            ),
+            (PermChangedInProof { names }, Ja) => format!(
+                "この証明は {} の状態を変えています。証明ファイルの証明（`proof {{ }}`、`assert .. by {{ }}` など）は、権限と領域を読めますが、`take`・`put`・解放・`leak`・作成・移動はできません。証明を剥がしたソースが、同じ権限を持っていなければならないためです",
+                names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join("、")
+            ),
             (Unimplemented(u), En) => format!("not implemented yet: {}", u.text(En)),
             (Unimplemented(u), Ja) => format!("未実装: {}", u.text(Ja)),
 
