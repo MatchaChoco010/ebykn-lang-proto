@@ -1,0 +1,9 @@
+[package]
+name = "ebykn"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ebykn"
+path = "src/main.rs"
