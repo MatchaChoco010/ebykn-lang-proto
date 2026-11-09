@@ -6,7 +6,7 @@
 //! `requires P[old(x)]`、`ensures P[final(x)]`。
 
 use ebykn_syntax::ast::{self, GenericArg, GenericArgs, Param, TypeKind, UsesItem};
-use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message};
+use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
 use ebykn_syntax::span::Span;
 
 use crate::index::{Index, ItemPath, is_region_type, pat_ident, ptr_or_cell};
@@ -92,6 +92,15 @@ pub fn check_perm_targets(
     let push = |diags: &mut Vec<Diagnostic>, span: Span, m: CheckMsg| {
         diags.push(Diagnostic::new(span, Message::Check(m)));
     };
+    // `uses` を持つ `async fn` は、Verus が `Tracked(..)` の引数のパターンを読めずに内部エラーで止まる
+    // （#101）。`gives` は戻り値の型なので通る。
+    if sig.qualifiers.asyncness.is_some() {
+        for c in &contract.clauses {
+            if matches!(c.kind, ast::ClauseKind::Uses(_)) {
+                push(diags, c.keyword, CheckMsg::Unimplemented(Unimpl::AsyncUses));
+            }
+        }
+    }
     for u in contract.uses() {
         match u {
             UsesItem::Perm { ident, span, .. } => match param_ty(&ident.name) {

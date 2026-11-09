@@ -198,6 +198,31 @@ fn unimplemented_features_fail_loudly() {
 }
 
 #[test]
+fn async_fns_cannot_have_uses_yet() {
+    // #101：Verus は `async fn` の `Tracked(..)` の引数を読めずに内部エラーで止まる。
+    for f in [
+        "async fn f(p: Ptr<Node>) uses &mut p@ { (*p).val = 1; }",
+        "async fn f(p: Ptr<Node>) uses p@ { leak p@; }",
+        "async fn f(n: u64) uses r: &mut Region<Ptr<Node>> { }",
+        "unchecked async fn f(p: Ptr<Node>) uses &p@ { }",
+        "impl Pool { async fn f(&mut self, p: Ptr<Node>) uses &p@ { } }",
+    ] {
+        rejects(
+            &format!("{PRELUDE}{f}"),
+            "E0003",
+            "an `async fn` cannot have `uses` yet",
+        );
+    }
+    // `gives` は戻り値の型なので通る。権限を使う処理は async でない関数に分けて呼べる。
+    accepts(&format!(
+        "{PRELUDE}async fn mk(v: u64) -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: v }}); q }}"
+    ));
+    accepts(&format!(
+        "{PRELUDE}fn set(p: Ptr<Node>) uses &mut p@ {{ (*p).val = 1; }}\nasync fn outer() -> u64 {{ let p = Ptr::new(Node {{ val: 0 }}); set(p); let n = p.free(); n.val }}"
+    ));
+}
+
+#[test]
 fn invariant_impl_shape() {
     accepts(&format!(
         "{PRELUDE}impl Invariant for Pool {{ closed spec fn invariant(&self) -> bool = self.len > 0; }}"
