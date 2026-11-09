@@ -302,7 +302,7 @@ fn rust_items_pass_through() {
     assert_eq!(
         heads(
             "mod m { fn f() {} }\nmod n;\nuse std::collections::HashMap;\nconst N: u64 = 3;\n\
-             static mut G: u64 = 0;\nmacro_rules! m { () => {} }\nextern crate core;\n\
+             static mut G: u64 = 0;\nextern crate core;\n\
              #[derive(Clone)] pub struct P { pub a: u64 }\npub enum E { A(u64), B { x: u64 } }"
         ),
         [
@@ -311,7 +311,6 @@ fn rust_items_pass_through() {
             "use",
             "const N",
             "static G",
-            "rust`macro_rules ! m { () => { } }`",
             "rust`extern crate core ;`",
             "pub struct P",
             "pub enum E",

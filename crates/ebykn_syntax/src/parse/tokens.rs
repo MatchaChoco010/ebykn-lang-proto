@@ -8,7 +8,7 @@
 //! [`scan_opaque`] は、Ebykn が中を構文として読まないトークン列（マクロの引数など）から、
 //! 証明の構文と Verus の構文に当たる形を字句的に探す。
 
-use proc_macro2::{Delimiter, Spacing, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use super::{push, sp};
 use crate::diag::Message;
@@ -86,6 +86,21 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
                 written: "#[verus::..]".into(),
             },
         );
+    } else if name == "verus_verify" || name == "verus_spec" {
+        push(
+            span,
+            Message::VerusOnly {
+                written: format!("#[{name}]"),
+            },
+        );
+    } else if name == "path" || name == "macro_use" {
+        // `#[path]` は別のファイルを、`#[macro_use]` は外のマクロを取り込む（#16 の既定）。
+        push(
+            span,
+            Message::Unread {
+                written: format!("#[{name}]"),
+            },
+        );
     } else if name == "cfg_attr" {
         if let Some(TokenTree::Group(g)) = body.get(k + 1) {
             let args: Vec<TokenTree> = g.stream().into_iter().collect();
@@ -156,8 +171,41 @@ pub(super) const VERUS_MACROS: &[&str] = &[
     "verus_proof_expr",
 ];
 
-/// Ebykn が中を構文として読まないトークン列から、証明の構文と Verus の構文に当たる形を
-/// 探して診断にする。読まないものについて黙らないため（`OPEN.md`）。
+/// マクロのパス（`r#` を外した名前の列）が `.eyk` で呼べるものか（#16 の既定）。
+/// 裸の名前か、std / core / alloc から始まるパス（vstd のマクロは vstd から始まるパス）。
+pub(super) fn macro_allowed(names: &[String]) -> Option<MacroKind> {
+    let last = names.last()?.as_str();
+    let first = names.first()?.as_str();
+    let vstd = crate::VSTD_MACROS.contains(&last);
+    let std = crate::ALLOWED_MACROS.contains(&last) && !vstd;
+    match names.len() {
+        1 if vstd => Some(MacroKind::Vstd),
+        1 if std => Some(MacroKind::Std),
+        _ if vstd && first == "vstd" => Some(MacroKind::Vstd),
+        _ if std && matches!(first, "std" | "core" | "alloc") => Some(MacroKind::Std),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MacroKind {
+    /// std のマクロ。引数は読まずに字句的に検査する。
+    Std,
+    /// vstd の仕様用のマクロ。引数を Ebykn の式として読む。
+    Vstd,
+}
+
+/// マクロの名前の位置に来ても、マクロの呼び出しではない語（`if !(x)` など）。
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "type", "unsafe", "use",
+    "where", "while", "yield", "box",
+];
+
+/// Ebykn が中を構文として読まないトークン列から、証明の構文と Verus の構文に当たる形と、
+/// `.eyk` で呼べないマクロの呼び出しを探して診断にする。読まないものについて黙らないため
+/// （`OPEN.md`）。
 pub(super) fn scan_opaque(ts: &TokenStream) {
     let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
     let ident = |tt: Option<&TokenTree>| match tt {
@@ -171,20 +219,16 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             scan_opaque(&g.stream());
             continue;
         }
+        let prev = i.checked_sub(1).and_then(|j| tts.get(j));
+        // `&&&` / `|||` は探さない。`&&` / `||` と同じ意味で証明を持ち込まず、`&&&x`（参照の参照の
+        // 参照）と字句では見分けられない。Ebykn の式として読む位置では構文として拒否する。
         let Some(name) = ident(Some(tt)) else {
-            // `&&&` / `|||`。
-            if let TokenTree::Punct(p) = tt
-                && (p.as_char() == '&' || p.as_char() == '|')
-                && p.spacing() == Spacing::Joint
-                && punct(tts.get(i + 1), p.as_char())
-                && punct(tts.get(i + 2), p.as_char())
-                && !punct(tts.get(i.wrapping_sub(1)), p.as_char())
-            {
-                let s = p.as_char().to_string().repeat(3);
-                push(sp(p.span()), Message::VerusOnly { written: s });
-            }
             continue;
         };
+        // `fn hide(..)` の `hide` は宣言する名前で、呼び出しではない。
+        if ident(prev).as_deref() == Some("fn") {
+            continue;
+        }
         let next = tts.get(i + 1);
         let span = sp(tt.span());
         let m = if name == "proof" && group(next, Delimiter::Brace) {
@@ -197,7 +241,7 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             Some(Message::ProofSyntax {
                 written: format!("{name}(..)"),
             })
-        } else if ["assume", "admit"].contains(&name.as_str())
+        } else if ["assume", "admit", "assume_"].contains(&name.as_str())
             && group(next, Delimiter::Parenthesis)
         {
             Some(Message::VerusOnly {
@@ -215,15 +259,48 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             Some(Message::VerusOnly {
                 written: format!("{name} fn"),
             })
-        } else if VERUS_MACROS.contains(&name.as_str()) && punct(next, '!') {
+        } else if (name == "verus_builtin" || name == "verus_builtin_macros") && punct(next, ':') {
             Some(Message::VerusOnly {
-                written: format!("{name}!"),
+                written: format!("{name}::.."),
             })
+        } else if punct(next, '!')
+            && !KEYWORDS.contains(&name.as_str())
+            && matches!(tts.get(i + 2), Some(TokenTree::Group(_)))
+        {
+            // マクロの呼び出し。前のパスを集めて判定する。
+            let mut names = vec![name.clone()];
+            let mut j = i;
+            while j >= 3 && punct(tts.get(j - 1), ':') && punct(tts.get(j - 2), ':') {
+                match ident(tts.get(j - 3)) {
+                    Some(n) => {
+                        names.insert(0, n);
+                        j -= 3;
+                    }
+                    None => break,
+                }
+            }
+            macro_call_message(&names)
         } else {
             None
         };
         if let Some(m) = m {
             push(span, m);
         }
+    }
+}
+
+/// マクロの呼び出しが `.eyk` で呼べなければ、その診断。
+pub(super) fn macro_call_message(names: &[String]) -> Option<Message> {
+    let last = names.last()?;
+    if VERUS_MACROS.contains(&last.as_str()) {
+        Some(Message::VerusOnly {
+            written: format!("{last}!"),
+        })
+    } else if macro_allowed(names).is_none() {
+        Some(Message::MacroNotAllowed {
+            name: names.join("::"),
+        })
+    } else {
+        None
     }
 }

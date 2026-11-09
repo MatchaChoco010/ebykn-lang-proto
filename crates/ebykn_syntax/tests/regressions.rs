@@ -79,7 +79,7 @@ fn proof_syntax_inside_other_macros_is_rejected() {
             "`assume(..)` is Verus syntax",
         ),
         ("vec![admit()]", "`admit(..)` is Verus syntax"),
-        ("dbg!(assert(x))", "`assert(..)` is proof syntax"),
+        ("vec![assert(x)]", "`assert(..)` is proof syntax"),
         (
             "vec![forall|i: int| i > 0]",
             "`forall|x| ..` is Verus syntax",
@@ -96,17 +96,13 @@ fn proof_syntax_inside_other_macros_is_rejected() {
             "vec![{ let ghost g = 1; g }]",
             "`let ghost / let tracked` is Verus syntax",
         ),
-        ("vec![a &&& b]", "`&&&` is Verus syntax"),
         ("vec![#[verifier::truncate] (x as u8)]", "E0102"),
         ("vec![#[trigger] x]", "`#[trigger]` is proof syntax"),
         ("vec![verus!{}]", "`verus!` is Verus syntax"),
     ] {
         rejects(&format!("fn f() {{ {src}; }}"), want);
     }
-    rejects(
-        "macro_rules! m { () => { assume(false) } }",
-        "`assume(..)` is Verus syntax",
-    );
+
     // Rust のマクロはそのまま。
     ok("fn f() { println!(\"{} {}\", a, b); assert!(x); assert_eq!(a, b); let v = vec![1, 2]; }");
 }
@@ -208,20 +204,20 @@ fn nested_items_parse_in_linear_time() {
         src.push_str(" }");
     }
     // 深い入れ子は debug ビルドの既定のスタックに収まらないので、大きいスタックで読む。
-    let d = std::thread::Builder::new()
+    // 指数的に読み直すと終わらないので、時間切れで失敗させる（深さ 16 で約 1 秒だった）。
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
         .stack_size(256 << 20)
         .spawn(move || {
-            let t = std::time::Instant::now();
-            let d = diags(&src);
-            (d, t.elapsed())
+            let _ = tx.send(diags(&src));
         })
-        .unwrap()
-        .join()
         .unwrap();
-    // 一番内側の診断は一度だけ出る。指数的なら深さ 40 は終わらない（深さ 16 で約 1 秒だった）。
-    assert_eq!(d.0.len(), 1, "{:?}", d.0);
-    assert!(d.0[0].contains("E0101"));
-    assert!(d.1 < std::time::Duration::from_secs(10), "{:?}", d.1);
+    let d = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("入れ子の項目を 30 秒で読み終えない（指数的に読み直している）");
+    // 一番内側の診断は一度だけ出る。
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].contains("E0101"));
 }
 
 /// パターンの `@name` / `@..` に付いた属性は残す。
@@ -252,5 +248,302 @@ fn proof_syntax_inside_opaque_rust_expressions_is_rejected() {
     rejects(
         "fn f() { async { assume(false) } }",
         "`assume(..)` is Verus syntax",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 再レビュー（#16 の既定）
+
+const NOT_ALLOWED: &str = "cannot be called in `.eyk`; only these macros can:";
+
+/// N1：`.eyk` で呼べるマクロは固定の一覧だけ。別名・自作のマクロ・別のファイルの取り込みを拒否する。
+#[test]
+fn only_listed_macros_can_be_called() {
+    // 別名を付ける。
+    rejects(
+        "use vstd::prelude::verus as v;\nv! { pub assume_specification [core::mem::drop::<u64>] (x: u64) ensures false; }",
+        "`use vstd::prelude::verus as v` is Verus syntax",
+    );
+    rejects(
+        "use vstd::prelude::verus as v;\nv! { pub assume_specification [core::mem::drop::<u64>] (x: u64) ensures false; }",
+        &format!("macro `v!` {NOT_ALLOWED}"),
+    );
+    // 自作の macro_rules!（定義も呼び出しも）。
+    let src = "macro_rules! m { ($v:ident, $a:ident) => { $v! { fn bad() ensures false { $a(false); } } } }\nfn g() { m!(verus, assume); }";
+    rejects(
+        src,
+        &format!("1:1: E0001: syntax error: macro `macro_rules!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        src,
+        &format!("2:10: E0001: syntax error: macro `m!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { paste::paste! { [<ver us>]! {} } }",
+        &format!("macro `paste::paste!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { verus_builtin_macros::x! {} }",
+        "`verus_builtin_macros::x` is Verus syntax",
+    );
+    // 別のファイルを読み込む。
+    rejects(
+        "include!(\"evil.rs\");",
+        &format!("macro `include!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { include!(\"evil.rs\"); }",
+        &format!("macro `include!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { let v = vec![include!(\"x\")]; }",
+        &format!("macro `include!` {NOT_ALLOWED}"),
+    );
+    let unread = "cannot be written in `.eyk`, because it brings in code that Ebykn does not read";
+    rejects(
+        "#[path = \"evil.rs\"] mod evil;",
+        &format!("`#[path]` {unread}"),
+    );
+    rejects(
+        "#[cfg_attr(all(), path = \"evil.rs\")] mod evil;",
+        &format!("`#[path]` {unread}"),
+    );
+    rejects(
+        "#[macro_use] extern crate foo;",
+        &format!("`#[macro_use]` {unread}"),
+    );
+    // 呼べるマクロの名前を外のクレートから取り込む・改名する。
+    rejects("use foo::vec;", &format!("`use foo::vec` {unread}"));
+    rejects(
+        "use foo::bar as seq;",
+        &format!("`use foo::bar as seq` {unread}"),
+    );
+    // Verus の属性とパス。
+    rejects(
+        "#[verus_verify(external_body)] fn f() {}",
+        "`#[verus_verify]` is Verus syntax",
+    );
+    rejects(
+        "#[verus_spec(ensures false)] fn f() {}",
+        "`#[verus_spec]` is Verus syntax",
+    );
+    rejects(
+        "fn f() { ::verus_builtin::assume_(false) }",
+        "`verus_builtin::assume_` is Verus syntax",
+    );
+    rejects(
+        "fn f() { vstd::prelude::admit() }",
+        "`vstd::prelude::admit` is Verus syntax",
+    );
+    rejects(
+        "fn f() { vec![::verus_builtin::assume_(false)] }",
+        "`verus_builtin::..` is Verus syntax",
+    );
+    // どの位置のマクロも同じ。
+    for src in [
+        "fn f(x: m!()) {}",
+        "trait T { m!(); }",
+        "impl S { m!(); }",
+        "fn f() { let m!() = 1; }",
+    ] {
+        rejects(src, &format!("macro `m!` {NOT_ALLOWED}"));
+    }
+    // 一覧のマクロは呼べる（裸の名前、std / core / alloc、vstd のパス）。
+    ok(
+        "fn f() { vstd::seq![1, 2]; std::println!(\"x\"); core::assert!(x); let v = vec![1]; \
+        let s = format!(\"{}\", line!()); todo!() }\nuse std::vec;\nuse crate::m::map;",
+    );
+}
+
+/// 診断に一覧を出し、自作のマクロは `unchecked fn` で書けることを伝える（英語と日本語）。
+#[test]
+fn not_allowed_macro_message_lists_the_allowed_macros() {
+    let d = diags("fn f() { dbg!(x); }");
+    assert_eq!(d.len(), 1);
+    assert!(d[0].starts_with("src/lib.eyk:1:10: E0001: syntax error: macro `dbg!` cannot be called in `.eyk`; only these macros can: vec, println,"), "{}", d[0]);
+    assert!(d[0].ends_with("seq, set, map. To use your own macro, write the function that needs it as an `unchecked fn`"), "{}", d[0]);
+    let j = diags_in("fn f() { dbg!(x); }", ebykn_syntax::diag::Lang::Ja);
+    assert!(
+        j[0].contains(
+            "`.eyk` ではマクロ `dbg!` を呼べません。呼べるのは次のマクロだけです: vec、println、"
+        ),
+        "{}",
+        j[0]
+    );
+    assert!(
+        j[0].ends_with("自作のマクロが要るなら、それを使う関数を `unchecked fn` にします"),
+        "{}",
+        j[0]
+    );
+}
+
+/// Verus のマクロの名前は、呼び出しでも `use` でも Verus の構文として拒否する（一覧は
+/// `VERUS_MACROS` と独立に書く。一覧から名前を消すとこのテストが落ちる）。
+#[test]
+fn every_verus_macro_name_is_rejected() {
+    for name in [
+        "verus",
+        "verus_",
+        "proof",
+        "proof_decl",
+        "proof_with",
+        "calc",
+        "assert_by_contradiction",
+        "assert_seqs_equal",
+        "assert_sets_equal",
+        "assert_maps_equal",
+        "open_atomic_invariant",
+        "open_local_invariant",
+        "open_atomic_invariant_in_proof",
+        "open_local_invariant_in_proof",
+        "struct_with_invariants",
+        "atomic_with_ghost",
+        "state_machine",
+        "tokenized_state_machine",
+        "case_on_next",
+        "case_on_init",
+        "builtin_macros",
+        "verus_proof_macro_exprs",
+        "verus_exec_macro_exprs",
+        "verus_proof_expr",
+    ] {
+        let want = format!("`{name}!` is Verus syntax and cannot be written in `.eyk`");
+        rejects(&format!("fn f() {{ {name}! {{ }} }}"), &want);
+        rejects(&format!("fn f() {{ vec![{name}!()] }}"), &want);
+        rejects(
+            &format!("use vstd::prelude::{name} as m;"),
+            &format!("`use vstd::prelude::{name} as m` is Verus syntax"),
+        );
+    }
+}
+
+/// N2：`&&` と `&` の並び、参照の参照、クロージャの並びを、マクロの引数でも拒否しない。
+#[test]
+fn ampersands_and_bars_in_macro_arguments_are_rust() {
+    ok(
+        "fn f() { assert!(a && &b == &c); println!(\"{:?}\", &&&x); let v = vec![|| || 1]; \
+        assert!(a || |x: u64| x > 0 == b); }",
+    );
+}
+
+/// N3：宣言する名前は呼び出しではない。`extern` ブロックは中を項目として読む。
+#[test]
+fn declarations_are_not_calls() {
+    ok("extern \"C\" { fn hide(w: u64); fn assert(c: i32); static reveal: u64; }");
+    // 中の型は読む。
+    rejects(
+        "extern \"C\" { fn f(x: *const [u8; { assume(false); 1 }]); }",
+        "`assume(..)` is Verus syntax",
+    );
+    rejects(
+        "extern \"C\" { m!(); }",
+        &format!("macro `m!` {NOT_ALLOWED}"),
+    );
+    // 項目として読むので、引数の `tracked` も見つける（字句の検査では見つけない）。
+    rejects(
+        "extern \"C\" { fn f(tracked x: u64); }",
+        "`tracked` is Verus syntax; in Ebykn write `uses`",
+    );
+    // 中を読まないトークン列でも、`fn` の直後の名前は呼び出しではない。
+    ok("fn f() { let v = vec![{ fn hide() {} fn assert() {} 1 }]; }");
+}
+
+/// N4：字句の検査の各形を、一つずつ固定する（外すと落ちる）。
+#[test]
+fn each_opaque_scan_form_is_rejected() {
+    rejects(
+        "fn f() { vec![{ proof fn p() {} 1 }] }",
+        "`proof fn` is Verus syntax",
+    );
+    rejects(
+        "fn f() { vec![{ exec fn p() {} 1 }] }",
+        "`exec fn` is Verus syntax",
+    );
+    rejects("fn f() { vec![reveal(g)] }", "`reveal(..)` is proof syntax");
+    rejects(
+        "fn f() { vec![reveal_with_fuel(g, 1)] }",
+        "`reveal_with_fuel(..)` is proof syntax",
+    );
+    rejects("fn f() { vec![hide(g)] }", "`hide(..)` is proof syntax");
+    rejects(
+        "fn f() { vec![assume_(x)] }",
+        "`assume_(..)` is Verus syntax",
+    );
+}
+
+/// N4：中を読まない型と項目の中も検査する。
+#[test]
+fn opaque_types_and_items_are_scanned() {
+    // 文の先頭でない `assume(..)` は、構文解析器が読むだけで拒否しない。中を読まない所では
+    // 字句の検査だけが見つける。
+    let a = "{ let a = assume(false); 1 }";
+    // 生ポインタの型（中を読まない型）。
+    rejects(
+        &format!("fn f(x: *const [u8; {a}]) {{}}"),
+        "`assume(..)` is Verus syntax",
+    );
+    // `union` のフィールド。
+    rejects(
+        &format!("union U {{ a: [u8; {a}] }}"),
+        "`assume(..)` is Verus syntax",
+    );
+    // where 句の述語とトレイト境界。
+    rejects(
+        &format!("fn f<T>() where T: Into<*const [u8; {a}]> {{}}"),
+        "`assume(..)` is Verus syntax",
+    );
+    rejects(
+        &format!("fn f<T: Into<*const [u8; {a}]>>() {{}}"),
+        "`assume(..)` is Verus syntax",
+    );
+}
+
+/// N4：vstd の仕様用のマクロの引数を Ebykn の式として読む。
+#[test]
+fn spec_macro_arguments_are_parsed() {
+    use ebykn_syntax::ast::*;
+    let f = ok("fn f() { seq![forall x: int, x > 0, self@x] }");
+    let ItemKind::Fn(func) = &f.items[0].kind else {
+        panic!()
+    };
+    let Some(FnBody::Block(b)) = &func.body else {
+        panic!()
+    };
+    let StmtKind::Expr { expr: e, .. } = &b.stmts[0].kind else {
+        panic!()
+    };
+    let ExprKind::Macro(m) = &e.kind else {
+        panic!()
+    };
+    let MacroArgs::Exprs(v) = &m.args else {
+        panic!("引数を読んでいない")
+    };
+    assert!(matches!(v[0].kind, ExprKind::Quant { .. }));
+    assert!(matches!(v[1].kind, ExprKind::Erased { .. }));
+    // 式として読めない引数は拒否する（トークンのまま通さない）。
+    rejects("fn f() { seq![a b] }", "E0001");
+    rejects("fn f() { map![a b] }", "E0001");
+}
+
+/// N5：`seq` / `set` / `map` は、裸の名前か vstd のパスのときだけ vstd のマクロ。
+#[test]
+fn third_party_seq_is_not_vstd() {
+    rejects(
+        "fn f() { my::seq!(a b c) }",
+        &format!("macro `my::seq!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { std::seq![1] }",
+        &format!("macro `std::seq!` {NOT_ALLOWED}"),
+    );
+}
+
+/// N6：`r#` を付けた呼び出しも拒否する。
+#[test]
+fn raw_identifier_proof_calls_are_rejected() {
+    rejects("fn f() { r#assume(false) }", "`assume(..)` is Verus syntax");
+    rejects(
+        "fn f() { let x = r#assert(y); }",
+        "`assert(..)` is proof syntax",
     );
 }

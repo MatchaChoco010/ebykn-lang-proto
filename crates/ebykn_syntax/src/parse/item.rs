@@ -139,14 +139,7 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     let v: syn::Visibility = ahead.parse()?;
     if is_rust_passthrough(&ahead) {
         let it: syn::Item = input.parse()?;
-        // マクロの呼び出し（`verus! { .. }`、`macro_rules!` など）は名前と中身を検査する。
-        // それ以外も、中を読まないので証明の構文を字句的に探す。
-        match &it {
-            syn::Item::Macro(m) => {
-                convert::mac(&m.mac);
-            }
-            other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
-        }
+        check_rust_item(&it);
         let ts = tokens_between(&begin, input);
         let span = span_between(&begin, input);
         return Ok(ast::Item {
@@ -187,6 +180,92 @@ fn item_name(k: &ast::ItemKind) -> Option<&ast::Ident> {
         ast::ItemKind::Subset(t) => &t.ident,
         _ => return None,
     })
+}
+
+/// フォークに読ませた Rust の項目の中を検査する。マクロは名前と引数（`macro_rules!` の
+/// 定義も呼べないマクロとして拒否する）、`extern` ブロックは中の宣言を項目として読み、
+/// `union` はフィールドを読む。それ以外は中を読まないので字句的に探す。
+fn check_rust_item(it: &syn::Item) {
+    match it {
+        syn::Item::Macro(m) => {
+            convert::mac(&m.mac);
+        }
+        syn::Item::ForeignMod(f) => {
+            for fi in &f.items {
+                match fi {
+                    syn::ForeignItem::Fn(f) => {
+                        for a in &f.sig.inputs {
+                            convert::param(a);
+                        }
+                        if let syn::ReturnType::Type(_, _, _, t) = &f.sig.output {
+                            ty(t);
+                        }
+                    }
+                    syn::ForeignItem::Static(s) => {
+                        ty(&s.ty);
+                    }
+                    syn::ForeignItem::Macro(m) => {
+                        convert::mac(&m.mac);
+                    }
+                    other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
+                }
+            }
+        }
+        syn::Item::Union(u) => {
+            fields(&syn::Fields::Named(u.fields.clone()));
+        }
+        other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
+    }
+}
+
+/// `use` の木を検査する（#16 の既定）。Verus のマクロの名前を取り込む・改名するものと、
+/// `.eyk` で呼べるマクロの名前を外のクレートから取り込む・その名前に改名するもの
+/// （`use x::verus as vec;`）は書けない。
+fn check_use(tree: &syn::UseTree, prefix: &mut Vec<String>) {
+    let unraw = |i: &proc_macro2::Ident| {
+        let n = i.to_string();
+        n.strip_prefix("r#").unwrap_or(&n).to_string()
+    };
+    let leaf = |prefix: &[String], orig: &proc_macro2::Ident, name: &proc_macro2::Ident| {
+        let (o, n) = (unraw(orig), unraw(name));
+        let first = prefix.first().map(String::as_str).unwrap_or(o.as_str());
+        let own = matches!(first, "crate" | "self" | "super");
+        let std = matches!(first, "std" | "core" | "alloc") && o == n;
+        let vstd = first == "vstd" && o == n && crate::VSTD_MACROS.contains(&n.as_str());
+        let written = if o == n {
+            format!(
+                "use {}",
+                [prefix, std::slice::from_ref(&o)].concat().join("::")
+            )
+        } else {
+            format!(
+                "use {} as {n}",
+                [prefix, std::slice::from_ref(&o)].concat().join("::")
+            )
+        };
+        if super::tokens::VERUS_MACROS.contains(&o.as_str())
+            || super::tokens::VERUS_MACROS.contains(&n.as_str())
+        {
+            push(sp(orig.span()), Message::VerusOnly { written });
+        } else if crate::ALLOWED_MACROS.contains(&n.as_str()) && !(own || std || vstd) {
+            push(sp(orig.span()), Message::Unread { written });
+        }
+    };
+    match tree {
+        syn::UseTree::Path(p) => {
+            prefix.push(unraw(&p.ident));
+            check_use(&p.tree, prefix);
+            prefix.pop();
+        }
+        syn::UseTree::Name(n) => leaf(prefix, &n.ident, &n.ident),
+        syn::UseTree::Rename(r) => leaf(prefix, &r.ident, &r.rename),
+        syn::UseTree::Glob(_) => {}
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                check_use(t, prefix);
+            }
+        }
+    }
 }
 
 /// フォークにそのまま読ませる Rust の項目。
@@ -730,7 +809,13 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
         || is_ident(t.first(), "const") && !is_ident(t.get(1), "fn")
         || matches!(t.first(), Some(TokenTree::Ident(_))) && is_punct(t.get(1), '!');
     if rust {
-        let _: syn::TraitItem = input.parse()?;
+        let ti: syn::TraitItem = input.parse()?;
+        match &ti {
+            syn::TraitItem::Macro(m) => {
+                convert::mac(&m.mac);
+            }
+            other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
+        }
         let span = span_between(&begin, input);
         return Ok(ast::TraitItem {
             attrs: attrs(&a),
@@ -919,7 +1004,8 @@ fn use_item(input: ParseStream, begin: &syn::parse::ParseBuffer) -> syn::Result<
             },
         ));
     }
-    input.parse::<syn::UseTree>()?;
+    let tree: syn::UseTree = input.parse()?;
+    check_use(&tree, &mut Vec::new());
     input.parse::<Token![;]>()?;
     Ok(ast::ItemKind::Use(ast::Tokens {
         tokens: tokens_between(begin, input),

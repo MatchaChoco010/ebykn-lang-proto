@@ -71,6 +71,11 @@ pub enum Message {
     PropsOnly { written: String },
     /// 比較演算子の連鎖（Rust と同じく書けない）。
     ChainedComparison,
+    /// `.eyk` で呼べるマクロの一覧（[`crate::ALLOWED_MACROS`]）にないマクロ（#16 の既定）。
+    MacroNotAllowed { name: String },
+    /// Ebykn が読まないコードを取り込む書き方（`#[path]`、`#[macro_use]`、Verus のマクロの
+    /// 取り込みなど。#16 の既定）。
+    Unread { written: String },
     /// その位置には書けないもの（文法にない組み合わせ）。
     NotAllowedHere { written: String },
     /// E0101。
@@ -226,6 +231,20 @@ impl Message {
             (Message::ChainedComparison, Ja) => {
                 "構文エラー: 比較演算子は連ねて書けません。`a < b && b < c` と書きます".into()
             }
+            (Message::MacroNotAllowed { name }, En) => format!(
+                "syntax error: macro `{name}!` cannot be called in `.eyk`; only these macros can: {}. To use your own macro, write the function that needs it as an `unchecked fn`",
+                crate::ALLOWED_MACROS.join(", ")
+            ),
+            (Message::MacroNotAllowed { name }, Ja) => format!(
+                "構文エラー: `.eyk` ではマクロ `{name}!` を呼べません。呼べるのは次のマクロだけです: {}。自作のマクロが要るなら、それを使う関数を `unchecked fn` にします",
+                crate::ALLOWED_MACROS.join("、")
+            ),
+            (Message::Unread { written }, En) => format!(
+                "syntax error: `{written}` cannot be written in `.eyk`, because it brings in code that Ebykn does not read"
+            ),
+            (Message::Unread { written }, Ja) => format!(
+                "構文エラー: `{written}` は `.eyk` に書けません。Ebykn が読まないコードを取り込むためです"
+            ),
             (Message::NotAllowedHere { written }, En) => {
                 format!("syntax error: `{written}` cannot be written here")
             }

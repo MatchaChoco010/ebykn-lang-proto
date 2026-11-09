@@ -42,6 +42,13 @@ pub(super) fn tokens<T: ToTokens>(t: &T) -> ast::Tokens {
     ast::Tokens { tokens: ts, span }
 }
 
+/// 中を読まない Rust のトークン列。証明の構文と呼べないマクロを字句的に探す。
+pub(super) fn scanned<T: ToTokens>(t: &T) -> ast::Tokens {
+    let tk = tokens(t);
+    super::tokens::scan_opaque(&tk.tokens);
+    tk
+}
+
 pub(super) fn lit(l: &syn::Lit) -> ast::Lit {
     ast::Lit {
         text: l.to_token_stream().to_string(),
@@ -50,6 +57,7 @@ pub(super) fn lit(l: &syn::Lit) -> ast::Lit {
 }
 
 pub(super) fn path(p: &syn::Path) -> ast::Path {
+    check_path(p);
     ast::Path {
         leading_colon: p.leading_colon.is_some(),
         segments: p
@@ -61,6 +69,31 @@ pub(super) fn path(p: &syn::Path) -> ast::Path {
             })
             .collect(),
         span: span_of(p),
+    }
+}
+
+/// Verus の内部のパス（`verus_builtin::..`、`vstd::..::admit` / `assume_`）は書けない（#16 の既定）。
+fn check_path(p: &syn::Path) {
+    let names: Vec<String> = p
+        .segments
+        .iter()
+        .map(|s| {
+            let n = s.ident.to_string();
+            n.strip_prefix("r#").unwrap_or(&n).to_string()
+        })
+        .collect();
+    let (Some(first), Some(last)) = (names.first(), names.last()) else {
+        return;
+    };
+    let bad = matches!(first.as_str(), "verus_builtin" | "verus_builtin_macros")
+        || first == "vstd" && matches!(last.as_str(), "admit" | "assume_");
+    if bad {
+        push(
+            span_of(p),
+            Message::VerusOnly {
+                written: names.join("::"),
+            },
+        );
     }
 }
 
@@ -89,7 +122,7 @@ pub(super) fn generic_arg(a: &syn::GenericArgument) -> ast::GenericArg {
             ident: ident(&a.ident),
             ty: ty(&a.ty),
         },
-        other => ast::GenericArg::Rust(tokens(other)),
+        other => ast::GenericArg::Rust(scanned(other)),
     }
 }
 
@@ -149,6 +182,10 @@ pub(super) fn ty(t: &syn::Type) -> ast::Type {
             );
             ast::TypeKind::Rust(tokens(t))
         }
+        syn::Type::Macro(m) => {
+            mac(&m.mac);
+            ast::TypeKind::Rust(tokens(t))
+        }
         other => {
             let tk = tokens(other);
             super::tokens::scan_opaque(&tk.tokens);
@@ -204,11 +241,11 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
         .map(|p| match p {
             syn::GenericParam::Lifetime(l) => ast::GenericParam::Lifetime {
                 lifetime: lifetime(&l.lifetime),
-                bounds: (!l.bounds.is_empty()).then(|| tokens(&l.bounds)),
+                bounds: (!l.bounds.is_empty()).then(|| scanned(&l.bounds)),
             },
             syn::GenericParam::Type(t) => ast::GenericParam::Type {
                 ident: ident(&t.ident),
-                bounds: (!t.bounds.is_empty()).then(|| tokens(&t.bounds)),
+                bounds: (!t.bounds.is_empty()).then(|| scanned(&t.bounds)),
                 default: t.default.as_ref().map(ty),
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
@@ -227,41 +264,46 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
     }
 }
 
-/// vstd の仕様用のマクロ。引数を Ebykn の式として読む。
-const SPEC_MACROS: &[&str] = &["seq", "set"];
-
-/// マクロの呼び出し。Verus のマクロは拒否し、vstd の仕様用のマクロの引数は Ebykn の式として
-/// 読み、それ以外のマクロの引数からは証明の構文と Verus の構文を字句的に探す（`OPEN.md`）。
+/// マクロの呼び出し。`.eyk` で呼べるマクロは固定の一覧だけ（#16 の既定、`OPEN.md`）。
+/// vstd の仕様用のマクロの引数は Ebykn の式として読み、std のマクロの引数からは証明の
+/// 構文と Verus の構文を字句的に探す。
 pub(super) fn mac(m: &syn::Macro) -> ast::Macro {
     let span = span_of(m);
-    let name = m
+    let names: Vec<String> = m
         .path
         .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_default();
-    let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
-    let args = if super::tokens::VERUS_MACROS.contains(&name.as_str()) {
-        push(
-            span,
-            Message::VerusOnly {
-                written: format!("{name}!"),
-            },
-        );
-        ast::MacroArgs::Tokens
-    } else if SPEC_MACROS.contains(&name.as_str()) {
-        let parsed = (|input: syn::parse::ParseStream| {
-            input.parse_terminated(<syn::Expr as syn::parse::Parse>::parse, syn::Token![,])
+        .iter()
+        .map(|s| {
+            let n = s.ident.to_string();
+            n.strip_prefix("r#").unwrap_or(&n).to_string()
         })
-        .parse2(m.tokens.clone());
-        match parsed {
-            Ok(p) => ast::MacroArgs::Exprs(p.into_iter().map(expr).collect()),
-            Err(e) => {
-                super::push_error(e);
-                ast::MacroArgs::Tokens
-            }
-        }
-    } else if name == "map" {
+        .collect();
+    let last = names.last().cloned().unwrap_or_default();
+    let args = if let Some(msg) = super::tokens::macro_call_message(&names) {
+        push(span, msg);
+        ast::MacroArgs::Tokens
+    } else if super::tokens::macro_allowed(&names) == Some(super::tokens::MacroKind::Vstd) {
+        spec_macro_args(&last, m)
+    } else {
+        super::tokens::scan_opaque(&m.tokens);
+        ast::MacroArgs::Tokens
+    };
+    ast::Macro {
+        path: path(&m.path),
+        delimiter: match m.delimiter {
+            syn::MacroDelimiter::Paren(_) => ast::Delimiter::Paren,
+            syn::MacroDelimiter::Brace(_) => ast::Delimiter::Brace,
+            syn::MacroDelimiter::Bracket(_) => ast::Delimiter::Bracket,
+        },
+        tokens: m.tokens.clone(),
+        args,
+        span,
+    }
+}
+
+/// `seq![a, b]` / `set![a, b]` / `map![k => v]` の引数を Ebykn の式として読む。
+fn spec_macro_args(name: &str, m: &syn::Macro) -> ast::MacroArgs {
+    if name == "map" {
         let parsed = (|input: syn::parse::ParseStream| {
             let mut out = Vec::new();
             while !input.is_empty() {
@@ -285,19 +327,17 @@ pub(super) fn mac(m: &syn::Macro) -> ast::Macro {
             }
         }
     } else {
-        super::tokens::scan_opaque(&m.tokens);
-        ast::MacroArgs::Tokens
-    };
-    ast::Macro {
-        path: path(&m.path),
-        delimiter: match m.delimiter {
-            syn::MacroDelimiter::Paren(_) => ast::Delimiter::Paren,
-            syn::MacroDelimiter::Brace(_) => ast::Delimiter::Brace,
-            syn::MacroDelimiter::Bracket(_) => ast::Delimiter::Bracket,
-        },
-        tokens: m.tokens.clone(),
-        args,
-        span,
+        let parsed = (|input: syn::parse::ParseStream| {
+            input.parse_terminated(<syn::Expr as syn::parse::Parse>::parse, syn::Token![,])
+        })
+        .parse2(m.tokens.clone());
+        match parsed {
+            Ok(p) => ast::MacroArgs::Exprs(p.into_iter().map(expr).collect()),
+            Err(e) => {
+                super::push_error(e);
+                ast::MacroArgs::Tokens
+            }
+        }
     }
 }
 

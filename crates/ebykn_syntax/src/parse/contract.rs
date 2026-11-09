@@ -97,6 +97,7 @@ pub(super) fn where_clause(input: ParseStream) -> syn::Result<Option<ast::WhereC
         let pb = input.fork();
         input.parse::<syn::WherePredicate>()?;
         let ts = tokens_between(&pb, input);
+        super::tokens::scan_opaque(&ts);
         predicates.push(ast::Tokens {
             span: span_between(&pb, input),
             tokens: ts,
