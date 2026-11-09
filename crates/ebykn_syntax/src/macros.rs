@@ -12,10 +12,18 @@
 //! std やツールの属性として数えない（[`Bindings`]）。依存クレートの名前（`[lib] name` を含む）が
 //! 分からないときも、std のパスとツールの属性を数えない（前提として出す側に倒す）。
 //!
-//! 項目の外側の属性のほかの位置（`#![..]`、文・式の属性）は、組み込みの属性だけを書ける
-//! （[`non_builtin`]。構文解析と検査が拒否する）。安定版の Rust はこれらの位置に属性マクロを
-//! 許さないが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と
-//! `RUSTC_BOOTSTRAP=1` で動くので、`verify` ではこれらの位置の属性マクロも効く（PR #57 のレビュー）。
+//! 項目の外側の属性のほかの位置には、決まった属性だけを書ける（[`non_builtin`]。構文解析と検査が
+//! 拒否する）。
+//!
+//! - 内側の属性（`#![..]`）：組み込みの属性だけ。安定版の Rust は内側の属性マクロを許さないが、Verus は
+//!   `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で
+//!   動くので、`verify` では内側の属性マクロが走る。`#![feature(..)]` も書けない（`proc_macro_hygiene`
+//!   で文・式の属性マクロも走るようになる）。
+//! - 文・式・`let`・match の腕の属性：組み込みの属性とツールの属性。ここに付く属性マクロは Verus でも
+//!   E0658 で大きく失敗する（`proc_macro_hygiene` は有効でない）ので、拒否は二重の守り。
+//!
+//! 組み込みの属性の名前は、raw の綴り（`r#cfg`）も同じ名前として比べる。予約語の raw の綴り
+//! （`r#unsafe`）だけは別の名前で、利用者が束縛した名前を指す（[`segment`]、#122）。
 //!
 //! 名前で判定する属性を足すときは、この表に足す。綴りの総当たりのテスト
 //! （`crates/ebykn_syntax/tests/macros.rs`）が、表のすべての名前に自動で効く。書き下しが
@@ -280,6 +288,19 @@ const KEYWORDS: &[&str] = &[
     "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
     "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
 ];
+
+/// Rust の予約語か（[`KEYWORDS`]）。
+pub fn is_keyword(name: &str) -> bool {
+    KEYWORDS.contains(&name)
+}
+
+/// トークンの識別子が、キーワードでない名前 `name` か（raw かどうかによらない。`r#cfg` は `cfg`。
+/// [`crate::ast::Ident::is_name`] のトークンの版。#122）。
+pub fn token_is_name(i: &proc_macro2::Ident, name: &str) -> bool {
+    debug_assert!(!is_keyword(name), "`{name}` はキーワード");
+    let s = i.to_string();
+    s.strip_prefix("r#").unwrap_or(&s) == name
+}
 
 /// 属性のパスの一つの名前。予約語の raw の綴りだけ `r#` を残す（`r#unsafe(..)` を組み込みの
 /// `unsafe(..)` の包みと取り違えない。PR #57 の再レビューの B1）。

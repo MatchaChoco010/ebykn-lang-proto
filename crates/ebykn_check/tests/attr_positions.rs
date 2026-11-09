@@ -52,6 +52,29 @@ fn non_builtin_attributes_are_rejected_in_every_position() {
     assert_eq!(tried, POSITIONS.len() * NON_BUILTIN.len());
 }
 
+/// Verus の属性として別の文言で拒否するかを、属性のパスだけで決める（値の `verus_spec` は見ない。
+/// #57 の再確認の N4）。
+#[test]
+fn the_value_of_an_inner_attribute_does_not_skip_the_check() {
+    let (_, lines) = run("#![evil::x = verus_spec]\npub fn f() {}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("the attribute `evil::x` cannot be written here")),
+        "{lines:?}"
+    );
+    // パスの最後が `verus_spec` なら Verus の属性として拒否する（位置の文言は重ねない）。
+    let (_, lines) = run("#![a::verus_spec]\npub fn f() {}");
+    assert!(
+        lines.iter().any(|l| l.contains("`#[verus_spec]`")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("cannot be written here")),
+        "{lines:?}"
+    );
+}
+
 /// 組み込みの属性は、どの位置にも書ける。
 /// ツールの属性は、内側の位置では書けず、文・式の位置では書ける（何もしない属性で、安定版の Rust も
 /// 許す。PR #57 の再レビューの nit）。

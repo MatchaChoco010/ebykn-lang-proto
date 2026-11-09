@@ -1,6 +1,7 @@
 //! ゲート。各モジュールは `run(&Repo) -> Report` を持ち、入力を壊すと失敗することを
 //! `fails_` で始まるテストで示す（`check-gate-tests` が検査する）。
 
+pub mod attr_names;
 pub mod book;
 pub mod examples;
 pub mod file_size;
@@ -52,6 +53,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-examples",
         run: examples::run_static,
+    },
+    Gate {
+        name: "check-attr-names",
+        run: attr_names::run,
     },
 ];
 

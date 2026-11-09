@@ -134,16 +134,23 @@ fn attr(tts: &[TokenTree], i: usize) {
     meta(&body, inner, span);
 }
 
-/// [`meta`] が自分の文言で拒否する属性（Verus と証明の属性）か。
+/// [`meta`] が自分の文言で拒否する属性（Verus と証明の属性）か。名前は属性のパス（先頭の `::` と
+/// `a::b::c`）だけから取る（`#![evil::x = verus_spec]` の値の `verus_spec` は見ない。#57 の再確認の N4）。
 fn diagnosed_by_meta(body: &[TokenTree]) -> bool {
-    let names: Vec<String> = body
-        .iter()
-        .take_while(|t| matches!(t, TokenTree::Ident(_) | TokenTree::Punct(_)))
-        .filter_map(|t| match t {
-            TokenTree::Ident(i) => Some(unraw(&i.to_string())),
-            _ => None,
-        })
-        .collect();
+    let colon = |k: usize| matches!(body.get(k), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    let mut k = 0;
+    while colon(k) {
+        k += 1;
+    }
+    let mut names = Vec::new();
+    while let Some(TokenTree::Ident(i)) = body.get(k) {
+        names.push(unraw(&i.to_string()));
+        if colon(k + 1) && colon(k + 2) {
+            k += 3;
+        } else {
+            break;
+        }
+    }
     let Some(first) = names.first() else {
         return false;
     };
