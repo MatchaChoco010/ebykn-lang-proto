@@ -26,7 +26,7 @@ verified main-program::double
 unchecked main-program::show
 verified main-program::main
 results 2 verified, 0 errors
-ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): main-program::show (unchecked)
+ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): main-program::show (unchecked)
 $ ebykn build
 ebykn: built `build/verus/target/debug/main-program` without verifying it; run `ebykn verify` to verify (`build --verified` comes in M5)
 $ echo $?

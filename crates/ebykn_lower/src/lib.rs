@@ -57,6 +57,21 @@ pub struct Output {
     /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
     /// `func-details` の名前の形（`k::m::impl&%*::e`。`*` は impl の番号）。
     pub verus_patterns: BTreeMap<String, String>,
+    /// std でも組み込みでもない手続きマクロ（依存クレートの derive と属性マクロ）が付いた項目。
+    /// マクロが作る項目は Verus が検証しないので、`verify` が前提の一覧に必ず出す（#49）。
+    pub macros: Vec<MacroUse>,
+}
+
+/// 項目に付いた、Verus が検証しない項目を作る手続きマクロ（#49）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacroUse {
+    /// マクロが付いた項目の表示（`k::Foo`、`impl k::Tr for Foo`）。
+    pub item: String,
+    pub kind: ebykn_syntax::macros::MacroKind,
+    /// 書かれたとおりのマクロのパス（`serde::Serialize`）。
+    pub path: String,
+    /// 書き下した `.rs` の `build/verus/` からの相対パス（`verify` で並べる順に使う）。
+    pub rel: String,
 }
 
 /// 書き下しの間に集めるもの。
@@ -66,6 +81,7 @@ pub(crate) struct Report {
     unchecked: Vec<String>,
     external: Vec<String>,
     verus_patterns: BTreeMap<String, String>,
+    macros: Vec<MacroUse>,
 }
 
 /// 書き下しの文脈。式ごとに複製して使う（[`Cx::sub`]）。
@@ -93,6 +109,10 @@ pub(crate) struct Cx<'a> {
     pub logic: bool,
     pub ensures: bool,
     pub report: &'a RefCell<Report>,
+    /// クレートで束縛している名前（手続きマクロの判定に使う。#49）。
+    pub bindings: &'a ebykn_syntax::macros::Bindings,
+    /// 書き下している `.rs` の `build/verus/` からの相対パス。
+    pub rel: &'a str,
 }
 
 impl<'a> Cx<'a> {
@@ -131,6 +151,42 @@ impl<'a> Cx<'a> {
         p.push(name.to_string());
         p.join("::")
     }
+
+    /// 項目の属性のうち、std でも組み込みでもない手続きマクロを前提として記録する（#49）。
+    /// `item` は項目の表示を作る（マクロがなければ呼ばない）。
+    pub(crate) fn note_macros(&self, attrs: &[ast::Attr], item: impl FnOnce() -> String) {
+        let found: Vec<_> = attrs
+            .iter()
+            .flat_map(|a| ebykn_syntax::macros::external_macros(a, self.bindings))
+            .collect();
+        self.record_macros(found, item);
+    }
+
+    /// トークン列の先頭に属性が並ぶ宣言（`extern` ブロックの中の宣言。AST を持たない）の版。
+    pub(crate) fn note_macros_in_tokens(&self, ts: &TokenStream, item: impl FnOnce() -> String) {
+        let found = ebykn_syntax::macros::external_macros_in_tokens(ts, self.bindings);
+        self.record_macros(found, item);
+    }
+
+    fn record_macros(
+        &self,
+        found: Vec<ebykn_syntax::macros::ExternalMacro>,
+        item: impl FnOnce() -> String,
+    ) {
+        if found.is_empty() {
+            return;
+        }
+        let item = item();
+        let mut r = self.report.borrow_mut();
+        for m in found {
+            r.macros.push(MacroUse {
+                item: item.clone(),
+                kind: m.kind,
+                path: m.path,
+                rel: self.rel.to_string(),
+            });
+        }
+    }
 }
 
 /// 属性を書き出す。
@@ -166,8 +222,33 @@ pub(crate) enum Piece {
 
 /// プロジェクトを書き下す。検査が通っていること（エラーがないこと）が前提。
 pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
+    lower_with_crates(project, checked, None)
+}
+
+/// [`lower`] の、依存クレートがコードで使われる名前を外から与える版（`verify` が `cargo metadata`
+/// で取った名前。#49）。`None` なら `Ebykn.toml` と path の依存の `Cargo.toml` から決め、決められない
+/// ものがあれば、名前が分からないとして扱う（std のパスとツールの属性を前提として出す側に倒す）。
+pub fn lower_with_crates(
+    project: &Project,
+    checked: &Checked,
+    crates: Option<&[String]>,
+) -> Result<Output, String> {
     let report = RefCell::new(Report::default());
     let mut out = Output::default();
+    // 名前を覆い隠す書き方（`use evil::Clone;`、同じ名前の依存クレート）を見分ける（#49）。
+    let mut bindings = ebykn_syntax::macros::Bindings::default();
+    let (names, known) = project.dependency_crate_names();
+    for n in names.iter().chain(crates.into_iter().flatten()) {
+        bindings.add_crate(n);
+    }
+    if !known && crates.is_none() {
+        bindings.crate_names_unknown();
+    }
+    for m in &project.modules {
+        let ts = TokenStream::from_str(&project.file(m.file).text)
+            .map_err(|e| format!("{}: トークンに分けられません（{e}）", m.rel))?;
+        bindings.scan(&ts);
+    }
     for m in &project.modules {
         let Some(ast) = project.ast(m.file) else {
             continue;
@@ -193,6 +274,8 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
             logic: false,
             ensures: false,
             report: &report,
+            bindings: &bindings,
+            rel: &rel,
         };
         let mut pieces = Vec::new();
         for a in &ast.attrs {
@@ -212,6 +295,7 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
     out.unchecked = r.unchecked;
     out.external = r.external;
     out.verus_patterns = r.verus_patterns;
+    out.macros = r.macros;
     Ok(out)
 }
 

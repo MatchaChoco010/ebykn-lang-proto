@@ -27,6 +27,19 @@ pub struct Verified {
 }
 
 impl Verified {
+    /// 項目ごとの状態を、別の書き下しの結果（依存クレートの名前を確定し直したもの。#49）で決め直す。
+    /// 書き下した `.rs` は同じで、違うのは手続きマクロの前提の一覧だけ。
+    pub fn restatus(&mut self, output: &Output) {
+        self.all = verus::statuses(
+            &output.files,
+            output,
+            &self.run.locations(),
+            self.run.checked.as_ref(),
+            self.summary,
+            self.cheating.taints(),
+        );
+    }
+
     /// `verify` が成功か（表示する項目に failed / unknown がなく、Verus が成功し、紛れ込んだ前提がない）。
     pub fn success(&self, shown: &[ItemStatus]) -> bool {
         self.run.success

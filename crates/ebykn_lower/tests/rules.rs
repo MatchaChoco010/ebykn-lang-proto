@@ -456,6 +456,9 @@ fn tests_are_external_and_listed() {
     let c = ebykn_check::check(&p);
     let out = lower(&p, &c).unwrap();
     assert_eq!(out.external, ["single::t"]);
+    // raw の綴りも同じ名前（#122）。
+    let src = "#[r#test]\nfn t() {}";
+    has(src, "#[verifier::external] #[r#test] fn t() {}");
 }
 
 #[test]
@@ -564,9 +567,18 @@ fn owned_regions_are_rebound_as_mut() {
     );
     has(
         &src,
-        "#[allow(unused_mut)] let tracked mut r = r; let (p, Tracked(__eyk_perm_p)) = Ptr::new",
+        "let tracked mut r = r; let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v });",
     );
     lacks(&src, "let tracked mut s");
+    // #102：移動で受けた権限も同じ。借りて受けた権限は束縛し直さない。
+    let src = format!(
+        "{PRE}fn g(p: Ptr<Node>, q: Ptr<Node>) uses p@, &mut q@ requires p@.is_init() {{ (*p).val = 1; (*q).val = 1; leak p@; }}"
+    );
+    has(
+        &src,
+        "let tracked mut __eyk_perm_p = __eyk_perm_p; p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1;",
+    );
+    lacks(&src, "let tracked mut __eyk_perm_q");
 }
 
 #[test]

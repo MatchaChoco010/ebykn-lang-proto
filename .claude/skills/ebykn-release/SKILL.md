@@ -303,7 +303,7 @@ EOF
 
 作者が `release` ブランチで動作を確かめるための orca のワークスペースを、今回のコミットまで進める。初めてリリースを切るときに作り、2 回目からは早送りする。ワークスペースの名前は `release`、表示名は `release（作者の確認用）` にする。
 
-この手順のコマンドは、まだ実際には動かしていない。`release` ブランチがまだないため。初回のリリースで動かしたら、下の「確かめたこと・確かめていないこと」と食い違いがないかを見て、違っていたらこの手順を直す PR を出す。
+この手順のコマンドは、最初のリリース（`report/2026-11-09.1`）で「調べる」「作る」「例を playground に写す」を通して動かした（下の「確かめたこと・確かめていないこと」）。「早送りする」は 2 回目のリリースで初めて動く。食い違いが見つかったら、この手順を直す PR を出す。
 
 orca の CLI は、失敗すると終了コード 1 で終わり、エラーの JSON を標準出力に出す。`set -e` の下でそのまま `> ファイル` にすると、理由を出さずに止まるので、どの呼び出しも `if ! "$orca" … > ファイル; then … cat ファイル; exit 1; fi` で包み、そのあとで `.ok` を確かめる。
 
@@ -474,11 +474,10 @@ EOF
 
 ### 確かめたこと・確かめていないこと
 
-`release` ブランチがまだないので、この手順は通しては動かしていない。
-
 - 手元で動かして確かめた：`worktree list --repo "path:<元のリポジトリ>" --json` が `.ok`、`.result.truncated`（切れていなければ `false`）、`.result.hostScope.omittedHostIds`（すべてのホストを調べたら空）を返すこと。orca が失敗すると終了コード 1 で終わること。`git worktree list --porcelain` を読む `awk`。
 - orca 本体のソースを読んで確かめた（PR #36 のレビュー）：`--branch release --base-branch origin/release` で、ローカルの `release` が番号なしで `origin/release` の位置に作られること。上流を orca が設定すること。同じコミットにあって取り出されていないローカルの `release` は使い回すこと。番号が付くのは、残っているディレクトリか、大文字小文字だけが違う名前とぶつかったときだけであること。エラーの JSON を標準出力に出すこと。
-- まだ確かめていない：`worktree create --json` の結果で、パスが `.result.worktree.path` にあること（`worktree show --json` と `worktree current --json` の形から推した）。
+- 最初のリリースで動かして確かめた：「調べる」で `release-ws.json` が `[]`、`release-git.txt` が空になり、「作る」に進むこと。`worktree create --json` の結果で、パスが `.result.worktree.path` にあること（`/home/orito/orca/workspaces/ebykn-lang-proto/release`）。作ったワークスペースが番号なしの `release` を取り出し、上流が `origin/release`、HEAD が `$sha` であること。`create` の直後の表示名は `release` で、`worktree set --display-name` のあとに一覧で `release（作者の確認用）` になること。`cargo xtask playground` のあとも `git status --porcelain --untracked-files=all` が空であること（`playground/` は無視される）。
+- まだ確かめていない：「早送りする」（2 回目のリリースで初めて動く）。
 
 ## 8. release → main の PR
 
@@ -497,7 +496,7 @@ EOF
 
 本文とコメントを書き、`yomiyasu:yomiyasu` スキルの `--doc-type pr` で推敲する（lint → 書き直し → `run --final <ファイル> --doc-type pr` → `verify`）。verify を通した最終稿を変えずに使う。
 
-本文（PR がなければ新しく書き、あれば今の本文 `gh pr view <PR 番号> --json body --jq .body` を元に直す）：
+本文（PR がなければ新しく書き、あれば今の本文 `gh pr view <PR 番号> --json body --jq .body` を元に直す）。PR がなければ番号はまだ決まっていないので、「マージのしかた」のコマンドの `<PR 番号>` は、PR を作ったあとで番号に書き換え、yomiyasu の `run` と `verify` をやり直してから `gh pr edit` する（最初のリリースでそうした）：
 
 ```markdown
 `release` を `main` に入れる PR です。作者が報告スライドで確かめてから、マージコミットでマージします。squash や rebase はしません。

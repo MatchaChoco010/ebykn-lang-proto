@@ -194,7 +194,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | --- | --- |
 | `cargo xtask precommit` | `cargo fmt --check` と全ゲート。pre-commit フックが呼ぶ。速く保つ |
 | `cargo xtask ci` | `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、全ゲート。PR の前に通す |
-| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` / `check-examples` |
+| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` / `check-examples` / `check-attr-names` |
 | `cargo xtask verus-install` | 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）を `~/.cache/ebykn/verus/<版>/` に入れ、sha256 を確かめ、Verus が要求する toolchain を rustup で入れる |
 | `cargo xtask verus-verify` | `ebykn_prelude` と §6.2 の参照モデル（`formal/linearity`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする。参照モデルは、定理（`xtask/src/verus.rs` の `REQUIRED`）が検証されたことを名前で確かめる |
 | `cargo xtask golden-verify` | golden の各ケース（`tests/golden/*/expected/status.txt` のあるもの）に `ebykn verify` をかけて期待と比べ、書き出した `build/verus/` を Verus なしの cargo と `ebykn build` の両方でビルドし、成功を期待する（検証に失敗した項目があっても）。`expected/build-error.txt` のあるケースは、両方がその行を出して失敗することを期待する（`ebykn build` だけが止まるケースは `expected/ebykn-build-error.txt`）。続けて、Verus が要るので `#[ignore]` にしたテスト（`xtask/src/golden.rs` の `IGNORED`）を走らせる |

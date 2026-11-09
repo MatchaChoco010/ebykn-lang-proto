@@ -239,6 +239,39 @@ impl Run {
     }
 }
 
+/// 生成クレートの `cargo metadata --offline` の出力（Verus の実行で依存は取ってある）。依存クレートが
+/// コードで使われる名前（改名と `[lib] name` を反映した名前）を [`parse_extern_crate_names`] で読む。
+/// 走らなければ `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
+pub fn cargo_metadata(verus: &Verus, build: &Path) -> Option<String> {
+    let out = Command::new("cargo")
+        .current_dir(build)
+        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+        .args(["metadata", "--format-version", "1", "--offline"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `cargo metadata` の JSON から、根のパッケージの依存の名前（`resolve.nodes[根].deps[].name`）を読む。
+pub fn parse_extern_crate_names(json: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let resolve = v.get("resolve")?;
+    let root = resolve.get("root")?.as_str()?;
+    let node = resolve
+        .get("nodes")?
+        .as_array()?
+        .iter()
+        .find(|n| n.get("id").and_then(|i| i.as_str()) == Some(root))?;
+    node.get("deps")?
+        .as_array()?
+        .iter()
+        .map(|d| d.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .collect()
+}
+
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let path = std::env::join_paths(std::iter::once(verus.dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -485,8 +518,25 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStatus {
     pub item: String,
-    /// [`decide`] の結果。
+    /// [`decide`] の結果。手続きマクロが付いた項目は `macro`（[`ItemStatus::via`]）。
     pub status: &'static str,
+    /// `status` が `macro` のとき、付いているマクロ（#49）。
+    pub via: Option<(ebykn_syntax::macros::MacroKind, String)>,
+}
+
+impl ItemStatus {
+    /// 一覧の 1 行の本体（`verified k::f`、`macro serde::Serialize derive on k::Foo`）。
+    pub fn line(&self) -> String {
+        match &self.via {
+            Some((ebykn_syntax::macros::MacroKind::Derive, p)) => {
+                format!("{} {p} derive on {}", self.status, self.item)
+            }
+            Some((ebykn_syntax::macros::MacroKind::Attribute, p)) => {
+                format!("{} {p} on {}", self.status, self.item)
+            }
+            None => format!("{} {}", self.status, self.item),
+        }
+    }
 }
 
 /// 一つの項目の事実。
@@ -620,6 +670,16 @@ pub fn statuses(
             out.push(ItemStatus {
                 item: item.clone(),
                 status: decide(facts),
+                via: None,
+            });
+        }
+        // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（`verus!` の外の項目に
+        // なる）。証明なしの前提として、同じ一覧に必ず出す（#49）。
+        for m in output.macros.iter().filter(|m| m.rel == f.rel) {
+            out.push(ItemStatus {
+                item: m.item.clone(),
+                status: "macro",
+                via: Some((m.kind, m.path.clone())),
             });
         }
     }
@@ -634,9 +694,9 @@ pub fn verus_name(item: &str) -> String {
     }
 }
 
-/// 証明なしの前提（`admit` / `unchecked` / `external`）か。
+/// 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）か。
 pub fn assumed(s: &ItemStatus) -> bool {
-    matches!(s.status, "admit" | "unchecked" | "external")
+    matches!(s.status, "admit" | "unchecked" | "external" | "macro")
 }
 
 /// `verify item..` で出す項目：指定した項目（パスかその末尾）と、証明なしの前提の全部（絞り込みに
@@ -668,7 +728,18 @@ pub fn status_json(
 ) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
-        .map(|i| serde_json::json!({"item": i.item, "status": i.status}))
+        .map(|i| match &i.via {
+            Some((kind, path)) => serde_json::json!({
+                "item": i.item,
+                "status": i.status,
+                "macro": path,
+                "kind": match kind {
+                    ebykn_syntax::macros::MacroKind::Derive => "derive",
+                    ebykn_syntax::macros::MacroKind::Attribute => "attribute",
+                },
+            }),
+            None => serde_json::json!({"item": i.item, "status": i.status}),
+        })
         .collect();
     let results = match summary {
         Summary::Ran { verified, errors } => {
@@ -711,7 +782,8 @@ pub fn status_json(
 pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) -> String {
     let mut s = String::new();
     for i in items {
-        s.push_str(&format!("{} {}\n", i.status, i.item));
+        s.push_str(&i.line());
+        s.push('\n');
     }
     match cheating {
         Cheating::Smuggled(v) => {
@@ -777,6 +849,7 @@ mod tests {
         let st = |item: &str, status: &'static str| ItemStatus {
             item: item.into(),
             status,
+            via: None,
         };
         let all = vec![
             st("g1::liar", "unchecked"),
@@ -891,6 +964,7 @@ mod tests {
             unchecked: vec![],
             external: vec![],
             verus_patterns: Default::default(),
+            macros: vec![],
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()
@@ -965,6 +1039,90 @@ mod tests {
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
         );
+    }
+
+    /// `cargo metadata` の `resolve` から、根のパッケージの依存がコードで使われる名前を読む（#49）。
+    #[test]
+    fn reads_extern_crate_names_from_cargo_metadata() {
+        let json = r#"{"packages":[],"resolve":{"root":"path+file:///b#k@0.1.0","nodes":[
+            {"id":"path+file:///i#innocent@0.1.0","deps":[]},
+            {"id":"path+file:///b#k@0.1.0","deps":[
+                {"name":"clippy","pkg":"path+file:///i#innocent@0.1.0"},
+                {"name":"vstd","pkg":"registry+x#vstd@0.0.0"}]}]}}"#;
+        assert_eq!(
+            parse_extern_crate_names(json),
+            Some(vec!["clippy".to_string(), "vstd".to_string()])
+        );
+        // 根がない・読めないときは名前を決めない。
+        assert_eq!(parse_extern_crate_names(r#"{"resolve":null}"#), None);
+        assert_eq!(parse_extern_crate_names("not json"), None);
+        assert_eq!(
+            parse_extern_crate_names(
+                r#"{"resolve":{"root":"a","nodes":[{"id":"a","deps":[{"pkg":"x"}]}]}}"#
+            ),
+            None
+        );
+    }
+
+    /// 依存クレートの derive と属性マクロが付いた項目は、`macro` の前提として必ず出る（#49）。
+    #[test]
+    fn macro_uses_are_listed_as_assumptions() {
+        use ebykn_syntax::macros::MacroKind;
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![(1, 2, "k5::f".into()), (3, 4, "k5::one".into())],
+        }];
+        let mac = |item: &str, kind, path: &str| ebykn_lower::MacroUse {
+            item: item.into(),
+            kind,
+            path: path.into(),
+            rel: "src/lib.rs".into(),
+        };
+        let output = Output {
+            files: files.clone(),
+            macros: vec![
+                mac("k5::Foo", MacroKind::Derive, "serde::Serialize"),
+                mac("k5::one", MacroKind::Attribute, "tokio::main"),
+            ],
+            ..Default::default()
+        };
+        let ran2 = Summary::Ran {
+            verified: 2,
+            errors: 0,
+        };
+        let checked: std::collections::BTreeSet<String> =
+            ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
+        let st = statuses(&files, &output, &[], Some(&checked), ran2, false);
+        assert_eq!(
+            status_text(&st, ran2, &Cheating::Clean),
+            "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
+        );
+        // 前提なので、項目を絞っても出る。
+        let shown = select(&st, &["f"]).unwrap();
+        let lines: Vec<String> = shown.iter().map(ItemStatus::line).collect();
+        assert_eq!(
+            lines,
+            [
+                "verified k5::f",
+                "macro serde::Serialize derive on k5::Foo",
+                "macro tokio::main on k5::one"
+            ]
+        );
+        let json = status_json(&shown, ran2, &Cheating::Clean, true);
+        assert!(
+            json.contains(
+                r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
+            ),
+            "{json}"
+        );
+        // 記録がなければ出ない（壊す操作が当たったことを確かめる）。
+        let none = Output {
+            macros: vec![],
+            ..output.clone()
+        };
+        let st = statuses(&files, &none, &[], Some(&checked), ran2, false);
+        assert!(st.iter().all(|s| s.status != "macro"));
     }
 
     /// PR #76 のレビューの B1：主な span が呼ばれる側の署名にあるエラー（`callee may open invariants that

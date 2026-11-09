@@ -90,6 +90,11 @@ fn accepts_enums_that_are_not_zero_sized() {
         "#[repr(C)]\npub enum M { A }",
         "#[cfg_attr(feature = \"x\", repr(u8))]\npub enum M { A }",
         "pub enum M { #[cfg(test)] A, B }",
+        // raw の綴りも同じ名前（#122）。
+        "#[r#repr(u8)]\npub enum M { A }",
+        "#[cfg_attr(feature = \"x\", r#repr(u8))]\npub enum M { A }",
+        "#[r#cfg_attr(feature = \"x\", repr(u8))]\npub enum M { A }",
+        "pub enum M { #[r#cfg(test)] A, B }",
     ] {
         accepts(&format!(
             "{def}\npub fn f(p: Ptr<M>) uses p@ {{ leak p@; }}"
