@@ -275,6 +275,23 @@ pub open spec fn exit_ok(e: Env, gives: Option<usize>) -> bool {
     }
 }
 
+/// 出口（`return`・`?`・本体の末尾）の規則の違反のコード。`Owned` が `gives` の名前のほかに残れば
+/// E0505、`gives` の名前が `Owned` でなければ E0504（#63）。
+pub open spec fn exit_err(e: Env, gives: Option<usize>) -> Option<Code> {
+    if !exit_ok(e, gives) {
+        Some(Code::E0505)
+    } else {
+        match gives {
+            Some(g) => if get(e, g as nat) is Owned {
+                None
+            } else {
+                Some(Code::E0504)
+            },
+            None => None,
+        }
+    }
+}
+
 // ---- 実行できる版 ----
 
 pub fn ex_copy(e: &Env) -> (r: Env)
@@ -429,6 +446,28 @@ pub fn ex_exit_ok(e: &Env, gives: Option<usize>) -> (r: bool)
     match gives {
         None => ex_no_owned(e),
         Some(g) => ex_no_owned(&ex_set(e, g, Slot::Absent)),
+    }
+}
+
+/// [`exit_err`]。`gives_owned` が偽なら（壊した検査 `no-gives-owned`）`gives` の名前を見ない。
+pub fn ex_exit_err(e: &Env, gives: Option<usize>, gives_owned: bool) -> (r: Option<Code>)
+    ensures
+        gives_owned ==> r == exit_err(*e, gives),
+{
+    if !ex_exit_ok(e, gives) {
+        Some(Code::E0505)
+    } else {
+        match gives {
+            Some(g) => match ex_get(e, g) {
+                Slot::Owned => None,
+                _ => if gives_owned {
+                    Some(Code::E0504)
+                } else {
+                    None
+                },
+            },
+            None => None,
+        }
     }
 }
 

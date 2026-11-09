@@ -57363,7 +57363,7 @@ fn c06581(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 
 // p=- { let p }
 fn c06582(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { iflet {} else {} }
@@ -57422,7 +57422,7 @@ fn c06590(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { new p; let p }
 fn c06591(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let p = Ptr::new(0);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { new p; iflet {} else {} }
@@ -57483,7 +57483,7 @@ fn c06599(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { take p; let p }
 fn c06600(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     take r[p];
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { take p; iflet {} else {} }
@@ -57544,7 +57544,7 @@ fn c06608(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { free p; let p }
 fn c06609(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     p.free();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { free p; iflet {} else {} }
@@ -57605,7 +57605,7 @@ fn c06617(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { inspect p; let p }
 fn c06618(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     inspect(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { inspect p; iflet {} else {} }
@@ -57666,7 +57666,7 @@ fn c06626(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { update p; let p }
 fn c06627(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     update(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { update p; iflet {} else {} }
@@ -57727,7 +57727,7 @@ fn c06635(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { write p; let p }
 fn c06636(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     *p = 1;
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { write p; iflet {} else {} }
@@ -57788,7 +57788,7 @@ fn c06644(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { assign p; let p }
 fn c06645(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     p = other();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { assign p; iflet {} else {} }
@@ -57855,7 +57855,7 @@ fn c06653(p: Ptr<u32>) -> Option<()> uses r: &mut Region<Ptr<u32>> {
 // p=- { ?; let p }
 fn c06654(p: Ptr<u32>) -> Option<()> uses r: &mut Region<Ptr<u32>> {
     fallible()?;
-    let p = other();
+    let p: Ptr<u32> = other();
     Some(())
 }
 
@@ -57980,7 +57980,7 @@ fn c06672(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { empty p; let p }
 fn c06673(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let p = Ptr::empty();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { empty p; while {} }
@@ -58144,7 +58144,7 @@ fn c06697(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { cell p; let p }
 fn c06698(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let p = Cell::new(0);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { cell p; while {} }
@@ -58308,7 +58308,7 @@ fn c06722(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { make p; let p }
 fn c06723(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let p = make();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { make p; while {} }
@@ -58472,7 +58472,7 @@ fn c06747(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { put p; let p }
 fn c06748(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     put r[p];
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { put p; while {} }
@@ -58636,7 +58636,7 @@ fn c06772(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { move p; let p }
 fn c06773(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     consume(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { move p; while {} }
@@ -58800,7 +58800,7 @@ fn c06797(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { leak p; let p }
 fn c06798(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     leak p@;
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { leak p; while {} }
@@ -58866,152 +58866,152 @@ fn c06806(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 
 // p=- { let p; new p }
 fn c06807(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Ptr::new(0);
 }
 
 // p=- { let p; take p }
 fn c06808(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     take r[p];
 }
 
 // p=- { let p; free p }
 fn c06809(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     p.free();
 }
 
 // p=- { let p; inspect p }
 fn c06810(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     inspect(p);
 }
 
 // p=- { let p; update p }
 fn c06811(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     update(p);
 }
 
 // p=- { let p; write p }
 fn c06812(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     *p = 1;
 }
 
 // p=- { let p; assign p }
 fn c06813(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     p = other();
 }
 
 // p=- { let p; return }
 fn c06814(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     return;
 }
 
 // p=- { let p; ? }
 fn c06815(p: Ptr<u32>) -> Option<()> uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     fallible()?;
     Some(())
 }
 
 // p=- { let p; panic }
 fn c06816(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     panic!();
 }
 
 // p=- { let p; empty p }
 fn c06817(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Ptr::empty();
 }
 
 // p=- { let p; cell p }
 fn c06818(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Cell::new(0);
 }
 
 // p=- { let p; make p }
 fn c06819(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = make();
 }
 
 // p=- { let p; put p }
 fn c06820(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     put r[p];
 }
 
 // p=- { let p; move p }
 fn c06821(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     consume(p);
 }
 
 // p=- { let p; leak p }
 fn c06822(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     leak p@;
 }
 
 // p=- { let p; let p }
 fn c06823(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
-    let p = other();
+    let p: Ptr<u32> = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { let p; while {} }
 fn c06824(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     while cond() {
     }
 }
 
 // p=- { let p; loop {} }
 fn c06825(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     loop {
     }
 }
 
 // p=- { let p; borrow p {} }
 fn c06826(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     borrow r[p] {
     }
 }
 
 // p=- { let p; borrow mut p {} }
 fn c06827(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     borrow mut r[p] {
     }
 }
 
 // p=- { let p; closure {} }
 fn c06828(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let f = || {
     };
 }
 
 // p=- { let p; if {} else {} }
 fn c06829(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     if cond() {
     }
 }
 
 // p=- { let p; iflet {} else {} }
 fn c06830(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     if let Some(_) = maybe() {
     } else {
     }
@@ -59019,7 +59019,7 @@ fn c06830(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 
 // p=- { let p; match {} {} }
 fn c06831(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     match pick() {
         0 => {
         }
@@ -59074,7 +59074,7 @@ fn c06837(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c06838(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     while cond() {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { while {}; iflet {} else {} }
@@ -59144,7 +59144,7 @@ fn c06846(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c06847(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     borrow r[p] {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { borrow p {}; iflet {} else {} }
@@ -59214,7 +59214,7 @@ fn c06855(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c06856(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     borrow mut r[p] {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { borrow mut p {}; iflet {} else {} }
@@ -59284,7 +59284,7 @@ fn c06864(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c06865(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let f = || {
     };
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { closure {}; iflet {} else {} }
@@ -59354,7 +59354,7 @@ fn c06873(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c06874(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if cond() {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { if {} else {}; iflet {} else {} }
@@ -59512,7 +59512,7 @@ fn c06893(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
     } else {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { iflet {} else {}; while {} }
@@ -59777,7 +59777,7 @@ fn c06918(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
         _ => {
         }
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=- { match {} {}; while {} }
@@ -60094,35 +60094,35 @@ fn c06956(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { while { let p } }
 fn c06957(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     while cond() {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=- { loop { let p } }
 fn c06958(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     loop {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=- { borrow p { let p } }
 fn c06959(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     borrow r[p] {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=- { borrow mut p { let p } }
 fn c06960(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     borrow mut r[p] {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=- { closure { let p } }
 fn c06961(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     let f = || {
-        let p = other();
+        let p: Ptr<u32> = other();
     };
 }
 
@@ -60589,7 +60589,7 @@ fn c07009(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c07010(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if cond() {
     } else {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
@@ -60597,7 +60597,7 @@ fn c07010(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c07011(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
     } else {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
@@ -60607,7 +60607,7 @@ fn c07012(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
         0 => {
         }
         _ => {
-            let p = other();
+            let p: Ptr<u32> = other();
         }
     }
 }
@@ -61164,14 +61164,14 @@ fn c07068(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 // p=- { if { let p } else {} }
 fn c07069(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if cond() {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=- { iflet { let p } else {} }
 fn c07070(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
-        let p = other();
+        let p: Ptr<u32> = other();
     } else {
     }
 }
@@ -61180,7 +61180,7 @@ fn c07070(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
 fn c07071(p: Ptr<u32>) uses r: &mut Region<Ptr<u32>> {
     match pick() {
         0 => {
-            let p = other();
+            let p: Ptr<u32> = other();
         }
         _ => {
         }
@@ -61418,7 +61418,7 @@ fn c07095(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 
 // p=own { let p }
 fn c07096(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { iflet {} else {} }
@@ -61477,7 +61477,7 @@ fn c07104(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { new p; let p }
 fn c07105(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let p = Ptr::new(0);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { new p; iflet {} else {} }
@@ -61538,7 +61538,7 @@ fn c07113(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { take p; let p }
 fn c07114(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     take r[p];
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { take p; iflet {} else {} }
@@ -61599,7 +61599,7 @@ fn c07122(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { free p; let p }
 fn c07123(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     p.free();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { free p; iflet {} else {} }
@@ -61660,7 +61660,7 @@ fn c07131(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { inspect p; let p }
 fn c07132(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     inspect(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { inspect p; iflet {} else {} }
@@ -61721,7 +61721,7 @@ fn c07140(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { update p; let p }
 fn c07141(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     update(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { update p; iflet {} else {} }
@@ -61782,7 +61782,7 @@ fn c07149(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { write p; let p }
 fn c07150(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     *p = 1;
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { write p; iflet {} else {} }
@@ -61843,7 +61843,7 @@ fn c07158(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { assign p; let p }
 fn c07159(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     p = other();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { assign p; iflet {} else {} }
@@ -61910,7 +61910,7 @@ fn c07167(p: Ptr<u32>) -> Option<()> uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { ?; let p }
 fn c07168(p: Ptr<u32>) -> Option<()> uses p@, r: &mut Region<Ptr<u32>> {
     fallible()?;
-    let p = other();
+    let p: Ptr<u32> = other();
     Some(())
 }
 
@@ -62035,7 +62035,7 @@ fn c07186(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { empty p; let p }
 fn c07187(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let p = Ptr::empty();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { empty p; while {} }
@@ -62199,7 +62199,7 @@ fn c07211(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { cell p; let p }
 fn c07212(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let p = Cell::new(0);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { cell p; while {} }
@@ -62363,7 +62363,7 @@ fn c07236(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { make p; let p }
 fn c07237(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let p = make();
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { make p; while {} }
@@ -62527,7 +62527,7 @@ fn c07261(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { put p; let p }
 fn c07262(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     put r[p];
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { put p; while {} }
@@ -62691,7 +62691,7 @@ fn c07286(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { move p; let p }
 fn c07287(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     consume(p);
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { move p; while {} }
@@ -62855,7 +62855,7 @@ fn c07311(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { leak p; let p }
 fn c07312(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     leak p@;
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { leak p; while {} }
@@ -62921,152 +62921,152 @@ fn c07320(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 
 // p=own { let p; new p }
 fn c07321(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Ptr::new(0);
 }
 
 // p=own { let p; take p }
 fn c07322(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     take r[p];
 }
 
 // p=own { let p; free p }
 fn c07323(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     p.free();
 }
 
 // p=own { let p; inspect p }
 fn c07324(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     inspect(p);
 }
 
 // p=own { let p; update p }
 fn c07325(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     update(p);
 }
 
 // p=own { let p; write p }
 fn c07326(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     *p = 1;
 }
 
 // p=own { let p; assign p }
 fn c07327(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     p = other();
 }
 
 // p=own { let p; return }
 fn c07328(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     return;
 }
 
 // p=own { let p; ? }
 fn c07329(p: Ptr<u32>) -> Option<()> uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     fallible()?;
     Some(())
 }
 
 // p=own { let p; panic }
 fn c07330(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     panic!();
 }
 
 // p=own { let p; empty p }
 fn c07331(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Ptr::empty();
 }
 
 // p=own { let p; cell p }
 fn c07332(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = Cell::new(0);
 }
 
 // p=own { let p; make p }
 fn c07333(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let p = make();
 }
 
 // p=own { let p; put p }
 fn c07334(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     put r[p];
 }
 
 // p=own { let p; move p }
 fn c07335(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     consume(p);
 }
 
 // p=own { let p; leak p }
 fn c07336(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     leak p@;
 }
 
 // p=own { let p; let p }
 fn c07337(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
-    let p = other();
+    let p: Ptr<u32> = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { let p; while {} }
 fn c07338(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     while cond() {
     }
 }
 
 // p=own { let p; loop {} }
 fn c07339(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     loop {
     }
 }
 
 // p=own { let p; borrow p {} }
 fn c07340(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     borrow r[p] {
     }
 }
 
 // p=own { let p; borrow mut p {} }
 fn c07341(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     borrow mut r[p] {
     }
 }
 
 // p=own { let p; closure {} }
 fn c07342(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     let f = || {
     };
 }
 
 // p=own { let p; if {} else {} }
 fn c07343(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     if cond() {
     }
 }
 
 // p=own { let p; iflet {} else {} }
 fn c07344(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     if let Some(_) = maybe() {
     } else {
     }
@@ -63074,7 +63074,7 @@ fn c07344(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 
 // p=own { let p; match {} {} }
 fn c07345(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
-    let p = other();
+    let p: Ptr<u32> = other();
     match pick() {
         0 => {
         }
@@ -63129,7 +63129,7 @@ fn c07351(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07352(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     while cond() {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { while {}; iflet {} else {} }
@@ -63199,7 +63199,7 @@ fn c07360(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07361(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow r[p] {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { borrow p {}; iflet {} else {} }
@@ -63269,7 +63269,7 @@ fn c07369(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07370(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow mut r[p] {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { borrow mut p {}; iflet {} else {} }
@@ -63339,7 +63339,7 @@ fn c07378(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07379(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let f = || {
     };
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { closure {}; iflet {} else {} }
@@ -63409,7 +63409,7 @@ fn c07387(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07388(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if cond() {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { if {} else {}; iflet {} else {} }
@@ -63567,7 +63567,7 @@ fn c07407(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
     } else {
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { iflet {} else {}; while {} }
@@ -63832,7 +63832,7 @@ fn c07432(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
         _ => {
         }
     }
-    let p = other();
+    let p: Ptr<u32> = other();
 }
 
 // p=own { match {} {}; while {} }
@@ -64149,35 +64149,35 @@ fn c07470(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { while { let p } }
 fn c07471(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     while cond() {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=own { loop { let p } }
 fn c07472(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     loop {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=own { borrow p { let p } }
 fn c07473(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow r[p] {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=own { borrow mut p { let p } }
 fn c07474(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     borrow mut r[p] {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=own { closure { let p } }
 fn c07475(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     let f = || {
-        let p = other();
+        let p: Ptr<u32> = other();
     };
 }
 
@@ -64644,7 +64644,7 @@ fn c07523(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07524(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if cond() {
     } else {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
@@ -64652,7 +64652,7 @@ fn c07524(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07525(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
     } else {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
@@ -64662,7 +64662,7 @@ fn c07526(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
         0 => {
         }
         _ => {
-            let p = other();
+            let p: Ptr<u32> = other();
         }
     }
 }
@@ -65219,14 +65219,14 @@ fn c07582(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 // p=own { if { let p } else {} }
 fn c07583(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if cond() {
-        let p = other();
+        let p: Ptr<u32> = other();
     }
 }
 
 // p=own { iflet { let p } else {} }
 fn c07584(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     if let Some(_) = maybe() {
-        let p = other();
+        let p: Ptr<u32> = other();
     } else {
     }
 }
@@ -65235,7 +65235,7 @@ fn c07584(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
 fn c07585(p: Ptr<u32>) uses p@, r: &mut Region<Ptr<u32>> {
     match pick() {
         0 => {
-            let p = other();
+            let p: Ptr<u32> = other();
         }
         _ => {
         }

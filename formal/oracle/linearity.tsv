@@ -228,7 +228,7 @@ c00226	core	p=-	{ while { new p } }	E0511	end 1	1570	5
 c00227	core	p=-	{ loop { new p } }	E0511	end 1	1577	5
 c00228	core	p=-	{ borrow p { new p } }	E0507	at 2	1583	9
 c00229	core	p=-	{ borrow mut p { new p } }	E0507	at 2	1590	9
-c00230	core	p=-	{ closure { new p } }	E0505	end 1	1598	5
+c00230	core	p=-	{ closure { new p } }	E0512	at 2	1597	9
 c00231	core	p=-	{ while { take p } }	E0511	end 1	1605	5
 c00232	core	p=-	{ loop { take p } }	E0511	end 1	1612	5
 c00233	core	p=-	{ borrow p { take p } }	E0503	at 2	1618	9
@@ -1375,25 +1375,25 @@ c01373	core	p=&mut	{ if { borrow p {} } else {} }	E0503	at 2	9695	9
 c01374	core	p=&mut	{ if { borrow mut p {} } else {} }	E0503	at 2	9703	9
 c01375	core	p=&mut	{ if { closure {} } else {} }	ok	-	-	-
 c01376	core	p=&mut	{ if { if {} else {} } else {} }	ok	-	-	-
-c01377	core	p=- gives=p	{}	ok	-	-	-
+c01377	core	p=- gives=p	{}	E0504	end 0	9727	1
 c01378	core	p=- gives=p	{ new p }	ok	-	-	-
 c01379	core	p=- gives=p	{ take p }	ok	-	-	-
 c01380	core	p=- gives=p	{ free p }	E0504	at 1	9743	5
 c01381	core	p=- gives=p	{ inspect p }	E0504	at 1	9749	5
 c01382	core	p=- gives=p	{ update p }	E0504	at 1	9755	5
-c01383	core	p=- gives=p	{ write p }	ok	-	-	-
-c01384	core	p=- gives=p	{ assign p }	ok	-	-	-
-c01385	core	p=- gives=p	{ return }	ok	-	-	-
+c01383	core	p=- gives=p	{ write p }	E0504	end 0	9763	1
+c01384	core	p=- gives=p	{ assign p }	E0504	end 0	9769	1
+c01385	core	p=- gives=p	{ return }	E0504	at 1	9773	5
 c01386	core	p=- gives=p	{ panic }	ok	-	-	-
-c01387	core	p=- gives=p	{ while {} }	ok	-	-	-
+c01387	core	p=- gives=p	{ while {} }	E0504	end 0	9786	1
 c01388	core	p=- gives=p	{ loop {} }	ok	-	-	-
-c01389	core	p=- gives=p	{ borrow p {} }	ok	-	-	-
-c01390	core	p=- gives=p	{ borrow mut p {} }	ok	-	-	-
-c01391	core	p=- gives=p	{ closure {} }	ok	-	-	-
-c01392	core	p=- gives=p	{ if {} else {} }	ok	-	-	-
+c01389	core	p=- gives=p	{ borrow p {} }	E0504	end 0	9799	1
+c01390	core	p=- gives=p	{ borrow mut p {} }	E0504	end 0	9806	1
+c01391	core	p=- gives=p	{ closure {} }	E0504	end 0	9813	1
+c01392	core	p=- gives=p	{ if {} else {} }	E0504	end 0	9820	1
 c01393	core	p=- gives=p	{ new p; new p }	E0507	at 2	9825	5
 c01394	core	p=- gives=p	{ new p; take p }	E0503	at 2	9832	5
-c01395	core	p=- gives=p	{ new p; free p }	ok	-	-	-
+c01395	core	p=- gives=p	{ new p; free p }	E0504	end 0	9841	1
 c01396	core	p=- gives=p	{ new p; inspect p }	ok	-	-	-
 c01397	core	p=- gives=p	{ new p; update p }	ok	-	-	-
 c01398	core	p=- gives=p	{ new p; write p }	ok	-	-	-
@@ -1408,7 +1408,7 @@ c01406	core	p=- gives=p	{ new p; closure {} }	ok	-	-	-
 c01407	core	p=- gives=p	{ new p; if {} else {} }	ok	-	-	-
 c01408	core	p=- gives=p	{ take p; new p }	E0507	at 2	9933	5
 c01409	core	p=- gives=p	{ take p; take p }	E0503	at 2	9940	5
-c01410	core	p=- gives=p	{ take p; free p }	ok	-	-	-
+c01410	core	p=- gives=p	{ take p; free p }	E0504	end 0	9949	1
 c01411	core	p=- gives=p	{ take p; inspect p }	ok	-	-	-
 c01412	core	p=- gives=p	{ take p; update p }	ok	-	-	-
 c01413	core	p=- gives=p	{ take p; write p }	ok	-	-	-
@@ -1471,111 +1471,111 @@ c01469	core	p=- gives=p	{ write p; take p }	ok	-	-	-
 c01470	core	p=- gives=p	{ write p; free p }	E0504	at 2	10379	5
 c01471	core	p=- gives=p	{ write p; inspect p }	E0504	at 2	10386	5
 c01472	core	p=- gives=p	{ write p; update p }	E0504	at 2	10393	5
-c01473	core	p=- gives=p	{ write p; write p }	ok	-	-	-
-c01474	core	p=- gives=p	{ write p; assign p }	ok	-	-	-
-c01475	core	p=- gives=p	{ write p; return }	ok	-	-	-
+c01473	core	p=- gives=p	{ write p; write p }	E0504	end 0	10402	1
+c01474	core	p=- gives=p	{ write p; assign p }	E0504	end 0	10409	1
+c01475	core	p=- gives=p	{ write p; return }	E0504	at 2	10414	5
 c01476	core	p=- gives=p	{ write p; panic }	ok	-	-	-
-c01477	core	p=- gives=p	{ write p; while {} }	ok	-	-	-
+c01477	core	p=- gives=p	{ write p; while {} }	E0504	end 0	10429	1
 c01478	core	p=- gives=p	{ write p; loop {} }	ok	-	-	-
-c01479	core	p=- gives=p	{ write p; borrow p {} }	ok	-	-	-
-c01480	core	p=- gives=p	{ write p; borrow mut p {} }	ok	-	-	-
-c01481	core	p=- gives=p	{ write p; closure {} }	ok	-	-	-
-c01482	core	p=- gives=p	{ write p; if {} else {} }	ok	-	-	-
+c01479	core	p=- gives=p	{ write p; borrow p {} }	E0504	end 0	10444	1
+c01480	core	p=- gives=p	{ write p; borrow mut p {} }	E0504	end 0	10452	1
+c01481	core	p=- gives=p	{ write p; closure {} }	E0504	end 0	10460	1
+c01482	core	p=- gives=p	{ write p; if {} else {} }	E0504	end 0	10468	1
 c01483	core	p=- gives=p	{ assign p; new p }	ok	-	-	-
 c01484	core	p=- gives=p	{ assign p; take p }	ok	-	-	-
 c01485	core	p=- gives=p	{ assign p; free p }	E0504	at 2	10487	5
 c01486	core	p=- gives=p	{ assign p; inspect p }	E0504	at 2	10494	5
 c01487	core	p=- gives=p	{ assign p; update p }	E0504	at 2	10501	5
-c01488	core	p=- gives=p	{ assign p; write p }	ok	-	-	-
-c01489	core	p=- gives=p	{ assign p; assign p }	ok	-	-	-
-c01490	core	p=- gives=p	{ assign p; return }	ok	-	-	-
+c01488	core	p=- gives=p	{ assign p; write p }	E0504	end 0	10510	1
+c01489	core	p=- gives=p	{ assign p; assign p }	E0504	end 0	10517	1
+c01490	core	p=- gives=p	{ assign p; return }	E0504	at 2	10522	5
 c01491	core	p=- gives=p	{ assign p; panic }	ok	-	-	-
-c01492	core	p=- gives=p	{ assign p; while {} }	ok	-	-	-
+c01492	core	p=- gives=p	{ assign p; while {} }	E0504	end 0	10537	1
 c01493	core	p=- gives=p	{ assign p; loop {} }	ok	-	-	-
-c01494	core	p=- gives=p	{ assign p; borrow p {} }	ok	-	-	-
-c01495	core	p=- gives=p	{ assign p; borrow mut p {} }	ok	-	-	-
-c01496	core	p=- gives=p	{ assign p; closure {} }	ok	-	-	-
-c01497	core	p=- gives=p	{ assign p; if {} else {} }	ok	-	-	-
+c01494	core	p=- gives=p	{ assign p; borrow p {} }	E0504	end 0	10552	1
+c01495	core	p=- gives=p	{ assign p; borrow mut p {} }	E0504	end 0	10560	1
+c01496	core	p=- gives=p	{ assign p; closure {} }	E0504	end 0	10568	1
+c01497	core	p=- gives=p	{ assign p; if {} else {} }	E0504	end 0	10576	1
 c01498	core	p=- gives=p	{ while {}; new p }	ok	-	-	-
 c01499	core	p=- gives=p	{ while {}; take p }	ok	-	-	-
 c01500	core	p=- gives=p	{ while {}; free p }	E0504	at 2	10598	5
 c01501	core	p=- gives=p	{ while {}; inspect p }	E0504	at 2	10606	5
 c01502	core	p=- gives=p	{ while {}; update p }	E0504	at 2	10614	5
-c01503	core	p=- gives=p	{ while {}; write p }	ok	-	-	-
-c01504	core	p=- gives=p	{ while {}; assign p }	ok	-	-	-
-c01505	core	p=- gives=p	{ while {}; return }	ok	-	-	-
+c01503	core	p=- gives=p	{ while {}; write p }	E0504	end 0	10624	1
+c01504	core	p=- gives=p	{ while {}; assign p }	E0504	end 0	10632	1
+c01505	core	p=- gives=p	{ while {}; return }	E0504	at 2	10638	5
 c01506	core	p=- gives=p	{ while {}; panic }	ok	-	-	-
-c01507	core	p=- gives=p	{ while {}; while {} }	ok	-	-	-
+c01507	core	p=- gives=p	{ while {}; while {} }	E0504	end 0	10655	1
 c01508	core	p=- gives=p	{ while {}; loop {} }	ok	-	-	-
-c01509	core	p=- gives=p	{ while {}; borrow p {} }	ok	-	-	-
-c01510	core	p=- gives=p	{ while {}; borrow mut p {} }	ok	-	-	-
-c01511	core	p=- gives=p	{ while {}; closure {} }	ok	-	-	-
-c01512	core	p=- gives=p	{ while {}; if {} else {} }	ok	-	-	-
+c01509	core	p=- gives=p	{ while {}; borrow p {} }	E0504	end 0	10672	1
+c01510	core	p=- gives=p	{ while {}; borrow mut p {} }	E0504	end 0	10681	1
+c01511	core	p=- gives=p	{ while {}; closure {} }	E0504	end 0	10690	1
+c01512	core	p=- gives=p	{ while {}; if {} else {} }	E0504	end 0	10699	1
 c01513	core	p=- gives=p	{ borrow p {}; new p }	ok	-	-	-
 c01514	core	p=- gives=p	{ borrow p {}; take p }	ok	-	-	-
 c01515	core	p=- gives=p	{ borrow p {}; free p }	E0504	at 2	10721	5
 c01516	core	p=- gives=p	{ borrow p {}; inspect p }	E0504	at 2	10729	5
 c01517	core	p=- gives=p	{ borrow p {}; update p }	E0504	at 2	10737	5
-c01518	core	p=- gives=p	{ borrow p {}; write p }	ok	-	-	-
-c01519	core	p=- gives=p	{ borrow p {}; assign p }	ok	-	-	-
-c01520	core	p=- gives=p	{ borrow p {}; return }	ok	-	-	-
+c01518	core	p=- gives=p	{ borrow p {}; write p }	E0504	end 0	10747	1
+c01519	core	p=- gives=p	{ borrow p {}; assign p }	E0504	end 0	10755	1
+c01520	core	p=- gives=p	{ borrow p {}; return }	E0504	at 2	10761	5
 c01521	core	p=- gives=p	{ borrow p {}; panic }	ok	-	-	-
-c01522	core	p=- gives=p	{ borrow p {}; while {} }	ok	-	-	-
+c01522	core	p=- gives=p	{ borrow p {}; while {} }	E0504	end 0	10778	1
 c01523	core	p=- gives=p	{ borrow p {}; loop {} }	ok	-	-	-
-c01524	core	p=- gives=p	{ borrow p {}; borrow p {} }	ok	-	-	-
-c01525	core	p=- gives=p	{ borrow p {}; borrow mut p {} }	ok	-	-	-
-c01526	core	p=- gives=p	{ borrow p {}; closure {} }	ok	-	-	-
-c01527	core	p=- gives=p	{ borrow p {}; if {} else {} }	ok	-	-	-
+c01524	core	p=- gives=p	{ borrow p {}; borrow p {} }	E0504	end 0	10795	1
+c01525	core	p=- gives=p	{ borrow p {}; borrow mut p {} }	E0504	end 0	10804	1
+c01526	core	p=- gives=p	{ borrow p {}; closure {} }	E0504	end 0	10813	1
+c01527	core	p=- gives=p	{ borrow p {}; if {} else {} }	E0504	end 0	10822	1
 c01528	core	p=- gives=p	{ borrow mut p {}; new p }	ok	-	-	-
 c01529	core	p=- gives=p	{ borrow mut p {}; take p }	ok	-	-	-
 c01530	core	p=- gives=p	{ borrow mut p {}; free p }	E0504	at 2	10844	5
 c01531	core	p=- gives=p	{ borrow mut p {}; inspect p }	E0504	at 2	10852	5
 c01532	core	p=- gives=p	{ borrow mut p {}; update p }	E0504	at 2	10860	5
-c01533	core	p=- gives=p	{ borrow mut p {}; write p }	ok	-	-	-
-c01534	core	p=- gives=p	{ borrow mut p {}; assign p }	ok	-	-	-
-c01535	core	p=- gives=p	{ borrow mut p {}; return }	ok	-	-	-
+c01533	core	p=- gives=p	{ borrow mut p {}; write p }	E0504	end 0	10870	1
+c01534	core	p=- gives=p	{ borrow mut p {}; assign p }	E0504	end 0	10878	1
+c01535	core	p=- gives=p	{ borrow mut p {}; return }	E0504	at 2	10884	5
 c01536	core	p=- gives=p	{ borrow mut p {}; panic }	ok	-	-	-
-c01537	core	p=- gives=p	{ borrow mut p {}; while {} }	ok	-	-	-
+c01537	core	p=- gives=p	{ borrow mut p {}; while {} }	E0504	end 0	10901	1
 c01538	core	p=- gives=p	{ borrow mut p {}; loop {} }	ok	-	-	-
-c01539	core	p=- gives=p	{ borrow mut p {}; borrow p {} }	ok	-	-	-
-c01540	core	p=- gives=p	{ borrow mut p {}; borrow mut p {} }	ok	-	-	-
-c01541	core	p=- gives=p	{ borrow mut p {}; closure {} }	ok	-	-	-
-c01542	core	p=- gives=p	{ borrow mut p {}; if {} else {} }	ok	-	-	-
+c01539	core	p=- gives=p	{ borrow mut p {}; borrow p {} }	E0504	end 0	10918	1
+c01540	core	p=- gives=p	{ borrow mut p {}; borrow mut p {} }	E0504	end 0	10927	1
+c01541	core	p=- gives=p	{ borrow mut p {}; closure {} }	E0504	end 0	10936	1
+c01542	core	p=- gives=p	{ borrow mut p {}; if {} else {} }	E0504	end 0	10945	1
 c01543	core	p=- gives=p	{ closure {}; new p }	ok	-	-	-
 c01544	core	p=- gives=p	{ closure {}; take p }	ok	-	-	-
 c01545	core	p=- gives=p	{ closure {}; free p }	E0504	at 2	10967	5
 c01546	core	p=- gives=p	{ closure {}; inspect p }	E0504	at 2	10975	5
 c01547	core	p=- gives=p	{ closure {}; update p }	E0504	at 2	10983	5
-c01548	core	p=- gives=p	{ closure {}; write p }	ok	-	-	-
-c01549	core	p=- gives=p	{ closure {}; assign p }	ok	-	-	-
-c01550	core	p=- gives=p	{ closure {}; return }	ok	-	-	-
+c01548	core	p=- gives=p	{ closure {}; write p }	E0504	end 0	10993	1
+c01549	core	p=- gives=p	{ closure {}; assign p }	E0504	end 0	11001	1
+c01550	core	p=- gives=p	{ closure {}; return }	E0504	at 2	11007	5
 c01551	core	p=- gives=p	{ closure {}; panic }	ok	-	-	-
-c01552	core	p=- gives=p	{ closure {}; while {} }	ok	-	-	-
+c01552	core	p=- gives=p	{ closure {}; while {} }	E0504	end 0	11024	1
 c01553	core	p=- gives=p	{ closure {}; loop {} }	ok	-	-	-
-c01554	core	p=- gives=p	{ closure {}; borrow p {} }	ok	-	-	-
-c01555	core	p=- gives=p	{ closure {}; borrow mut p {} }	ok	-	-	-
-c01556	core	p=- gives=p	{ closure {}; closure {} }	ok	-	-	-
-c01557	core	p=- gives=p	{ closure {}; if {} else {} }	ok	-	-	-
+c01554	core	p=- gives=p	{ closure {}; borrow p {} }	E0504	end 0	11041	1
+c01555	core	p=- gives=p	{ closure {}; borrow mut p {} }	E0504	end 0	11050	1
+c01556	core	p=- gives=p	{ closure {}; closure {} }	E0504	end 0	11059	1
+c01557	core	p=- gives=p	{ closure {}; if {} else {} }	E0504	end 0	11068	1
 c01558	core	p=- gives=p	{ if {} else {}; new p }	ok	-	-	-
 c01559	core	p=- gives=p	{ if {} else {}; take p }	ok	-	-	-
 c01560	core	p=- gives=p	{ if {} else {}; free p }	E0504	at 2	11090	5
 c01561	core	p=- gives=p	{ if {} else {}; inspect p }	E0504	at 2	11098	5
 c01562	core	p=- gives=p	{ if {} else {}; update p }	E0504	at 2	11106	5
-c01563	core	p=- gives=p	{ if {} else {}; write p }	ok	-	-	-
-c01564	core	p=- gives=p	{ if {} else {}; assign p }	ok	-	-	-
-c01565	core	p=- gives=p	{ if {} else {}; return }	ok	-	-	-
+c01563	core	p=- gives=p	{ if {} else {}; write p }	E0504	end 0	11116	1
+c01564	core	p=- gives=p	{ if {} else {}; assign p }	E0504	end 0	11124	1
+c01565	core	p=- gives=p	{ if {} else {}; return }	E0504	at 2	11130	5
 c01566	core	p=- gives=p	{ if {} else {}; panic }	ok	-	-	-
-c01567	core	p=- gives=p	{ if {} else {}; while {} }	ok	-	-	-
+c01567	core	p=- gives=p	{ if {} else {}; while {} }	E0504	end 0	11147	1
 c01568	core	p=- gives=p	{ if {} else {}; loop {} }	ok	-	-	-
-c01569	core	p=- gives=p	{ if {} else {}; borrow p {} }	ok	-	-	-
-c01570	core	p=- gives=p	{ if {} else {}; borrow mut p {} }	ok	-	-	-
-c01571	core	p=- gives=p	{ if {} else {}; closure {} }	ok	-	-	-
-c01572	core	p=- gives=p	{ if {} else {}; if {} else {} }	ok	-	-	-
+c01569	core	p=- gives=p	{ if {} else {}; borrow p {} }	E0504	end 0	11164	1
+c01570	core	p=- gives=p	{ if {} else {}; borrow mut p {} }	E0504	end 0	11173	1
+c01571	core	p=- gives=p	{ if {} else {}; closure {} }	E0504	end 0	11182	1
+c01572	core	p=- gives=p	{ if {} else {}; if {} else {} }	E0504	end 0	11191	1
 c01573	core	p=- gives=p	{ while { new p } }	E0511	end 1	11197	5
 c01574	core	p=- gives=p	{ loop { new p } }	E0511	end 1	11205	5
 c01575	core	p=- gives=p	{ borrow p { new p } }	E0507	at 2	11211	9
 c01576	core	p=- gives=p	{ borrow mut p { new p } }	E0507	at 2	11219	9
-c01577	core	p=- gives=p	{ closure { new p } }	E0505	end 1	11228	5
+c01577	core	p=- gives=p	{ closure { new p } }	E0512	at 2	11227	9
 c01578	core	p=- gives=p	{ while { take p } }	E0511	end 1	11236	5
 c01579	core	p=- gives=p	{ loop { take p } }	E0511	end 1	11244	5
 c01580	core	p=- gives=p	{ borrow p { take p } }	E0503	at 2	11250	9
@@ -1588,102 +1588,102 @@ c01586	core	p=- gives=p	{ borrow mut p { free p } }	E0509	at 2	11297	9
 c01587	core	p=- gives=p	{ closure { free p } }	E0504	at 2	11305	9
 c01588	core	p=- gives=p	{ while { inspect p } }	E0504	at 2	11313	9
 c01589	core	p=- gives=p	{ loop { inspect p } }	E0504	at 2	11321	9
-c01590	core	p=- gives=p	{ borrow p { inspect p } }	ok	-	-	-
-c01591	core	p=- gives=p	{ borrow mut p { inspect p } }	ok	-	-	-
+c01590	core	p=- gives=p	{ borrow p { inspect p } }	E0504	end 0	11331	1
+c01591	core	p=- gives=p	{ borrow mut p { inspect p } }	E0504	end 0	11339	1
 c01592	core	p=- gives=p	{ closure { inspect p } }	E0504	at 2	11344	9
 c01593	core	p=- gives=p	{ while { update p } }	E0504	at 2	11352	9
 c01594	core	p=- gives=p	{ loop { update p } }	E0504	at 2	11360	9
 c01595	core	p=- gives=p	{ borrow p { update p } }	E0508	at 2	11367	9
-c01596	core	p=- gives=p	{ borrow mut p { update p } }	ok	-	-	-
+c01596	core	p=- gives=p	{ borrow mut p { update p } }	E0504	end 0	11378	1
 c01597	core	p=- gives=p	{ closure { update p } }	E0504	at 2	11383	9
-c01598	core	p=- gives=p	{ while { write p } }	ok	-	-	-
+c01598	core	p=- gives=p	{ while { write p } }	E0504	end 0	11394	1
 c01599	core	p=- gives=p	{ loop { write p } }	ok	-	-	-
 c01600	core	p=- gives=p	{ borrow p { write p } }	E0508	at 2	11406	9
-c01601	core	p=- gives=p	{ borrow mut p { write p } }	ok	-	-	-
-c01602	core	p=- gives=p	{ closure { write p } }	ok	-	-	-
-c01603	core	p=- gives=p	{ while { assign p } }	ok	-	-	-
+c01601	core	p=- gives=p	{ borrow mut p { write p } }	E0504	end 0	11417	1
+c01602	core	p=- gives=p	{ closure { write p } }	E0504	end 0	11425	1
+c01603	core	p=- gives=p	{ while { assign p } }	E0504	end 0	11433	1
 c01604	core	p=- gives=p	{ loop { assign p } }	ok	-	-	-
 c01605	core	p=- gives=p	{ borrow p { assign p } }	E0506	at 2	11445	9
 c01606	core	p=- gives=p	{ borrow mut p { assign p } }	E0506	at 2	11453	9
-c01607	core	p=- gives=p	{ closure { assign p } }	ok	-	-	-
-c01608	core	p=- gives=p	{ while { return } }	ok	-	-	-
-c01609	core	p=- gives=p	{ loop { return } }	ok	-	-	-
-c01610	core	p=- gives=p	{ borrow p { return } }	ok	-	-	-
-c01611	core	p=- gives=p	{ borrow mut p { return } }	ok	-	-	-
-c01612	core	p=- gives=p	{ closure { return } }	ok	-	-	-
-c01613	core	p=- gives=p	{ letelse { return } }	ok	-	-	-
-c01614	core	p=- gives=p	{ closure { ? } }	ok	-	-	-
-c01615	core	p=- gives=p	{ while { panic } }	ok	-	-	-
+c01607	core	p=- gives=p	{ closure { assign p } }	E0504	end 0	11464	1
+c01608	core	p=- gives=p	{ while { return } }	E0504	at 2	11469	9
+c01609	core	p=- gives=p	{ loop { return } }	E0504	at 2	11477	9
+c01610	core	p=- gives=p	{ borrow p { return } }	E0504	at 2	11484	9
+c01611	core	p=- gives=p	{ borrow mut p { return } }	E0504	at 2	11491	9
+c01612	core	p=- gives=p	{ closure { return } }	E0504	end 0	11501	1
+c01613	core	p=- gives=p	{ letelse { return } }	E0504	at 2	11506	9
+c01614	core	p=- gives=p	{ closure { ? } }	E0504	end 0	11518	1
+c01615	core	p=- gives=p	{ while { panic } }	E0504	end 0	11526	1
 c01616	core	p=- gives=p	{ loop { panic } }	ok	-	-	-
 c01617	core	p=- gives=p	{ borrow p { panic } }	ok	-	-	-
 c01618	core	p=- gives=p	{ borrow mut p { panic } }	ok	-	-	-
-c01619	core	p=- gives=p	{ closure { panic } }	ok	-	-	-
-c01620	core	p=- gives=p	{ letelse { panic } }	ok	-	-	-
-c01621	core	p=- gives=p	{ while { break } }	ok	-	-	-
-c01622	core	p=- gives=p	{ loop { break } }	ok	-	-	-
-c01623	core	p=- gives=p	{ while { continue } }	ok	-	-	-
+c01619	core	p=- gives=p	{ closure { panic } }	E0504	end 0	11555	1
+c01620	core	p=- gives=p	{ letelse { panic } }	E0504	end 0	11563	1
+c01621	core	p=- gives=p	{ while { break } }	E0504	end 0	11571	1
+c01622	core	p=- gives=p	{ loop { break } }	E0504	end 0	11579	1
+c01623	core	p=- gives=p	{ while { continue } }	E0504	end 0	11587	1
 c01624	core	p=- gives=p	{ loop { continue } }	ok	-	-	-
-c01625	core	p=- gives=p	{ while { while {} } }	ok	-	-	-
+c01625	core	p=- gives=p	{ while { while {} } }	E0504	end 0	11603	1
 c01626	core	p=- gives=p	{ loop { while {} } }	ok	-	-	-
-c01627	core	p=- gives=p	{ borrow p { while {} } }	ok	-	-	-
-c01628	core	p=- gives=p	{ borrow mut p { while {} } }	ok	-	-	-
-c01629	core	p=- gives=p	{ closure { while {} } }	ok	-	-	-
-c01630	core	p=- gives=p	{ while { loop {} } }	ok	-	-	-
+c01627	core	p=- gives=p	{ borrow p { while {} } }	E0504	end 0	11620	1
+c01628	core	p=- gives=p	{ borrow mut p { while {} } }	E0504	end 0	11629	1
+c01629	core	p=- gives=p	{ closure { while {} } }	E0504	end 0	11638	1
+c01630	core	p=- gives=p	{ while { loop {} } }	E0504	end 0	11647	1
 c01631	core	p=- gives=p	{ loop { loop {} } }	ok	-	-	-
 c01632	core	p=- gives=p	{ borrow p { loop {} } }	ok	-	-	-
 c01633	core	p=- gives=p	{ borrow mut p { loop {} } }	ok	-	-	-
-c01634	core	p=- gives=p	{ closure { loop {} } }	ok	-	-	-
-c01635	core	p=- gives=p	{ letelse { loop {} } }	ok	-	-	-
-c01636	core	p=- gives=p	{ while { borrow p {} } }	ok	-	-	-
+c01634	core	p=- gives=p	{ closure { loop {} } }	E0504	end 0	11680	1
+c01635	core	p=- gives=p	{ letelse { loop {} } }	E0504	end 0	11689	1
+c01636	core	p=- gives=p	{ while { borrow p {} } }	E0504	end 0	11698	1
 c01637	core	p=- gives=p	{ loop { borrow p {} } }	ok	-	-	-
 c01638	core	p=- gives=p	{ borrow p { borrow p {} } }	E0503	at 2	11711	9
 c01639	core	p=- gives=p	{ borrow mut p { borrow p {} } }	E0503	at 2	11720	9
 c01640	core	p=- gives=p	{ closure { borrow p {} } }	E0512	at 2	11729	9
-c01641	core	p=- gives=p	{ while { borrow mut p {} } }	ok	-	-	-
+c01641	core	p=- gives=p	{ while { borrow mut p {} } }	E0504	end 0	11742	1
 c01642	core	p=- gives=p	{ loop { borrow mut p {} } }	ok	-	-	-
 c01643	core	p=- gives=p	{ borrow p { borrow mut p {} } }	E0503	at 2	11755	9
 c01644	core	p=- gives=p	{ borrow mut p { borrow mut p {} } }	E0503	at 2	11764	9
 c01645	core	p=- gives=p	{ closure { borrow mut p {} } }	E0512	at 2	11773	9
-c01646	core	p=- gives=p	{ while { closure {} } }	ok	-	-	-
+c01646	core	p=- gives=p	{ while { closure {} } }	E0504	end 0	11786	1
 c01647	core	p=- gives=p	{ loop { closure {} } }	ok	-	-	-
-c01648	core	p=- gives=p	{ borrow p { closure {} } }	ok	-	-	-
-c01649	core	p=- gives=p	{ borrow mut p { closure {} } }	ok	-	-	-
-c01650	core	p=- gives=p	{ closure { closure {} } }	ok	-	-	-
-c01651	core	p=- gives=p	{ while { if {} else {} } }	ok	-	-	-
+c01648	core	p=- gives=p	{ borrow p { closure {} } }	E0504	end 0	11803	1
+c01649	core	p=- gives=p	{ borrow mut p { closure {} } }	E0504	end 0	11812	1
+c01650	core	p=- gives=p	{ closure { closure {} } }	E0504	end 0	11821	1
+c01651	core	p=- gives=p	{ while { if {} else {} } }	E0504	end 0	11830	1
 c01652	core	p=- gives=p	{ loop { if {} else {} } }	ok	-	-	-
-c01653	core	p=- gives=p	{ borrow p { if {} else {} } }	ok	-	-	-
-c01654	core	p=- gives=p	{ borrow mut p { if {} else {} } }	ok	-	-	-
-c01655	core	p=- gives=p	{ closure { if {} else {} } }	ok	-	-	-
+c01653	core	p=- gives=p	{ borrow p { if {} else {} } }	E0504	end 0	11847	1
+c01654	core	p=- gives=p	{ borrow mut p { if {} else {} } }	E0504	end 0	11856	1
+c01655	core	p=- gives=p	{ closure { if {} else {} } }	E0504	end 0	11865	1
 c01656	core	p=- gives=p	{ if {} else { new p } }	E0510	end 1	11872	5
 c01657	core	p=- gives=p	{ if {} else { take p } }	E0510	end 1	11881	5
 c01658	core	p=- gives=p	{ if {} else { free p } }	E0504	at 2	11889	9
 c01659	core	p=- gives=p	{ if {} else { inspect p } }	E0504	at 2	11898	9
 c01660	core	p=- gives=p	{ if {} else { update p } }	E0504	at 2	11907	9
-c01661	core	p=- gives=p	{ if {} else { write p } }	ok	-	-	-
-c01662	core	p=- gives=p	{ if {} else { assign p } }	ok	-	-	-
-c01663	core	p=- gives=p	{ if {} else { return } }	ok	-	-	-
-c01664	core	p=- gives=p	{ if {} else { panic } }	ok	-	-	-
-c01665	core	p=- gives=p	{ if {} else { while {} } }	ok	-	-	-
-c01666	core	p=- gives=p	{ if {} else { loop {} } }	ok	-	-	-
-c01667	core	p=- gives=p	{ if {} else { borrow p {} } }	ok	-	-	-
-c01668	core	p=- gives=p	{ if {} else { borrow mut p {} } }	ok	-	-	-
-c01669	core	p=- gives=p	{ if {} else { closure {} } }	ok	-	-	-
-c01670	core	p=- gives=p	{ if {} else { if {} else {} } }	ok	-	-	-
+c01661	core	p=- gives=p	{ if {} else { write p } }	E0504	end 0	11919	1
+c01662	core	p=- gives=p	{ if {} else { assign p } }	E0504	end 0	11928	1
+c01663	core	p=- gives=p	{ if {} else { return } }	E0504	at 2	11934	9
+c01664	core	p=- gives=p	{ if {} else { panic } }	E0504	end 0	11946	1
+c01665	core	p=- gives=p	{ if {} else { while {} } }	E0504	end 0	11956	1
+c01666	core	p=- gives=p	{ if {} else { loop {} } }	E0504	end 0	11966	1
+c01667	core	p=- gives=p	{ if {} else { borrow p {} } }	E0504	end 0	11976	1
+c01668	core	p=- gives=p	{ if {} else { borrow mut p {} } }	E0504	end 0	11986	1
+c01669	core	p=- gives=p	{ if {} else { closure {} } }	E0504	end 0	11996	1
+c01670	core	p=- gives=p	{ if {} else { if {} else {} } }	E0504	end 0	12006	1
 c01671	core	p=- gives=p	{ if { new p } else {} }	E0510	end 1	12012	5
 c01672	core	p=- gives=p	{ if { take p } else {} }	E0510	end 1	12020	5
 c01673	core	p=- gives=p	{ if { free p } else {} }	E0504	at 2	12027	9
 c01674	core	p=- gives=p	{ if { inspect p } else {} }	E0504	at 2	12035	9
 c01675	core	p=- gives=p	{ if { update p } else {} }	E0504	at 2	12043	9
-c01676	core	p=- gives=p	{ if { write p } else {} }	ok	-	-	-
-c01677	core	p=- gives=p	{ if { assign p } else {} }	ok	-	-	-
-c01678	core	p=- gives=p	{ if { return } else {} }	ok	-	-	-
-c01679	core	p=- gives=p	{ if { panic } else {} }	ok	-	-	-
-c01680	core	p=- gives=p	{ if { while {} } else {} }	ok	-	-	-
-c01681	core	p=- gives=p	{ if { loop {} } else {} }	ok	-	-	-
-c01682	core	p=- gives=p	{ if { borrow p {} } else {} }	ok	-	-	-
-c01683	core	p=- gives=p	{ if { borrow mut p {} } else {} }	ok	-	-	-
-c01684	core	p=- gives=p	{ if { closure {} } else {} }	ok	-	-	-
-c01685	core	p=- gives=p	{ if { if {} else {} } else {} }	ok	-	-	-
+c01676	core	p=- gives=p	{ if { write p } else {} }	E0504	end 0	12054	1
+c01677	core	p=- gives=p	{ if { assign p } else {} }	E0504	end 0	12062	1
+c01678	core	p=- gives=p	{ if { return } else {} }	E0504	at 2	12067	9
+c01679	core	p=- gives=p	{ if { panic } else {} }	E0504	end 0	12078	1
+c01680	core	p=- gives=p	{ if { while {} } else {} }	E0504	end 0	12087	1
+c01681	core	p=- gives=p	{ if { loop {} } else {} }	E0504	end 0	12096	1
+c01682	core	p=- gives=p	{ if { borrow p {} } else {} }	E0504	end 0	12105	1
+c01683	core	p=- gives=p	{ if { borrow mut p {} } else {} }	E0504	end 0	12114	1
+c01684	core	p=- gives=p	{ if { closure {} } else {} }	E0504	end 0	12123	1
+c01685	core	p=- gives=p	{ if { if {} else {} } else {} }	E0504	end 0	12132	1
 c01686	deep	p=-	{ new p; new p; while {} }	E0507	at 2	12137	5
 c01687	deep	p=-	{ new p; new p; loop {} }	E0507	at 2	12145	5
 c01688	deep	p=-	{ new p; new p; borrow mut p {} }	E0507	at 2	12153	5
@@ -2123,7 +2123,7 @@ c02121	deep	p=-	{ while {}; if {} else {}; if {} else {} }	ok	-	-	-
 c02122	deep	p=-	{ while {}; while { new p } }	E0511	end 2	15886	5
 c02123	deep	p=-	{ while {}; loop { new p } }	E0511	end 2	15895	5
 c02124	deep	p=-	{ while {}; borrow mut p { new p } }	E0507	at 3	15903	9
-c02125	deep	p=-	{ while {}; closure { new p } }	E0505	end 2	15913	5
+c02125	deep	p=-	{ while {}; closure { new p } }	E0512	at 3	15912	9
 c02126	deep	p=-	{ while {}; while { free p } }	E0504	at 3	15921	9
 c02127	deep	p=-	{ while {}; loop { free p } }	E0504	at 3	15930	9
 c02128	deep	p=-	{ while {}; borrow mut p { free p } }	E0509	at 3	15939	9
@@ -2260,7 +2260,7 @@ c02258	deep	p=-	{ borrow mut p {}; if {} else {}; if {} else {} }	ok	-	-	-
 c02259	deep	p=-	{ borrow mut p {}; while { new p } }	E0511	end 2	17165	5
 c02260	deep	p=-	{ borrow mut p {}; loop { new p } }	E0511	end 2	17174	5
 c02261	deep	p=-	{ borrow mut p {}; borrow mut p { new p } }	E0507	at 3	17182	9
-c02262	deep	p=-	{ borrow mut p {}; closure { new p } }	E0505	end 2	17192	5
+c02262	deep	p=-	{ borrow mut p {}; closure { new p } }	E0512	at 3	17191	9
 c02263	deep	p=-	{ borrow mut p {}; while { free p } }	E0504	at 3	17200	9
 c02264	deep	p=-	{ borrow mut p {}; loop { free p } }	E0504	at 3	17209	9
 c02265	deep	p=-	{ borrow mut p {}; borrow mut p { free p } }	E0509	at 3	17218	9
@@ -2397,7 +2397,7 @@ c02395	deep	p=-	{ closure {}; if {} else {}; if {} else {} }	ok	-	-	-
 c02396	deep	p=-	{ closure {}; while { new p } }	E0511	end 2	18444	5
 c02397	deep	p=-	{ closure {}; loop { new p } }	E0511	end 2	18453	5
 c02398	deep	p=-	{ closure {}; borrow mut p { new p } }	E0507	at 3	18461	9
-c02399	deep	p=-	{ closure {}; closure { new p } }	E0505	end 2	18471	5
+c02399	deep	p=-	{ closure {}; closure { new p } }	E0512	at 3	18470	9
 c02400	deep	p=-	{ closure {}; while { free p } }	E0504	at 3	18479	9
 c02401	deep	p=-	{ closure {}; loop { free p } }	E0504	at 3	18488	9
 c02402	deep	p=-	{ closure {}; borrow mut p { free p } }	E0509	at 3	18497	9
@@ -2534,7 +2534,7 @@ c02532	deep	p=-	{ if {} else {}; if {} else {}; if {} else {} }	ok	-	-	-
 c02533	deep	p=-	{ if {} else {}; while { new p } }	E0511	end 2	19723	5
 c02534	deep	p=-	{ if {} else {}; loop { new p } }	E0511	end 2	19732	5
 c02535	deep	p=-	{ if {} else {}; borrow mut p { new p } }	E0507	at 3	19740	9
-c02536	deep	p=-	{ if {} else {}; closure { new p } }	E0505	end 2	19750	5
+c02536	deep	p=-	{ if {} else {}; closure { new p } }	E0512	at 3	19749	9
 c02537	deep	p=-	{ if {} else {}; while { free p } }	E0504	at 3	19758	9
 c02538	deep	p=-	{ if {} else {}; loop { free p } }	E0504	at 3	19767	9
 c02539	deep	p=-	{ if {} else {}; borrow mut p { free p } }	E0509	at 3	19776	9
@@ -2618,16 +2618,16 @@ c02616	deep	p=-	{ borrow mut p { new p }; loop {} }	E0507	at 2	20498	9
 c02617	deep	p=-	{ borrow mut p { new p }; borrow mut p {} }	E0507	at 2	20507	9
 c02618	deep	p=-	{ borrow mut p { new p }; closure {} }	E0507	at 2	20516	9
 c02619	deep	p=-	{ borrow mut p { new p }; if {} else {} }	E0507	at 2	20525	9
-c02620	deep	p=-	{ closure { new p }; new p }	E0505	end 1	20535	5
-c02621	deep	p=-	{ closure { new p }; free p }	E0505	end 1	20543	5
-c02622	deep	p=-	{ closure { new p }; update p }	E0505	end 1	20551	5
-c02623	deep	p=-	{ closure { new p }; return }	E0505	end 1	20559	5
-c02624	deep	p=-	{ closure { new p }; panic }	E0505	end 1	20567	5
-c02625	deep	p=-	{ closure { new p }; while {} }	E0505	end 1	20575	5
-c02626	deep	p=-	{ closure { new p }; loop {} }	E0505	end 1	20584	5
-c02627	deep	p=-	{ closure { new p }; borrow mut p {} }	E0505	end 1	20593	5
-c02628	deep	p=-	{ closure { new p }; closure {} }	E0505	end 1	20602	5
-c02629	deep	p=-	{ closure { new p }; if {} else {} }	E0505	end 1	20611	5
+c02620	deep	p=-	{ closure { new p }; new p }	E0512	at 2	20534	9
+c02621	deep	p=-	{ closure { new p }; free p }	E0512	at 2	20542	9
+c02622	deep	p=-	{ closure { new p }; update p }	E0512	at 2	20550	9
+c02623	deep	p=-	{ closure { new p }; return }	E0512	at 2	20558	9
+c02624	deep	p=-	{ closure { new p }; panic }	E0512	at 2	20566	9
+c02625	deep	p=-	{ closure { new p }; while {} }	E0512	at 2	20574	9
+c02626	deep	p=-	{ closure { new p }; loop {} }	E0512	at 2	20583	9
+c02627	deep	p=-	{ closure { new p }; borrow mut p {} }	E0512	at 2	20592	9
+c02628	deep	p=-	{ closure { new p }; closure {} }	E0512	at 2	20601	9
+c02629	deep	p=-	{ closure { new p }; if {} else {} }	E0512	at 2	20610	9
 c02630	deep	p=-	{ while { free p }; new p }	E0504	at 2	20619	9
 c02631	deep	p=-	{ while { free p }; free p }	E0504	at 2	20627	9
 c02632	deep	p=-	{ while { free p }; update p }	E0504	at 2	20635	9
@@ -3131,24 +3131,24 @@ c03129	deep	p=-	{ if { if {} else {} } else {}; if {} else {} }	ok	-	-	-
 c03130	deep	p=-	{ while { new p; new p } }	E0507	at 3	25220	9
 c03131	deep	p=-	{ loop { new p; new p } }	E0507	at 3	25228	9
 c03132	deep	p=-	{ borrow mut p { new p; new p } }	E0507	at 2	25235	9
-c03133	deep	p=-	{ closure { new p; new p } }	E0507	at 3	25244	9
+c03133	deep	p=-	{ closure { new p; new p } }	E0512	at 2	25243	9
 c03134	deep	p=-	{ while { new p; free p } }	ok	-	-	-
 c03135	deep	p=-	{ loop { new p; free p } }	ok	-	-	-
 c03136	deep	p=-	{ borrow mut p { new p; free p } }	E0507	at 2	25267	9
-c03137	deep	p=-	{ closure { new p; free p } }	ok	-	-	-
+c03137	deep	p=-	{ closure { new p; free p } }	E0512	at 2	25275	9
 c03138	deep	p=-	{ while { new p; update p } }	E0511	end 1	25285	5
 c03139	deep	p=-	{ loop { new p; update p } }	E0511	end 1	25293	5
 c03140	deep	p=-	{ borrow mut p { new p; update p } }	E0507	at 2	25299	9
-c03141	deep	p=-	{ closure { new p; update p } }	E0505	end 1	25309	5
+c03141	deep	p=-	{ closure { new p; update p } }	E0512	at 2	25307	9
 c03142	deep	p=-	{ while { new p; return } }	E0505	at 3	25316	9
 c03143	deep	p=-	{ loop { new p; return } }	E0505	at 3	25324	9
 c03144	deep	p=-	{ borrow mut p { new p; return } }	E0507	at 2	25331	9
-c03145	deep	p=-	{ closure { new p; return } }	E0505	at 3	25340	9
+c03145	deep	p=-	{ closure { new p; return } }	E0512	at 2	25339	9
 c03146	deep	p=-	{ letelse { new p; return } }	E0505	at 3	25348	9
 c03147	deep	p=-	{ while { new p; panic } }	ok	-	-	-
 c03148	deep	p=-	{ loop { new p; panic } }	ok	-	-	-
 c03149	deep	p=-	{ borrow mut p { new p; panic } }	E0507	at 2	25371	9
-c03150	deep	p=-	{ closure { new p; panic } }	ok	-	-	-
+c03150	deep	p=-	{ closure { new p; panic } }	E0512	at 2	25379	9
 c03151	deep	p=-	{ letelse { new p; panic } }	ok	-	-	-
 c03152	deep	p=-	{ while { new p; break } }	E0511	at 3	25396	9
 c03153	deep	p=-	{ loop { new p; break } }	E0505	end 0	25406	1
@@ -3157,24 +3157,24 @@ c03155	deep	p=-	{ loop { new p; continue } }	E0511	at 3	25420	9
 c03156	deep	p=-	{ while { new p; while {} } }	E0511	end 1	25430	5
 c03157	deep	p=-	{ loop { new p; while {} } }	E0511	end 1	25439	5
 c03158	deep	p=-	{ borrow mut p { new p; while {} } }	E0507	at 2	25445	9
-c03159	deep	p=-	{ closure { new p; while {} } }	E0505	end 1	25457	5
+c03159	deep	p=-	{ closure { new p; while {} } }	E0512	at 2	25454	9
 c03160	deep	p=-	{ while { new p; loop {} } }	ok	-	-	-
 c03161	deep	p=-	{ loop { new p; loop {} } }	ok	-	-	-
 c03162	deep	p=-	{ borrow mut p { new p; loop {} } }	E0507	at 2	25481	9
-c03163	deep	p=-	{ closure { new p; loop {} } }	ok	-	-	-
+c03163	deep	p=-	{ closure { new p; loop {} } }	E0512	at 2	25490	9
 c03164	deep	p=-	{ letelse { new p; loop {} } }	ok	-	-	-
 c03165	deep	p=-	{ while { new p; borrow mut p {} } }	E0503	at 3	25509	9
 c03166	deep	p=-	{ loop { new p; borrow mut p {} } }	E0503	at 3	25518	9
 c03167	deep	p=-	{ borrow mut p { new p; borrow mut p {} } }	E0507	at 2	25526	9
-c03168	deep	p=-	{ closure { new p; borrow mut p {} } }	E0512	at 3	25536	9
+c03168	deep	p=-	{ closure { new p; borrow mut p {} } }	E0512	at 2	25535	9
 c03169	deep	p=-	{ while { new p; closure {} } }	E0511	end 1	25547	5
 c03170	deep	p=-	{ loop { new p; closure {} } }	E0511	end 1	25556	5
 c03171	deep	p=-	{ borrow mut p { new p; closure {} } }	E0507	at 2	25562	9
-c03172	deep	p=-	{ closure { new p; closure {} } }	E0505	end 1	25574	5
+c03172	deep	p=-	{ closure { new p; closure {} } }	E0512	at 2	25571	9
 c03173	deep	p=-	{ while { new p; if {} else {} } }	E0511	end 1	25583	5
 c03174	deep	p=-	{ loop { new p; if {} else {} } }	E0511	end 1	25592	5
 c03175	deep	p=-	{ borrow mut p { new p; if {} else {} } }	E0507	at 2	25598	9
-c03176	deep	p=-	{ closure { new p; if {} else {} } }	E0505	end 1	25610	5
+c03176	deep	p=-	{ closure { new p; if {} else {} } }	E0512	at 2	25607	9
 c03177	deep	p=-	{ while { free p; new p } }	E0504	at 2	25616	9
 c03178	deep	p=-	{ loop { free p; new p } }	E0504	at 2	25624	9
 c03179	deep	p=-	{ borrow mut p { free p; new p } }	E0509	at 2	25632	9
@@ -3272,7 +3272,7 @@ c03270	deep	p=-	{ closure { update p; if {} else {} } }	E0504	at 2	26401	9
 c03271	deep	p=-	{ while { while {}; new p } }	E0511	end 1	26413	5
 c03272	deep	p=-	{ loop { while {}; new p } }	E0511	end 1	26422	5
 c03273	deep	p=-	{ borrow mut p { while {}; new p } }	E0507	at 3	26430	9
-c03274	deep	p=-	{ closure { while {}; new p } }	E0505	end 1	26440	5
+c03274	deep	p=-	{ closure { while {}; new p } }	E0512	at 3	26439	9
 c03275	deep	p=-	{ while { while {}; free p } }	E0504	at 3	26448	9
 c03276	deep	p=-	{ loop { while {}; free p } }	E0504	at 3	26457	9
 c03277	deep	p=-	{ borrow mut p { while {}; free p } }	E0509	at 3	26466	9
@@ -3366,7 +3366,7 @@ c03364	deep	p=-	{ closure { borrow mut p {}; if {} else {} } }	E0512	at 2	27288	
 c03365	deep	p=-	{ while { closure {}; new p } }	E0511	end 1	27301	5
 c03366	deep	p=-	{ loop { closure {}; new p } }	E0511	end 1	27310	5
 c03367	deep	p=-	{ borrow mut p { closure {}; new p } }	E0507	at 3	27318	9
-c03368	deep	p=-	{ closure { closure {}; new p } }	E0505	end 1	27328	5
+c03368	deep	p=-	{ closure { closure {}; new p } }	E0512	at 3	27327	9
 c03369	deep	p=-	{ while { closure {}; free p } }	E0504	at 3	27336	9
 c03370	deep	p=-	{ loop { closure {}; free p } }	E0504	at 3	27345	9
 c03371	deep	p=-	{ borrow mut p { closure {}; free p } }	E0509	at 3	27354	9
@@ -3413,7 +3413,7 @@ c03411	deep	p=-	{ closure { closure {}; if {} else {} } }	ok	-	-	-
 c03412	deep	p=-	{ while { if {} else {}; new p } }	E0511	end 1	27745	5
 c03413	deep	p=-	{ loop { if {} else {}; new p } }	E0511	end 1	27754	5
 c03414	deep	p=-	{ borrow mut p { if {} else {}; new p } }	E0507	at 3	27762	9
-c03415	deep	p=-	{ closure { if {} else {}; new p } }	E0505	end 1	27772	5
+c03415	deep	p=-	{ closure { if {} else {}; new p } }	E0512	at 3	27771	9
 c03416	deep	p=-	{ while { if {} else {}; free p } }	E0504	at 3	27780	9
 c03417	deep	p=-	{ loop { if {} else {}; free p } }	E0504	at 3	27789	9
 c03418	deep	p=-	{ borrow mut p { if {} else {}; free p } }	E0509	at 3	27798	9
@@ -3460,20 +3460,20 @@ c03458	deep	p=-	{ closure { if {} else {}; if {} else {} } }	ok	-	-	-
 c03459	deep	p=-	{ while { while { new p } } }	E0511	end 2	28188	9
 c03460	deep	p=-	{ loop { while { new p } } }	E0511	end 2	28197	9
 c03461	deep	p=-	{ borrow mut p { while { new p } } }	E0507	at 3	28205	13
-c03462	deep	p=-	{ closure { while { new p } } }	E0511	end 2	28215	9
+c03462	deep	p=-	{ closure { while { new p } } }	E0512	at 3	28214	13
 c03463	deep	p=-	{ while { loop { new p } } }	E0511	end 2	28224	9
 c03464	deep	p=-	{ loop { loop { new p } } }	E0511	end 2	28233	9
 c03465	deep	p=-	{ borrow mut p { loop { new p } } }	E0507	at 3	28241	13
-c03466	deep	p=-	{ closure { loop { new p } } }	E0511	end 2	28251	9
+c03466	deep	p=-	{ closure { loop { new p } } }	E0512	at 3	28250	13
 c03467	deep	p=-	{ letelse { loop { new p } } }	E0511	end 2	28260	9
 c03468	deep	p=-	{ while { borrow mut p { new p } } }	E0507	at 3	28268	13
 c03469	deep	p=-	{ loop { borrow mut p { new p } } }	E0507	at 3	28277	13
 c03470	deep	p=-	{ borrow mut p { borrow mut p { new p } } }	E0503	at 2	28285	9
 c03471	deep	p=-	{ closure { borrow mut p { new p } } }	E0512	at 2	28294	9
-c03472	deep	p=-	{ while { closure { new p } } }	E0505	end 2	28305	9
-c03473	deep	p=-	{ loop { closure { new p } } }	E0505	end 2	28314	9
+c03472	deep	p=-	{ while { closure { new p } } }	E0512	at 3	28304	13
+c03473	deep	p=-	{ loop { closure { new p } } }	E0512	at 3	28313	13
 c03474	deep	p=-	{ borrow mut p { closure { new p } } }	E0512	at 3	28322	13
-c03475	deep	p=-	{ closure { closure { new p } } }	E0505	end 2	28332	9
+c03475	deep	p=-	{ closure { closure { new p } } }	E0512	at 3	28331	13
 c03476	deep	p=-	{ while { while { free p } } }	E0504	at 3	28340	13
 c03477	deep	p=-	{ loop { while { free p } } }	E0504	at 3	28349	13
 c03478	deep	p=-	{ borrow mut p { while { free p } } }	E0509	at 3	28358	13
@@ -3670,7 +3670,7 @@ c03668	deep	p=-	{ closure { closure { if {} else {} } } }	ok	-	-	-
 c03669	deep	p=-	{ while { if {} else { new p } } }	E0510	end 2	30169	9
 c03670	deep	p=-	{ loop { if {} else { new p } } }	E0510	end 2	30179	9
 c03671	deep	p=-	{ borrow mut p { if {} else { new p } } }	E0507	at 3	30188	13
-c03672	deep	p=-	{ closure { if {} else { new p } } }	E0510	end 2	30199	9
+c03672	deep	p=-	{ closure { if {} else { new p } } }	E0512	at 3	30198	13
 c03673	deep	p=-	{ while { if {} else { free p } } }	E0504	at 3	30208	13
 c03674	deep	p=-	{ loop { if {} else { free p } } }	E0504	at 3	30218	13
 c03675	deep	p=-	{ borrow mut p { if {} else { free p } } }	E0509	at 3	30228	13
@@ -3714,7 +3714,7 @@ c03712	deep	p=-	{ closure { if {} else { if {} else {} } } }	ok	-	-	-
 c03713	deep	p=-	{ while { if { new p } else {} } }	E0510	end 2	30628	9
 c03714	deep	p=-	{ loop { if { new p } else {} } }	E0510	end 2	30637	9
 c03715	deep	p=-	{ borrow mut p { if { new p } else {} } }	E0507	at 3	30645	13
-c03716	deep	p=-	{ closure { if { new p } else {} } }	E0510	end 2	30655	9
+c03716	deep	p=-	{ closure { if { new p } else {} } }	E0512	at 3	30654	13
 c03717	deep	p=-	{ while { if { free p } else {} } }	E0504	at 3	30663	13
 c03718	deep	p=-	{ loop { if { free p } else {} } }	E0504	at 3	30672	13
 c03719	deep	p=-	{ borrow mut p { if { free p } else {} } }	E0509	at 3	30681	13
@@ -3828,7 +3828,7 @@ c03826	deep	p=-	{ if {} else { if {} else {}; if {} else {} } }	ok	-	-	-
 c03827	deep	p=-	{ if {} else { while { new p } } }	E0511	end 2	31750	9
 c03828	deep	p=-	{ if {} else { loop { new p } } }	E0511	end 2	31760	9
 c03829	deep	p=-	{ if {} else { borrow mut p { new p } } }	E0507	at 3	31769	13
-c03830	deep	p=-	{ if {} else { closure { new p } } }	E0505	end 2	31780	9
+c03830	deep	p=-	{ if {} else { closure { new p } } }	E0512	at 3	31779	13
 c03831	deep	p=-	{ if {} else { while { free p } } }	E0504	at 3	31789	13
 c03832	deep	p=-	{ if {} else { loop { free p } } }	E0504	at 3	31799	13
 c03833	deep	p=-	{ if {} else { borrow mut p { free p } } }	E0509	at 3	31809	13
@@ -4065,7 +4065,7 @@ c04063	deep	p=-	{ if { if {} else {}; if {} else {} } else {} }	ok	-	-	-
 c04064	deep	p=-	{ if { while { new p } } else {} }	E0511	end 2	34095	9
 c04065	deep	p=-	{ if { loop { new p } } else {} }	E0511	end 2	34104	9
 c04066	deep	p=-	{ if { borrow mut p { new p } } else {} }	E0507	at 3	34112	13
-c04067	deep	p=-	{ if { closure { new p } } else {} }	E0505	end 2	34122	9
+c04067	deep	p=-	{ if { closure { new p } } else {} }	E0512	at 3	34121	13
 c04068	deep	p=-	{ if { while { free p } } else {} }	E0504	at 3	34130	13
 c04069	deep	p=-	{ if { loop { free p } } else {} }	E0504	at 3	34139	13
 c04070	deep	p=-	{ if { borrow mut p { free p } } else {} }	E0509	at 3	34148	13
@@ -4309,7 +4309,7 @@ c04307	deep	p=own	{ free p; if {} else {}; if {} else {} }	ok	-	-	-
 c04308	deep	p=own	{ free p; while { new p } }	E0511	end 2	36236	5
 c04309	deep	p=own	{ free p; loop { new p } }	E0511	end 2	36244	5
 c04310	deep	p=own	{ free p; borrow mut p { new p } }	E0507	at 3	36251	9
-c04311	deep	p=own	{ free p; closure { new p } }	E0505	end 2	36260	5
+c04311	deep	p=own	{ free p; closure { new p } }	E0512	at 3	36259	9
 c04312	deep	p=own	{ free p; while { free p } }	E0504	at 3	36267	9
 c04313	deep	p=own	{ free p; loop { free p } }	E0504	at 3	36275	9
 c04314	deep	p=own	{ free p; borrow mut p { free p } }	E0509	at 3	36283	9
@@ -6929,17 +6929,17 @@ c06927	forms	p=-	{ while { empty p } }	E0511	end 1	59888	5
 c06928	forms	p=-	{ loop { empty p } }	E0511	end 1	59895	5
 c06929	forms	p=-	{ borrow p { empty p } }	E0507	at 2	59901	9
 c06930	forms	p=-	{ borrow mut p { empty p } }	E0507	at 2	59908	9
-c06931	forms	p=-	{ closure { empty p } }	E0505	end 1	59916	5
+c06931	forms	p=-	{ closure { empty p } }	E0512	at 2	59915	9
 c06932	forms	p=-	{ while { cell p } }	E0511	end 1	59923	5
 c06933	forms	p=-	{ loop { cell p } }	E0511	end 1	59930	5
 c06934	forms	p=-	{ borrow p { cell p } }	E0507	at 2	59936	9
 c06935	forms	p=-	{ borrow mut p { cell p } }	E0507	at 2	59943	9
-c06936	forms	p=-	{ closure { cell p } }	E0505	end 1	59951	5
+c06936	forms	p=-	{ closure { cell p } }	E0512	at 2	59950	9
 c06937	forms	p=-	{ while { make p } }	E0511	end 1	59958	5
 c06938	forms	p=-	{ loop { make p } }	E0511	end 1	59965	5
 c06939	forms	p=-	{ borrow p { make p } }	E0507	at 2	59971	9
 c06940	forms	p=-	{ borrow mut p { make p } }	E0507	at 2	59978	9
-c06941	forms	p=-	{ closure { make p } }	E0505	end 1	59986	5
+c06941	forms	p=-	{ closure { make p } }	E0512	at 2	59985	9
 c06942	forms	p=-	{ while { put p } }	E0504	at 2	59992	9
 c06943	forms	p=-	{ loop { put p } }	E0504	at 2	59999	9
 c06944	forms	p=-	{ borrow p { put p } }	E0509	at 2	60006	9
@@ -7822,7 +7822,7 @@ c07820	two	p=- q=-	{ while { new q } }	E0511	end 1	66843	5
 c07821	two	p=- q=-	{ loop { new q } }	E0511	end 1	66850	5
 c07822	two	p=- q=-	{ borrow mut p { new q } }	E0505	end 0	66858	1
 c07823	two	p=- q=-	{ borrow q { new q } }	E0507	at 2	66863	9
-c07824	two	p=- q=-	{ closure { new q } }	E0505	end 1	66871	5
+c07824	two	p=- q=-	{ closure { new q } }	E0512	at 2	66870	9
 c07825	two	p=- q=-	{ while { take q } }	E0511	end 1	66878	5
 c07826	two	p=- q=-	{ loop { take q } }	E0511	end 1	66885	5
 c07827	two	p=- q=-	{ borrow mut p { take q } }	E0505	end 0	66893	1
@@ -8093,7 +8093,7 @@ c08091	two	p=own q=-	{ while { new q } }	E0511	end 1	68642	5
 c08092	two	p=own q=-	{ loop { new q } }	E0511	end 1	68649	5
 c08093	two	p=own q=-	{ borrow mut p { new q } }	E0503	at 1	68654	5
 c08094	two	p=own q=-	{ borrow q { new q } }	E0507	at 2	68662	9
-c08095	two	p=own q=-	{ closure { new q } }	E0505	end 1	68670	5
+c08095	two	p=own q=-	{ closure { new q } }	E0512	at 2	68669	9
 c08096	two	p=own q=-	{ while { take q } }	E0511	end 1	68677	5
 c08097	two	p=own q=-	{ loop { take q } }	E0511	end 1	68684	5
 c08098	two	p=own q=-	{ borrow mut p { take q } }	E0503	at 1	68689	5
@@ -8982,9 +8982,9 @@ c08980	two	p=own q=- gives=q	{ free p; new q }	ok	-	-	-
 c08981	two	p=own q=- gives=q	{ free p; take q }	ok	-	-	-
 c08982	two	p=own q=- gives=q	{ free p; free q }	E0504	at 2	74599	5
 c08983	two	p=own q=- gives=q	{ free p; update q }	E0504	at 2	74606	5
-c08984	two	p=own q=- gives=q	{ free p; write q }	ok	-	-	-
-c08985	two	p=own q=- gives=q	{ free p; assign q }	ok	-	-	-
-c08986	two	p=own q=- gives=q	{ free p; borrow q {} }	ok	-	-	-
+c08984	two	p=own q=- gives=q	{ free p; write q }	E0504	end 0	74615	1
+c08985	two	p=own q=- gives=q	{ free p; assign q }	E0504	end 0	74622	1
+c08986	two	p=own q=- gives=q	{ free p; borrow q {} }	E0504	end 0	74630	1
 c08987	two	p=own q=- gives=q	{ update p; new q }	E0505	end 0	74637	1
 c08988	two	p=own q=- gives=q	{ update p; take q }	E0505	end 0	74644	1
 c08989	two	p=own q=- gives=q	{ update p; free q }	E0504	at 2	74649	5
@@ -9084,7 +9084,7 @@ c09082	two	p=own q=- gives=q	{ update q; closure {} }	E0504	at 1	75316	5
 c09083	two	p=own q=- gives=q	{ update q; if {} else {} }	E0504	at 1	75324	5
 c09084	two	p=own q=- gives=q	{ write q; new p }	E0507	at 2	75333	5
 c09085	two	p=own q=- gives=q	{ write q; take p }	E0503	at 2	75340	5
-c09086	two	p=own q=- gives=q	{ write q; free p }	ok	-	-	-
+c09086	two	p=own q=- gives=q	{ write q; free p }	E0504	end 0	75349	1
 c09087	two	p=own q=- gives=q	{ write q; update p }	E0505	end 0	75356	1
 c09088	two	p=own q=- gives=q	{ write q; write p }	E0505	end 0	75363	1
 c09089	two	p=own q=- gives=q	{ write q; assign p }	E0506	at 2	75368	5
@@ -9103,7 +9103,7 @@ c09101	two	p=own q=- gives=q	{ write q; closure {} }	E0505	end 0	75457	1
 c09102	two	p=own q=- gives=q	{ write q; if {} else {} }	E0505	end 0	75465	1
 c09103	two	p=own q=- gives=q	{ assign q; new p }	E0507	at 2	75470	5
 c09104	two	p=own q=- gives=q	{ assign q; take p }	E0503	at 2	75477	5
-c09105	two	p=own q=- gives=q	{ assign q; free p }	ok	-	-	-
+c09105	two	p=own q=- gives=q	{ assign q; free p }	E0504	end 0	75486	1
 c09106	two	p=own q=- gives=q	{ assign q; update p }	E0505	end 0	75493	1
 c09107	two	p=own q=- gives=q	{ assign q; write p }	E0505	end 0	75500	1
 c09108	two	p=own q=- gives=q	{ assign q; assign p }	E0506	at 2	75505	5
@@ -9136,7 +9136,7 @@ c09134	two	p=own q=- gives=q	{ borrow mut p {}; assign q }	E0503	at 1	75703	5
 c09135	two	p=own q=- gives=q	{ borrow mut p {}; borrow q {} }	E0503	at 1	75711	5
 c09136	two	p=own q=- gives=q	{ borrow q {}; new p }	E0507	at 2	75722	5
 c09137	two	p=own q=- gives=q	{ borrow q {}; take p }	E0503	at 2	75730	5
-c09138	two	p=own q=- gives=q	{ borrow q {}; free p }	ok	-	-	-
+c09138	two	p=own q=- gives=q	{ borrow q {}; free p }	E0504	end 0	75740	1
 c09139	two	p=own q=- gives=q	{ borrow q {}; update p }	E0505	end 0	75748	1
 c09140	two	p=own q=- gives=q	{ borrow q {}; write p }	E0505	end 0	75756	1
 c09141	two	p=own q=- gives=q	{ borrow q {}; assign p }	E0506	at 2	75762	5
@@ -9169,7 +9169,7 @@ c09167	two	p=own q=- gives=q	{ if {} else {}; assign q }	E0505	end 0	75977	1
 c09168	two	p=own q=- gives=q	{ if {} else {}; borrow q {} }	E0505	end 0	75986	1
 c09169	two	p=own q=- gives=q	{ borrow q { new p } }	E0507	at 2	75991	9
 c09170	two	p=own q=- gives=q	{ borrow q { take p } }	E0503	at 2	75999	9
-c09171	two	p=own q=- gives=q	{ borrow q { free p } }	ok	-	-	-
+c09171	two	p=own q=- gives=q	{ borrow q { free p } }	E0504	end 0	76010	1
 c09172	two	p=own q=- gives=q	{ borrow q { update p } }	E0505	end 0	76018	1
 c09173	two	p=own q=- gives=q	{ borrow q { write p } }	E0505	end 0	76026	1
 c09174	two	p=own q=- gives=q	{ borrow q { assign p } }	E0506	at 2	76031	9
@@ -9177,7 +9177,7 @@ c09175	two	p=own q=- gives=q	{ while { new q } }	E0511	end 1	76040	5
 c09176	two	p=own q=- gives=q	{ loop { new q } }	E0511	end 1	76048	5
 c09177	two	p=own q=- gives=q	{ borrow mut p { new q } }	E0503	at 1	76053	5
 c09178	two	p=own q=- gives=q	{ borrow q { new q } }	E0507	at 2	76062	9
-c09179	two	p=own q=- gives=q	{ closure { new q } }	E0505	end 1	76071	5
+c09179	two	p=own q=- gives=q	{ closure { new q } }	E0512	at 2	76070	9
 c09180	two	p=own q=- gives=q	{ while { take q } }	E0511	end 1	76079	5
 c09181	two	p=own q=- gives=q	{ loop { take q } }	E0511	end 1	76087	5
 c09182	two	p=own q=- gives=q	{ borrow mut p { take q } }	E0503	at 1	76092	5

@@ -95,10 +95,15 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
 {
     let at = Pos::At(s.id);
     match s.op {
-        Op::Intro { x, .. } => match get(e, x as nat) {
-            Slot::Absent => ok(set(e, x as nat, Slot::Owned), brk),
-            Slot::Captured => err(Code::E0512, at),
-            _ => err(Code::E0507, at),
+        // クロージャの本体では権限を導入できない（§5.6「クロージャ本体で権限は使えない」。#63）。
+        Op::Intro { x, .. } => if c.closure {
+            err(Code::E0512, at)
+        } else {
+            match get(e, x as nat) {
+                Slot::Absent => ok(set(e, x as nat, Slot::Owned), brk),
+                Slot::Captured => err(Code::E0512, at),
+                _ => err(Code::E0507, at),
+            }
         },
         Op::Take { x } => if c.closure {
             err(Code::E0512, at)
@@ -148,17 +153,17 @@ pub open spec fn chk_stmt(s: Stmt, e: Env, brk: Option<Env>, c: Ctx) -> Res
             Slot::Captured => err(Code::E0512, at),
             _ => err(Code::E0507, at),
         },
-        Op::Return => if exit_ok(e, c.gives) {
-            div(brk)
-        } else {
-            err(Code::E0505, at)
+        Op::Return => match exit_err(e, c.gives) {
+            None => div(brk),
+            Some(code) => err(code, at),
         },
         Op::Try => if c.bm && !c.try_shape {
             err(Code::E0003, at)
-        } else if exit_ok(e, c.gives) {
-            ok(e, brk)
         } else {
-            err(Code::E0505, at)
+            match exit_err(e, c.gives) {
+                None => ok(e, brk),
+                Some(code) => err(code, at),
+            }
         },
         Op::Diverge => div(brk),
         // ループの外の `break` / `continue` は Rust が拒む形で、整形式（`sem::wf`）に入らない。
@@ -307,10 +312,9 @@ pub open spec fn spec_check(p: Program) -> Verdict {
         match chk_block(p.body, p.params, None, ctx0(p)) {
             Res::Err { code, pos } => Verdict::Reject { code, pos },
             Res::Ok { fall, .. } => match fall {
-                Some(f) => if exit_ok(f, p.gives) {
-                    Verdict::Accept
-                } else {
-                    Verdict::Reject { code: Code::E0505, pos: Pos::End(0) }
+                Some(f) => match exit_err(f, p.gives) {
+                    None => Verdict::Accept,
+                    Some(code) => Verdict::Reject { code, pos: Pos::End(0) },
                 },
                 None => Verdict::Accept,
             },
@@ -343,11 +347,15 @@ pub struct Rules {
     pub try_shape: bool,
     /// ループに入るときに、開いた `borrow` の印を空にする（外のループの中のループで、外の印を引き継がない）。
     pub loop_clear: bool,
+    /// 出口で `gives` の名前が `Owned` であることを求める（E0504。#63）。
+    pub gives_owned: bool,
+    /// クロージャの本体で権限を導入することを拒む（E0512。#63）。
+    pub closure_intro: bool,
 }
 
 pub open spec fn full(r: Rules) -> bool {
     r.join && r.borrow_consume && r.cont && r.brk && r.loop_end && r.closure_reset && r.try_return
-        && r.release && r.try_shape && r.loop_clear
+        && r.release && r.try_shape && r.loop_clear && r.gives_owned && r.closure_intro
 }
 
 impl Rules {
@@ -366,6 +374,8 @@ impl Rules {
             release: true,
             try_shape: true,
             loop_clear: true,
+            gives_owned: true,
+            closure_intro: true,
         }
     }
 }
@@ -392,10 +402,14 @@ fn check_atom(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -> (
 {
     let at = Pos::At(s.id);
     match &s.op {
-        Op::Intro { x, .. } => match ex_get(e, *x) {
-            Slot::Absent => r_ok(ex_set(e, *x, Slot::Owned), ex_copy_opt(brk)),
-            Slot::Captured => r_err(Code::E0512, at),
-            _ => r_err(Code::E0507, at),
+        Op::Intro { x, .. } => if rules.closure_intro && c.closure {
+            r_err(Code::E0512, at)
+        } else {
+            match ex_get(e, *x) {
+                Slot::Absent => r_ok(ex_set(e, *x, Slot::Owned), ex_copy_opt(brk)),
+                Slot::Captured => r_err(Code::E0512, at),
+                _ => r_err(Code::E0507, at),
+            }
         },
         Op::Take { x } => if c.closure {
             r_err(Code::E0512, at)
@@ -457,17 +471,19 @@ fn check_atom(s: &Stmt, e: &Env, brk: &Option<Env>, c: &Ctx, rules: &Rules) -> (
             Slot::Captured => r_err(Code::E0512, at),
             _ => r_err(Code::E0507, at),
         },
-        Op::Return => if ex_exit_ok(e, c.gives) {
-            Res::Ok { fall: None, brk: ex_copy_opt(brk) }
-        } else {
-            r_err(Code::E0505, at)
+        Op::Return => match ex_exit_err(e, c.gives, rules.gives_owned) {
+            None => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
+            Some(code) => r_err(code, at),
         },
         Op::Try => if rules.try_shape && c.bm && !c.try_shape {
             r_err(Code::E0003, at)
-        } else if !rules.try_return || ex_exit_ok(e, c.gives) {
+        } else if !rules.try_return {
             r_ok(ex_copy(e), ex_copy_opt(brk))
         } else {
-            r_err(Code::E0505, at)
+            match ex_exit_err(e, c.gives, rules.gives_owned) {
+                None => r_ok(ex_copy(e), ex_copy_opt(brk)),
+                Some(code) => r_err(code, at),
+            }
         },
         Op::Diverge => Res::Ok { fall: None, brk: ex_copy_opt(brk) },
         Op::Break => {
@@ -750,10 +766,9 @@ pub fn check_with(p: &Program, rules: &Rules) -> (r: Verdict)
     match check_block(&p.body, &p.params, &None, &c, rules) {
         Res::Err { code, pos } => Verdict::Reject { code, pos },
         Res::Ok { fall, .. } => match fall {
-            Some(f) => if ex_exit_ok(&f, p.gives) {
-                Verdict::Accept
-            } else {
-                Verdict::Reject { code: Code::E0505, pos: Pos::End(0) }
+            Some(f) => match ex_exit_err(&f, p.gives, rules.gives_owned) {
+                None => Verdict::Accept,
+                Some(code) => Verdict::Reject { code, pos: Pos::End(0) },
             },
             None => Verdict::Accept,
         },

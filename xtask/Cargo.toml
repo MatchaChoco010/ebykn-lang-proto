@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-[dev-dependencies]
-# 判定の表の .eyk の断片を M1 の構文解析器で読むテスト（gates/formal_oracle.rs）。
+[dependencies]
+# 判定の表と実装の検査を比べる差分テスト（gates/formal_diff.rs）。
+ebykn_check = { path = "../crates/ebykn_check" }
 ebykn_syntax = { path = "../crates/ebykn_syntax" }

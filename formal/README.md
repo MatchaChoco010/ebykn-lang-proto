@@ -15,7 +15,7 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 
 ## 証明したこと
 
-`cargo xtask verus-verify` が固定した Verus で `--no-cheating` のまま検証する（90 verified, 0 errors）。下の 6 つの定理が検証されたことは、`--output-json` の関数の一覧で名前を確かめる（定理を消すか検証の対象から外すと落ちる）。`admit` / `assume` / `external_body` は使っていない。
+`cargo xtask verus-verify` が固定した Verus で `--no-cheating` のまま検証する（91 verified, 0 errors）。下の 6 つの定理が検証されたことは、`--output-json` の関数の一覧で名前を確かめる（定理を消すか検証の対象から外すと落ちる）。`admit` / `assume` / `external_body` は使っていない。
 
 再帰を含む型（`syntax.rs` の `Op`、`Stmt`、`Block`、`Env`、`Program`、`check.rs` の `LoopCtx`、`Ctx`、`Res`）には `#[verifier::external_derive]` を付けた。これがないと、Verus は derive した `Clone` などを循環した定義として拒む。付けると derive した `Clone` / `PartialEq` / `Eq` / `Debug` / `Hash` は検証の外に置かれ、仕様は持たない。証明と検証する関数はこれらを使わない。spec の等しさは構造の等しさで、実行できる版は自前の `ex_copy` / `ex_eq` を使う。derive した実装を使うのは、検証しない表の生成器（`enumerate.rs`、`oracle.rs`）だけである。
 
@@ -25,6 +25,7 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
   - `theorem_borrowed_not_consumed`：借用の権限（`borrow` ブロックの `p` と、`uses &p@` / `uses &mut p@`）は消費されない。
   - `theorem_no_write_to_shared`：共有の借用に書き込まない（`*p = e` と、`uses &mut p'@` の引数に渡すこと）。
   - `theorem_only_gives_left`：関数とクロージャの本体を出るとき、残る `Owned` は `gives` の名前に束縛されたものだけ。
+- 検査は、本体を出る点（`return`・`?`・本体の末尾）で `gives` の名前が `Owned` でなければ E0504 で拒み（`syntax.rs` の `exit_err`）、クロージャの本体で権限を導入すること（`Ptr::new` などの導入、`take`、`borrow`、`put`）を E0512 で拒む（#63。実装の `OPEN.md` の §6.2 の読み方と同じ）。拒むだけなので、健全性の証明には効かない。
 - `borrow` ブロックを `break` / `continue` / `return` / `?` で抜ける点で、借用は終わる（#21 の案 D）。検査は、行き先のループに入ってから開いた `borrow` の `p` を Γ から消して比べ（`check.rs` の `release`）、実行の意味では、抜ける途中の各 `borrow` が `p` の束縛を入る前に戻す（`sem.rs` の `restore`。権限は領域に戻るので消費ではない）。証明は、抜ける文の点の状態を、まだ戻していない束縛を戻した状態（`sound.rs` の `restore_mask`）で不変条件に結びつける。上の系はこのまま成り立つ。
 - 戻り値の型を `Option` / `Result` と書いていない関数（`Program::try_shape`）の `borrow mut` の中の `?` は E0003 で拒む（書き下しが失敗の経路を展開できない。#21）。拒むだけなので、健全性の証明には効かない。
 - `check`（実行できる版）は定義 `spec_check` と一致する。
@@ -38,7 +39,7 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 - `*p = e` は、`p` が生きた札に束縛されているときだけ権限付きの書き込みとみなす（仕様 §6.2 の「`X ∉ Γ` なら Rust のまま」）。消費した後の `*p = e` は Rust の書き込みで、rustc が拒む。
 - クロージャは定義した位置で 0 回以上呼ぶものとし、外の変数の束縛は見えない（§5.6）。外の変数への代入がクロージャの外に及ぶことは扱わない（検査は E0512 で拒む）。
 - ラベル付きの `break` / `continue`、`for` の反復子、`match` の 3 本以上の腕（2 本の腕と同じ規則）。
-- `gives` の名前が `return` の時点で `Owned` であること（§6.2 は残ってよいものだけを決めている。満たさなければ Verus が拒む）。
+- `gives` の名前が本体を出る点で `Owned` であることは、検査が拒むだけで、定理は述べない（実行の意味は戻り値に権限を付けて返すことを持たない。満たさなければ Verus が拒む）。
 - 違反のコードと位置の選び方（`OPEN.md`）。定理が述べるのは受理したときの健全性だけで、どのコードで拒むかは表で固定する。
 - 仕様が書いていない場合の決め方は `OPEN.md` に記録した（#18 と #21 の行）。
 - `return` / `?` で `borrow` ブロックを抜けたあとの束縛（本体を出るので、それ以上の操作がない）。`unchecked fn` の本体の E0003（実装は `unchecked fn` でも拒む）。マクロの引数の中の脱出（実装は E0003 で拒む）。
@@ -79,7 +80,16 @@ Ebykn 自身が判定する規則の参照モデルを Verus で書いて検証�
 | `no-release` | `break` / `continue` で抜ける点で、`borrow` ブロックの `p` を Γ から消さない（#21）。`while` と `continue` では正しいプログラムを E0511 で拒み、`loop` を抜けた後に借用中の状態を残して、権限のない変数の借用を通す（`exit` の段の c09300 など） |
 | `no-loop-clear` | ループの中のループに入るときに、外のループに入ってから開いた `borrow` の印を引き継ぐ（#21）。内側のループの `break` で外の `borrow` の `p` まで消す |
 | `no-try-shape` | 戻り値の型を `Option` / `Result` と書いていない関数の `borrow mut` の中の `?` を通す（E0003。#21） |
+| `no-gives-owned` | 本体を出る点で `gives` の名前が `Owned` であることを求めない（E0504。#63） |
+| `no-closure-intro` | クロージャの本体で権限を導入できる（E0512。#63） |
 
 ## 実装との対応
 
-モデルは仕様だけから作り、実装（`crates/ebykn_check`）は見ていない。実装と一致するかは、M2 の §6.2 が入った後の差分テストで確かめる。`linearity.eyk` の各関数を実装の検査にかけ、最初の診断のコードと位置を `linearity.tsv` と比べる。補助の関数（`cond`、`make`、`consume` など）は §6.2 の検査を通る。断片は型を合わせていないので、型を見る段（§6.6 の `verus --no-verify`）には通さない。
+モデルは仕様だけから作り、実装（`crates/ebykn_check`）は見ていない。実装と一致するかは、差分テストのゲート `cargo xtask check-formal-diff`（`xtask/src/gates/formal_diff.rs`。`gates` に入り、CI と pre-commit で走る）で確かめる（#63）。
+
+- `linearity.eyk` を一つのプロジェクトの `src/lib.eyk` として `ebykn check` と同じ検査にかけ、診断を位置で関数 `c<番号>` に割り当てる。表の `verdict` が `ok` なら診断がないこと、コードならそのコードが診断にあることを確かめる。
+- 位置はまだ比べない。位置の選び方（`OPEN.md` の #18 の行）は、実装とモデルで違う。
+- 食い違いは、ゲートの `EXCEPTIONS` に、ケース・実装の判定・理由・追跡の Issue で持つ。一覧にない食い違い、一覧にあるのに一致するケース、実装の判定が一覧と違うケースは失敗にする。今は一覧が空で、全ケースが一致する。
+- 補助の関数（`cond`、`make`、`consume` など）に診断が出れば失敗にする。
+- モデルは変数をすべて権限の名前とみなす。実装は、一度も権限を持っていない名前の `free` を、型を `Ptr` / `Cell` と書いたときだけ §6.2 の `free` と読む（`docs/current-spec.md` の §6.2）。そのため、表の `.eyk` は `let` に型を書く（`let p: Ptr<u32> = other();`）。
+- 断片は型を合わせていないので、型を見る段（§6.6 の `verus --no-verify`）には通さない。
