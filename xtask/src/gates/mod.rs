@@ -6,6 +6,7 @@ pub mod file_size;
 pub mod formal_oracle;
 pub mod gate_tests;
 pub mod md_links;
+pub mod md_tables;
 pub mod prelude_exports;
 pub mod verus_pin;
 pub mod verus_probes;
@@ -26,6 +27,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-md-links",
         run: md_links::run,
+    },
+    Gate {
+        name: "check-md-tables",
+        run: md_tables::run,
     },
     Gate {
         name: "check-book",

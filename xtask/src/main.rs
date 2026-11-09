@@ -20,6 +20,7 @@ const USAGE: &str = "\
   gates             全ゲート
   check-file-size   ソースファイルが 2000 行以下
   check-md-links    Markdown の相対リンク先が存在する
+  check-md-tables   Markdown の表が途中の空行で切れず、各行の列の数が見出しと同じ
   check-book        Ebykn Book の SUMMARY と ```eyk フェンスの形
   check-gate-tests  各ゲートに失敗を主張するテスト（fails_*）がある
   check-verus-pin   固定した Verus の値が読め、Verus のクレートが固定した vstd を使う
