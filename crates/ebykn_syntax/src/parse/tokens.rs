@@ -1,6 +1,7 @@
 //! トークン列だけで決まる検査（仕様 §4）。構文解析の成否によらず、ファイル全体を見る。
 //!
 //! - E0101：接頭辞 `__eyk_` の識別子（ライフタイムとマクロの引数の中を含む）。
+//! - E0001：Rust の版の予約語（`gen`）の、`r#` のない識別子（マクロの引数の中を含む。#104）。
 //! - E0102：`#[verifier::..]` / `#![verifier::..]`（古い形の `#[verifier(..)]`、`r#verifier`、
 //!   先頭の `::`、`cfg_attr(.., verifier::..)` の中を含む）。
 //! - 証明の属性（仕様 §5.7 の `ProofAttr`）と Verus の属性。`.eyk` には書けない。
@@ -22,6 +23,48 @@ const PROOF_ATTRS: &[&str] = &[
     "spinoff_prover",
     "memoize",
 ];
+
+/// 証明の属性（仕様 §5.7 の `ProofAttr`）の名前か。
+pub(super) fn is_proof_attr(name: &str) -> bool {
+    PROOF_ATTRS.contains(&name)
+}
+
+/// 項目の外部属性の証明の属性が、その項目に書けるか。`#[opaque]` / `#[memoize]` は `spec fn`、
+/// `#[rlimit(n)]` / `#[spinoff_prover]` は検証する関数（`fn`、`lemma fn`）に付く（Verus の
+/// `verifier::opaque` などと同じ）。`#[trigger]` は式に付く。
+pub(super) fn proof_attr_fits_item(name: &str, spec_fn: bool, verified_fn: bool) -> bool {
+    match name {
+        "opaque" | "memoize" => spec_fn,
+        "rlimit" | "spinoff_prover" => verified_fn,
+        _ => false,
+    }
+}
+
+/// 書ける位置の証明の属性の引数が崩れていれば、正しい形。`#![trigger ..]` の引数は構文解析が
+/// 式として読む。
+pub(super) fn proof_attr_args_error(a: &super::ProofAttrUse) -> Option<&'static str> {
+    if a.inner {
+        return (a.name == "auto" && !a.args.is_empty()).then_some("#![auto]");
+    }
+    match a.name.as_str() {
+        "rlimit" => {
+            let ok = match a.args.as_slice() {
+                [TokenTree::Group(g)] if g.delimiter() == Delimiter::Parenthesis => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    matches!(inner.as_slice(), [TokenTree::Literal(l)]
+                        if l.to_string().chars().all(|c| c.is_ascii_digit()))
+                }
+                _ => false,
+            };
+            (!ok).then_some("#[rlimit(20)]")
+        }
+        "trigger" => (!a.args.is_empty()).then_some("#[trigger]"),
+        "opaque" => (!a.args.is_empty()).then_some("#[opaque]"),
+        "spinoff_prover" => (!a.args.is_empty()).then_some("#[spinoff_prover]"),
+        "memoize" => (!a.args.is_empty()).then_some("#[memoize]"),
+        _ => None,
+    }
+}
 
 /// Verus の属性で、Ebykn に対応する書き方がないもの。
 const VERUS_ATTRS: &[&str] = &["all_triggers", "via_fn", "when_used_as_spec"];
@@ -47,6 +90,20 @@ fn scan_in(ts: &TokenStream, use_group: bool) {
         match tt {
             TokenTree::Ident(id) => {
                 let name = unraw(&id.to_string());
+                // 版の予約語（`gen`）。`r#gen` は通す。版は検査が見る（#104）。
+                if !id.to_string().starts_with("r#")
+                    && let Some((word, since)) = crate::reserved::EDITION_KEYWORDS
+                        .iter()
+                        .find(|(w, _)| *w == name)
+                {
+                    push(
+                        sp(id.span()),
+                        Message::EditionKeyword {
+                            word: (*word).into(),
+                            since: *since,
+                        },
+                    );
+                }
                 if name.starts_with("__eyk_") {
                     push(
                         sp(id.span()),
@@ -225,12 +282,14 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
             }
         }
     } else if PROOF_ATTRS.contains(&name.as_str()) {
-        let written = if inner {
-            format!("#![{name}]")
-        } else {
-            format!("#[{name}]")
-        };
-        push(span, Message::ProofSyntax { written });
+        // 位置は字句では決まらないので記録だけする。構文解析が書ける位置で読んだかを、解析の
+        // 終わりに確かめる（[`super::check_proof_attrs`]）。
+        super::record_proof_attr(super::ProofAttrUse {
+            span,
+            name,
+            inner,
+            args: body[end..].to_vec(),
+        });
     } else if VERUS_ATTRS.contains(&name.as_str()) {
         push(
             span,
@@ -320,10 +379,32 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
         }
         let next = tts.get(i + 1);
         let span = sp(tt.span());
-        let m = if name == "proof" && group(next, Delimiter::Brace) {
-            Some(Message::ProofSyntax {
-                written: "proof { .. }".into(),
+        // 中を読まないトークン列の中の証明構文は、`.eykp` でも読めない。`.eyk` でも証明ファイルへは
+        // 案内せず、読まないコードの中には書けないと伝える（#86）。
+        let at_stmt_start = prev.is_none() || punct(prev, ';') || group(prev, Delimiter::Brace);
+        let in_opaque = |w: &str| {
+            Some(Message::ProofInOpaque {
+                written: w.to_string(),
             })
+        };
+        let m = if name == "proof" && group(next, Delimiter::Brace) {
+            in_opaque("proof { .. }")
+        } else if name == "assert"
+            && at_stmt_start
+            && !matches!(next, Some(TokenTree::Punct(p)) if "!=.:,;".contains(p.as_char()))
+            && !group(next, Delimiter::Parenthesis)
+            && next.is_some()
+        {
+            // `assert x;`（`assert(..)` は下の呼び出しの判定が見る）。
+            in_opaque("assert")
+        } else if name == "spec" && ident(next).as_deref() == Some("let") {
+            in_opaque("spec let")
+        } else if crate::reserved::kind_of(&name) == Some(crate::reserved::ReservedKind::ProofCall)
+            && name != "reveal_with_fuel"
+            && !punct(prev, '.')
+            && group(next, Delimiter::Parenthesis)
+        {
+            in_opaque(&format!("{name}(..)"))
         } else if crate::reserved::kind_of(&name).is_some_and(crate::reserved::is_call)
             && !punct(prev, '.')
             && !punct(next, '!')

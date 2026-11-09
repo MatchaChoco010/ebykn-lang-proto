@@ -4,7 +4,7 @@
 use ebykn_syntax::ast::*;
 use ebykn_syntax::diag::Lang;
 use ebykn_syntax::span::{FileId, SourceFile};
-use ebykn_syntax::{Parsed, parse_eyk};
+use ebykn_syntax::{Parsed, parse_eyk, parse_eykp};
 
 pub fn file(src: &str) -> SourceFile {
     SourceFile::new(FileId(0), "src/lib.eyk", src)
@@ -14,6 +14,49 @@ pub fn parse(src: &str) -> (SourceFile, Parsed) {
     let f = file(src);
     let p = parse_eyk(&f);
     (f, p)
+}
+
+pub fn parse_p(src: &str) -> (SourceFile, Parsed) {
+    let f = SourceFile::new(FileId(0), "proof/lib.eykp", src);
+    let p = parse_eykp(&f);
+    (f, p)
+}
+
+/// `.eykp` として診断なしで読めることを確かめて、AST を返す。
+#[track_caller]
+pub fn ok_p(src: &str) -> File {
+    let (f, p) = parse_p(src);
+    let d: Vec<String> = p.diags.iter().map(|d| d.render(&f, Lang::En)).collect();
+    assert!(d.is_empty(), "診断が出た:\n{}\n---\n{src}", d.join("\n"));
+    p.file
+}
+
+/// `.eykp` として読んだ診断を英語で書き出す。
+pub fn diags_p(src: &str) -> Vec<String> {
+    let (f, p) = parse_p(src);
+    p.diags.iter().map(|d| d.render(&f, Lang::En)).collect()
+}
+
+/// `.eykp` として読み、少なくとも一つ診断が出て、そのどれかが `needle` を含むことを確かめる。
+#[track_caller]
+pub fn rejects_p(src: &str, needle: &str) {
+    let d = diags_p(src);
+    assert!(
+        d.iter().any(|d| d.contains(needle)),
+        "{needle:?} を含む診断がない: {d:?}\n---\n{src}"
+    );
+}
+
+/// `.eykp` の関数 `f` の本体の文を S 式で。
+#[track_caller]
+pub fn body_sexp_p(src: &str) -> String {
+    fn_body(&ok_p(src))
+}
+
+/// 文の並びを `.eykp` の `fn f() { <文> }` に入れて読み、S 式で返す。
+#[track_caller]
+pub fn ep(src: &str) -> String {
+    body_sexp_p(&format!("fn f() {{ {src} }}"))
 }
 
 /// 診断なしで読めることを確かめて、AST を返す。
@@ -48,7 +91,10 @@ pub fn rejects(src: &str, needle: &str) {
 /// 関数 `f` の本体の最後の式（または文）を S 式で。
 #[track_caller]
 pub fn body_sexp(src: &str) -> String {
-    let file = ok(src);
+    fn_body(&ok(src))
+}
+
+fn fn_body(file: &File) -> String {
     for item in &file.items {
         if let ItemKind::Fn(f) = &item.kind {
             return match &f.body {
@@ -166,6 +212,7 @@ pub fn binop(op: BinOp) -> &'static str {
         ShrAssign => ">>=",
         Implies => "==>",
         Iff => "<==>",
+        ExtEq => "=~=",
     }
 }
 
@@ -360,22 +407,15 @@ pub fn expr(e: &Expr) -> String {
         K::Rust(t) => format!("rust`{}`", t.tokens),
         K::Quant {
             kind,
-            binders,
+            binders: bs,
+            triggers: ts,
             body,
         } => {
             let k = match kind {
                 QuantKind::Forall => "forall",
                 QuantKind::Exists => "exists",
             };
-            let b: Vec<String> = binders
-                .iter()
-                .map(|b| match &b.kind {
-                    BinderKind::Typed(t) => format!("{}:{}", ident(&b.ident), ty(t)),
-                    BinderKind::In(x) => format!("{} in {}", ident(&b.ident), expr(x)),
-                    BinderKind::Bare => ident(&b.ident),
-                })
-                .collect();
-            format!("({k} [{}] {})", b.join(", "), expr(body))
+            format!("({k} [{}]{} {})", binders(bs), triggers(ts), expr(body))
         }
         K::AndOr { kind, exprs } => {
             let k = match kind {
@@ -406,6 +446,72 @@ pub fn expr(e: &Expr) -> String {
             .map(|a| format!("#[{}]", path(&a.path)))
             .collect();
         format!("{} {s}", a.join(""))
+    }
+}
+
+fn binders(bs: &[Binder]) -> String {
+    bs.iter()
+        .map(|b| match &b.kind {
+            BinderKind::Typed(t) => format!("{}:{}", ident(&b.ident), ty(t)),
+            BinderKind::In(x) => format!("{} in {}", ident(&b.ident), expr(x)),
+            BinderKind::Bare => ident(&b.ident),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn triggers(ts: &[Trigger]) -> String {
+    ts.iter()
+        .map(|t| match t {
+            Trigger::Exprs { exprs, .. } => format!(" #![trigger {}]", list(exprs)),
+            Trigger::Auto(_) => " #![auto]".into(),
+        })
+        .collect()
+}
+
+pub fn proof(p: &ProofStmt) -> String {
+    match p {
+        ProofStmt::Block(b) => format!("(proof {})", block(b)),
+        ProofStmt::Assert { expr: x, by } => match by {
+            None => format!("(assert {})", expr(x)),
+            Some(AssertBy::Block(b)) => format!("(assert {} by {})", expr(x), block(b)),
+            Some(AssertBy::Prover { mode, requires, .. }) => {
+                let r = if requires.is_empty() {
+                    String::new()
+                } else {
+                    format!(" requires {}", list(requires))
+                };
+                format!("(assert {} by({}){r})", expr(x), mode.as_str())
+            }
+        },
+        ProofStmt::AssertForall {
+            binders: bs,
+            triggers: ts,
+            body,
+            by,
+        } => format!(
+            "(assert-forall [{}]{} {} by {})",
+            binders(bs),
+            triggers(ts),
+            expr(body),
+            block(by)
+        ),
+        ProofStmt::SpecLet(l) => {
+            let mut out = format!("(spec-let {}", pat(&l.pat));
+            if let Some(t) = &l.ty {
+                out.push_str(&format!(": {}", ty(t)));
+            }
+            if let Some(i) = &l.init {
+                out.push_str(&format!(" {}", expr(i)));
+            }
+            out.push(')');
+            out
+        }
+        ProofStmt::Reveal { path: p, fuel } => match fuel {
+            Some(f) => format!("(reveal {} {})", path(p), expr(f)),
+            None => format!("(reveal {})", path(p)),
+        },
+        ProofStmt::Hide(p) => format!("(hide {})", path(p)),
     }
 }
 
@@ -445,6 +551,7 @@ pub fn stmt(s: &Stmt) -> String {
         StmtKind::SpecAssign { target, value } => {
             format!("(spec= {} {})", expr(target), expr(value))
         }
+        StmtKind::Proof(p) => proof(p),
     }
 }
 
@@ -563,6 +670,7 @@ pub fn clause(c: &Clause) -> String {
         ClauseKind::Returns(x) => format!("(returns {})", expr(x)),
         ClauseKind::Decreases(v) => format!("(decreases {})", list(v)),
         ClauseKind::NoPanic => "(no_panic)".into(),
+        ClauseKind::By(m) => format!("(by {})", m.as_str()),
     }
 }
 
@@ -657,14 +765,17 @@ pub fn item_head(i: &Item) -> String {
                 .map_or(";".into(), |e| format!(" = {}", expr(e)))
         ),
         ItemKind::LemmaFn(f) => format!(
-            "{}lemma fn {}{};",
+            "{}lemma fn {}{}{}",
             if f.unchecked.is_some() {
                 "unchecked "
             } else {
                 ""
             },
             sig(&f.sig),
-            pre_space(contract(&f.contract))
+            pre_space(contract(&f.contract)),
+            f.body
+                .as_ref()
+                .map_or(";".into(), |b| format!(" {}", block(b)))
         ),
         ItemKind::Struct(s) => {
             let n = |e: &Option<ErasedFields>| {
@@ -732,6 +843,12 @@ pub fn item_head(i: &Item) -> String {
         ItemKind::Const(c) => format!("const {}", ident(&c.ident)),
         ItemKind::Static(s) => format!("static {}", ident(&s.ident)),
         ItemKind::Use(_) => "use".into(),
+        ItemKind::LemmaGroup(g) => format!(
+            "lemma group {} {{ {} }}",
+            ident(&g.ident),
+            g.members.iter().map(path).collect::<Vec<_>>().join(", ")
+        ),
+        ItemKind::UseLemmas(p) => format!("use lemmas {}", path(p)),
         ItemKind::Rust(t) => format!("rust`{}`", t.tokens),
     };
     format!("{v}{k}")
@@ -748,4 +865,9 @@ fn with_space(s: String) -> String {
 /// ファイルの項目の見出しを並べる。
 pub fn heads(src: &str) -> Vec<String> {
     ok(src).items.iter().map(item_head).collect()
+}
+
+/// `.eykp` の項目の見出しを並べる。
+pub fn heads_p(src: &str) -> Vec<String> {
+    ok_p(src).items.iter().map(item_head).collect()
 }

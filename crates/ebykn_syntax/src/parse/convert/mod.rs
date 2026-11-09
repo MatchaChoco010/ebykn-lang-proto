@@ -5,7 +5,7 @@
 
 mod expr;
 
-pub(super) use expr::{block, expr, pat};
+pub(super) use expr::{attr_name, block, expr, pat};
 
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use quote::ToTokens;

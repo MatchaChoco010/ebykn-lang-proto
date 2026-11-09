@@ -473,8 +473,14 @@ impl Cx<'_> {
             ExprKind::Quant {
                 kind,
                 binders,
+                triggers,
                 body,
-            } => self.quant(*kind, binders, body),
+            } => {
+                if !triggers.is_empty() {
+                    crate::eykp_only("#![trigger ..]");
+                }
+                self.quant(*kind, binders, body)
+            }
             ExprKind::AndOr { kind, exprs } => {
                 let op = match kind {
                     AndOrKind::And => " && ",
@@ -1132,6 +1138,7 @@ impl Cx<'_> {
             }
             // `leak p@;` は何も出さない（§7.3）。
             StmtKind::Leak(_) => String::new(),
+            StmtKind::Proof(_) => crate::eykp_only("証明の文"),
             StmtKind::SpecAssign { target, value } => {
                 let ExprKind::Erased { base, field } = &target.kind else {
                     return String::new();
@@ -1301,5 +1308,6 @@ fn binop(op: BinOp) -> &'static str {
         ShrAssign => ">>=",
         Implies => "==>",
         Iff => "<==>",
+        ExtEq => "=~=",
     }
 }

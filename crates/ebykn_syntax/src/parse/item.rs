@@ -53,7 +53,14 @@ fn parse_items(input: ParseStream, ctx: Ctx) -> Vec<ast::Item> {
             }
             Err(e) => {
                 push_error(e);
+                let lo = input.span().byte_range().start;
                 recover(input);
+                let hi = if input.is_empty() {
+                    usize::MAX
+                } else {
+                    input.span().byte_range().start
+                };
+                super::mark_unread(lo, hi);
             }
         }
     }
@@ -151,6 +158,51 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     }
     input.advance_to(&ahead);
     let kind = item_kind(input, ctx, &begin)?;
+    proof_attrs_on_item(&attrs(&a), &kind);
+    // `pub use lemmas` はない（Verus の `broadcast use` は再公開しない）。
+    let mut proof_ok = true;
+    if matches!(kind, ast::ItemKind::UseLemmas(_)) && !matches!(v, syn::Visibility::Inherited) {
+        push(
+            super::span_of(&v),
+            Message::NotAllowedHere {
+                written: "pub use lemmas".into(),
+            },
+        );
+        proof_ok = false;
+    }
+    // `.eyk` の `lemma group` / `use lemmas` は、`.eykp` でも通らない形（置き場所、空、`pub`）を先に
+    // E0001 にし、通る形だけを E0303 にする。どちらでも `.eyk` の AST には入れない。
+    let kind = match kind {
+        ast::ItemKind::LemmaGroup(g) if !super::in_proof() => {
+            if proof_ok && ctx == Ctx::Module && !g.members.is_empty() {
+                push(
+                    span_between(&begin, input),
+                    Message::ProofSyntax {
+                        written: "lemma group".into(),
+                    },
+                );
+            }
+            ast::ItemKind::Rust(ast::Tokens {
+                tokens: tokens_between(&begin, input),
+                span: span_between(&begin, input),
+            })
+        }
+        ast::ItemKind::UseLemmas(_) if !super::in_proof() => {
+            if proof_ok {
+                push(
+                    span_between(&begin, input),
+                    Message::ProofSyntax {
+                        written: "use lemmas".into(),
+                    },
+                );
+            }
+            ast::ItemKind::Rust(ast::Tokens {
+                tokens: tokens_between(&begin, input),
+                span: span_between(&begin, input),
+            })
+        }
+        k => k,
+    };
     if ctx == (Ctx::Impl { inherent: true })
         && let Some(name) = item_name(&kind)
         && (name.is("invariant") || name.is("view"))
@@ -383,7 +435,7 @@ fn item_kind(
         let kw = parse_kw(input, "unchecked")?;
         let unchecked = Some(sp(kw.span()));
         if peek_kw(input, "lemma") {
-            return lemma_fn(input, unchecked);
+            return lemma_fn(input, unchecked, ctx == Ctx::Trait);
         }
         let ahead = input.fork();
         let _ = qualifiers(&ahead)?;
@@ -430,15 +482,10 @@ fn item_kind(
         return spec_fn(input, ctx, None);
     }
     if is_ident(a, "lemma") && is_ident(b, "fn") {
-        return lemma_fn(input, None);
+        return lemma_fn(input, None, ctx == Ctx::Trait);
     }
     if is_ident(a, "lemma") && is_ident(b, "group") {
-        return Err(err(
-            input.span(),
-            Message::ProofSyntax {
-                written: "lemma group".into(),
-            },
-        ));
+        return lemma_group(input, ctx);
     }
     if starts_fn(input) {
         return fn_item(input, ctx, None);
@@ -530,7 +577,8 @@ fn fn_item(
 ) -> syn::Result<ast::ItemKind> {
     let q = qualifiers(input)?;
     let sig = signature(input, q)?;
-    let contract = contract::contract(input)?;
+    let mut contract = contract::contract(input)?;
+    by_only_on_lemma(&mut contract);
     let body = if input.peek(syn::token::Brace) {
         // 入れ子の `fn` は自分の `unchecked` で決め直す。
         let saved = super::set_unchecked_body(unchecked.is_some());
@@ -602,11 +650,12 @@ fn spec_fn(
         Some(_) => {}
     }
     // trait の spec fn は契約を持たない（仕様 §5.1 の TraitItem）。
-    let contract = if ctx == Ctx::Trait {
+    let mut contract = if ctx == Ctx::Trait {
         ast::Contract::default()
     } else {
         contract::contract(input)?
     };
+    by_only_on_lemma(&mut contract);
     let body = if peek_eq(input) {
         input.parse::<Token![=]>()?;
         let e = expr(input.parse()?);
@@ -643,22 +692,121 @@ fn spec_fn(
     }))
 }
 
+/// 項目の外部属性のうち、その項目に書ける証明の属性に印を付ける（[`super::check_proof_attrs`]）。
+/// 文の位置の項目は、構文解析器が外部属性を先に読むので、差し込み口からも呼ぶ。
+pub(super) fn proof_attrs_on_item(a: &[ast::Attr], kind: &ast::ItemKind) {
+    // `#[rlimit(n)]` / `#[spinoff_prover]` は Verus が検証する関数だけ（`unchecked` は検証しない）。
+    let verified_fn = match kind {
+        ast::ItemKind::Fn(f) => f.unchecked.is_none(),
+        ast::ItemKind::LemmaFn(f) => f.unchecked.is_none(),
+        _ => false,
+    };
+    proof_attrs_fit(a, matches!(kind, ast::ItemKind::SpecFn(_)), verified_fn);
+}
+
+fn proof_attrs_fit(a: &[ast::Attr], spec_fn: bool, verified_fn: bool) {
+    for at in a {
+        if let Some(name) = convert::attr_name(at)
+            && !at.inner
+            && super::tokens::proof_attr_fits_item(name, spec_fn, verified_fn)
+        {
+            super::proof_attr_ok(at.span);
+        }
+    }
+}
+
+/// `by(mode)` は `lemma fn` にだけ付く（仕様 §5.2）。ほかに付いたものは、`.eykp` でも書けないので
+/// `.eyk` でも E0001 にし、契約から取り除く。
+fn by_only_on_lemma(contract: &mut ast::Contract) {
+    contract.clauses.retain(|c| {
+        if matches!(c.kind, ast::ClauseKind::By(_)) {
+            push(
+                c.span,
+                Message::NotAllowedHere {
+                    written: "by(..)".into(),
+                },
+            );
+            return false;
+        }
+        true
+    });
+}
+
+/// `lemma fn` の `by(mode)`：一つだけ（仕様 §5.2 の `"by" "(" ProverMode ")"`）。`.eyk` では E0303 に
+/// して取り除く（`.eyk` の AST に証明構文を入れない）。
+fn lemma_by(contract: &mut ast::Contract) {
+    let mut seen = false;
+    let proof = super::in_proof();
+    contract.clauses.retain(|c| {
+        if !matches!(c.kind, ast::ClauseKind::By(_)) {
+            return true;
+        }
+        if seen {
+            push(
+                c.span,
+                Message::NotAllowedHere {
+                    written: "a second by(..)".into(),
+                },
+            );
+            return false;
+        }
+        seen = true;
+        if !proof {
+            push(
+                c.span,
+                Message::ProofSyntax {
+                    written: "by(..)".into(),
+                },
+            );
+        }
+        proof
+    });
+}
+
 fn lemma_fn(
     input: ParseStream,
     unchecked: Option<crate::span::Span>,
+    in_trait: bool,
 ) -> syn::Result<ast::ItemKind> {
     parse_kw(input, "lemma")?;
     let sig = signature(input, ast::FnQualifiers::default())?;
-    let contract = contract::contract(input)?;
+    let mut contract = contract::contract(input)?;
+    lemma_by(&mut contract);
+    let mut body = None;
     if input.peek(syn::token::Brace) {
-        // 本体は `.eykp` にだけ書ける（仕様 §5.1、§5.7）。読んで診断にする。
+        // 本体は `.eykp` にだけ書ける（仕様 §5.1、§5.7）。`.eyk` では読んで診断にする。
+        // `unchecked lemma fn`（証明なしの前提。仕様 §7.2）と trait の `lemma fn`（本体は impl が
+        // 与える。§5.1）は `.eykp` でも本体を持てないので、`.eyk` でも E0001 にする。
         let b: syn::Block = input.parse()?;
-        push(
-            sp(b.brace_token.span.join()),
-            Message::ProofSyntax {
-                written: "lemma fn .. { .. }".into(),
-            },
-        );
+        let span = sp(b.brace_token.span.join());
+        // 本体を AST に残さないとき（`.eyk`、`unchecked lemma fn`、trait の `lemma fn`）は中を読まない。
+        if !super::in_proof() || unchecked.is_some() || in_trait {
+            super::mark_unread(span.lo, span.hi);
+        }
+        if unchecked.is_some() {
+            push(
+                span,
+                Message::NotAllowedHere {
+                    written: "unchecked lemma fn .. { .. }".into(),
+                },
+            );
+        } else if in_trait {
+            push(
+                span,
+                Message::NotAllowedHere {
+                    written: "lemma fn .. { .. } in a trait".into(),
+                },
+            );
+        } else if super::in_proof() {
+            body = Some(block(b));
+        } else {
+            push(
+                sp(b.brace_token.span.join()),
+                Message::ProofSyntax {
+                    written: "lemma fn .. { .. }".into(),
+                },
+            );
+        }
     } else if input.peek(Token![;]) {
         input.parse::<Token![;]>()?;
     } else {
@@ -685,6 +833,7 @@ fn lemma_fn(
         unchecked,
         sig,
         contract,
+        body,
     }))
 }
 
@@ -881,7 +1030,7 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
             _ => unreachable!("spec fn"),
         }
     } else if is_ident(t.first(), "lemma") && is_ident(t.get(1), "fn") {
-        match lemma_fn(input, None)? {
+        match lemma_fn(input, None, true)? {
             ast::ItemKind::LemmaFn(f) => ast::TraitItemKind::LemmaFn(f),
             _ => unreachable!("lemma fn"),
         }
@@ -898,6 +1047,14 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
             },
         ));
     };
+    proof_attrs_fit(
+        &attrs(&a),
+        matches!(kind, ast::TraitItemKind::SpecFn(_)),
+        matches!(
+            kind,
+            ast::TraitItemKind::Fn(_) | ast::TraitItemKind::LemmaFn(_)
+        ),
+    );
     Ok(ast::TraitItem {
         attrs: attrs(&a),
         kind,
@@ -1036,17 +1193,51 @@ fn mod_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
     }))
 }
 
+/// `lemma group g { a, b }`（`.eykp` だけ）。モジュールの直下にだけ書ける（Verus の
+/// `broadcast group` と同じ）。
+fn lemma_group(input: ParseStream, ctx: Ctx) -> syn::Result<ast::ItemKind> {
+    let kw = parse_kw(input, "lemma")?;
+    parse_kw(input, "group")?;
+    if ctx != Ctx::Module {
+        push(
+            sp(kw.span()),
+            Message::NotAllowedHere {
+                written: "lemma group".into(),
+            },
+        );
+    }
+    let name: syn::Ident = input.parse()?;
+    let content;
+    syn::braced!(content in input);
+    let members: Vec<ast::Path> = content
+        .parse_terminated(syn::Path::parse_mod_style, Token![,])?
+        .iter()
+        .map(convert::path)
+        .collect();
+    if members.is_empty() {
+        // 仕様 §5.1：`"lemma" "group" Ident "{" Path ("," Path)* ","? "}"`。補題を一つ以上持つ。
+        push(
+            sp(name.span()),
+            Message::Expected {
+                what: Expected::LemmaGroupMember,
+            },
+        );
+    }
+    Ok(ast::ItemKind::LemmaGroup(ast::LemmaGroup {
+        ident: ident(&name),
+        members,
+    }))
+}
+
 fn use_item(input: ParseStream, begin: &syn::parse::ParseBuffer) -> syn::Result<ast::ItemKind> {
     input.parse::<Token![use]>()?;
     // `use lemmas g;`（`.eykp` だけ）と `use lemmas::x;`（Rust）を分ける。
     let t = peek_tts(input, 2);
     if is_ident(t.first(), "lemmas") && matches!(t.get(1), Some(TokenTree::Ident(_))) {
-        return Err(err(
-            input.span(),
-            Message::ProofSyntax {
-                written: "use lemmas".into(),
-            },
-        ));
+        parse_kw(input, "lemmas")?;
+        let p = input.call(syn::Path::parse_mod_style)?;
+        input.parse::<Token![;]>()?;
+        return Ok(ast::ItemKind::UseLemmas(convert::path(&p)));
     }
     let tree: syn::UseTree = input.parse()?;
     check_use(&tree, &mut Vec::new());

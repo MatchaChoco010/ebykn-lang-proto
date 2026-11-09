@@ -149,6 +149,18 @@ pub const VERUS_BUILTIN_CALLS: &[&str] = &[
     "shr_ref_struct_wrap",
 ];
 
+/// Rust の版で予約語になった名前と、その版（#104）。生成する `build/verus/` は `Ebykn.toml` の
+/// `edition` でビルドするので、その版で予約語の名前は、どこに書いても（マクロの引数の中を含む）
+/// `r#` を付けないと生成コードが構文エラーになる。構文解析器（syn）が自分で予約語として拒む名前
+/// （`async`、`await`、`dyn`、`try` など）は入れない。
+pub const EDITION_KEYWORDS: &[(&str, u32)] = &[("gen", 2024)];
+
+/// `Ebykn.toml` の `edition` で、`since` の版の予約語が予約語か。数として読めない版は、予約語と
+/// みなす（cargo がその版を拒むので、通してよい場合がない）。
+pub fn edition_reserves(edition: &str, since: u32) -> bool {
+    edition.parse::<u32>().map_or(true, |e| e >= since)
+}
+
 /// 表のすべての名前と種類。
 pub fn all() -> impl Iterator<Item = (&'static str, ReservedKind)> {
     let k = |xs: &'static [&'static str], kind| xs.iter().map(move |n| (*n, kind));
@@ -166,6 +178,27 @@ pub fn kind_of(name: &str) -> Option<ReservedKind> {
 /// 式のパス・`use` の最後の名前として見る種類か（関数として呼べるもの）。
 pub fn is_call(kind: ReservedKind) -> bool {
     matches!(kind, ReservedKind::VerusCall | ReservedKind::ProofCall)
+}
+
+/// 証明の構文の関数（[`PROOF_CALLS`]）を、クレートの定義でない名前として拒否する診断。
+///
+/// - `reveal_with_fuel` は Verus の書き方で、`.eyk` でも `.eykp` でも `reveal(f, n)` を案内する
+///   （`.eykp` に書いても通らないので、証明ファイルへは案内しない）。
+/// - `.eyk` のほかの名前は E0303（証明ファイルに書く）。
+/// - `.eykp` のほかの名前は、文の位置なら差し込み口が証明の文として読むので、ここに来るのは文で
+///   ない位置のもの。
+pub fn proof_call_message(name: &str, written: String, in_proof: bool) -> crate::diag::Message {
+    use crate::diag::Message;
+    if name == "reveal_with_fuel" {
+        Message::VerusSyntax {
+            written: "reveal_with_fuel(f, n)".into(),
+            ebykn: "reveal(f, n)".into(),
+        }
+    } else if in_proof {
+        Message::ProofStmtOnly { written }
+    } else {
+        Message::ProofSyntax { written }
+    }
 }
 
 /// 構文解析で判定できなかった、表の名前を最後に持つパス。検査が名前解決して決める。

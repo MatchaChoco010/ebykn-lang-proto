@@ -40,8 +40,17 @@ impl Parsed {
     }
 }
 
-/// `.eyk` を読む。
+/// `.eyk` を読む。証明構文（仕様 §5.7）は E0303 にする。
 pub fn parse_eyk(file: &SourceFile) -> Parsed {
+    parse(file, false)
+}
+
+/// `.eykp` を読む。文法は `.eyk` の文法に §5.7 の証明構文を足したもの。
+pub fn parse_eykp(file: &SourceFile) -> Parsed {
+    parse(file, true)
+}
+
+fn parse(file: &SourceFile, proof: bool) -> Parsed {
     syn::set_ebykn_hook(hook::hook);
     let tokens = match TokenStream::from_str(&file.text) {
         Ok(t) => t,
@@ -66,6 +75,10 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
             items: std::collections::HashMap::new(),
             pending: Vec::new(),
             unchecked_body: false,
+            proof,
+            proof_attrs: Vec::new(),
+            attr_ok: std::collections::HashSet::new(),
+            unread: Vec::new(),
         })
     });
     tokens::scan(&tokens);
@@ -73,6 +86,7 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
     let mut cx = CX
         .with(|cx| std::mem::replace(&mut *cx.borrow_mut(), prev))
         .expect("Cx");
+    check_proof_attrs(&mut cx);
     let parsed = match result {
         Ok(f) => f,
         Err(e) => {
@@ -119,6 +133,82 @@ struct Cx {
     pending: Vec<Message>,
     /// `unchecked fn` の本体を読んでいる間だけ真（`env!` / `option_env!` を許す。#27）。
     unchecked_body: bool,
+    /// `.eykp` を読んでいるか（証明構文を受理する）。
+    proof: bool,
+    /// 字句の走査（[`tokens`]）が見つけた証明の属性（仕様 §5.7 の `ProofAttr`）。
+    proof_attrs: Vec<ProofAttrUse>,
+    /// 書ける位置で読んだ証明の属性の位置（[`ProofAttrUse::span`] の `lo`）。
+    attr_ok: std::collections::HashSet<usize>,
+    /// 中を読まずに診断にした範囲（バイト位置の `lo..hi`）。`.eyk` が E0303 で落とした証明のコード
+    /// （`proof { }`、`assert ..`、`lemma fn` の本体など）と、読めなかった項目。中の証明の属性には
+    /// 「ここには書けない」を重ねない（[`check_proof_attrs`]）。
+    unread: Vec<(usize, usize)>,
+}
+
+/// 中を読まずに診断にした範囲を覚える。
+pub(crate) fn mark_unread(lo: usize, hi: usize) {
+    with_cx(|cx| cx.unread.push((lo, hi)));
+}
+
+/// ファイルの中の証明の属性一つ。書ける位置（式の `#[trigger]`、量化子の本体の前の
+/// `#![trigger ..]` / `#![auto]`、項目の種類に合う属性）で読んだものだけを通し、ほかは
+/// 解析の終わりに E0001 にする（[`check_proof_attrs`]）。
+pub(crate) struct ProofAttrUse {
+    pub span: Span,
+    pub name: String,
+    pub inner: bool,
+    /// 名前の後ろのトークン列（`(20)` など）。
+    pub args: Vec<TokenTree>,
+}
+
+pub(crate) fn record_proof_attr(a: ProofAttrUse) {
+    with_cx(|cx| cx.proof_attrs.push(a));
+}
+
+/// 証明の属性を書ける位置で読んだ。
+pub(crate) fn proof_attr_ok(span: Span) {
+    with_cx(|cx| {
+        cx.attr_ok.insert(span.lo);
+    });
+}
+
+/// 解析の終わりに、証明の属性の位置と引数を確かめる。書ける位置で読まなかったもの（ファイルや
+/// `mod` の先頭の内部属性、文や構造体の属性、マクロの引数の中、`cfg_attr` の中など）は、`.eykp` でも
+/// 書けないので、`.eyk` でも E0001 にする（証明ファイルへ案内しない）。書ける位置で正しい形なら、
+/// `.eyk` では E0303。
+fn check_proof_attrs(cx: &mut Cx) {
+    for a in std::mem::take(&mut cx.proof_attrs) {
+        let written = if a.inner {
+            format!("#![{}]", a.name)
+        } else {
+            format!("#[{}]", a.name)
+        };
+        let ok = cx.attr_ok.contains(&a.span.lo);
+        if !ok
+            && cx
+                .unread
+                .iter()
+                .any(|(lo, hi)| *lo <= a.span.lo && a.span.hi <= *hi)
+        {
+            // 囲むコードがすでに診断になっている（E0303 か構文エラー）。
+            continue;
+        }
+        let m = if !ok {
+            Message::NotAllowedHere { written }
+        } else if let Some(form) = tokens::proof_attr_args_error(&a) {
+            Message::ProofAttrArgs { written, form }
+        } else if cx.proof {
+            continue;
+        } else {
+            Message::ProofSyntax { written }
+        };
+        cx.diags.push(Diagnostic::new(a.span, m));
+    }
+}
+
+/// `.eykp` を読んでいるか。
+pub(crate) fn in_proof() -> bool {
+    with_cx(|cx| cx.proof)
 }
 
 /// `unchecked fn` の本体を読んでいる間かを設定し、前の値を返す。
@@ -206,7 +296,9 @@ pub(crate) fn reserved_path(
     if segs.len() == 1 || leading_colon {
         let name = segs.last().cloned().unwrap_or_default();
         let m = match kind {
-            ReservedKind::ProofCall => Message::ProofSyntax { written },
+            ReservedKind::ProofCall => {
+                crate::reserved::proof_call_message(&name, written, in_proof())
+            }
             ReservedKind::VerusCall => Message::VerusBuiltin { name, written },
             ReservedKind::VerusMacro => Message::VerusOnly { written },
             ReservedKind::EbyknTrait => Message::NotAllowedHere { written },

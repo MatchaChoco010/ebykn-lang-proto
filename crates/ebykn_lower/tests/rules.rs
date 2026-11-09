@@ -760,3 +760,16 @@ fn other_drops_are_not_marked() {
         );
     }
 }
+
+#[test]
+fn raw_identifiers_keep_their_prefix() {
+    // 版の予約語は `r#` を付けて名前にする（#104）。書き下しは `r#` を残す（edition 2024 の構文）。
+    has(
+        "pub fn r#gen(x: u64) -> u64 { x }\npub fn f() -> u64 { crate::r#gen(1) }",
+        "pub fn r#gen(x: u64) -> u64",
+    );
+    has(
+        "pub fn r#gen(x: u64) -> u64 { x }\npub fn f() -> u64 { crate::r#gen(1) }",
+        "crate::r#gen(1)",
+    );
+}

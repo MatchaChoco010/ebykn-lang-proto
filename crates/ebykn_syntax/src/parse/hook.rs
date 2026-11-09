@@ -35,6 +35,7 @@ pub(super) fn hook(site: EbyknSite, input: ParseStream) -> syn::Result<bool> {
     }
     match site {
         EbyknSite::Stmt => stmt(input),
+        EbyknSite::Atom { .. } if let Some(e) = erased_region(input) => Err(e),
         EbyknSite::Atom { allow_struct } => match peek_atom(input) {
             Some(kind) => parse_atom_in(input, kind, allow_struct).map(|_| true),
             None => Ok(false),
@@ -225,7 +226,17 @@ fn parse_region_arg(input: ParseStream) -> syn::Result<RawRegionArg> {
 pub(super) struct RawQuant {
     pub kind: ast::QuantKind,
     pub binders: Vec<RawBinder>,
+    pub triggers: Vec<RawTrigger>,
     pub body: syn::Expr,
+}
+
+/// 量化子の本体の前の `#![trigger ..]` / `#![auto]`（仕様 §5.7 の `ProofAttr`）。
+pub(super) enum RawTrigger {
+    Exprs {
+        exprs: Vec<syn::Expr>,
+        span: proc_macro2::Span,
+    },
+    Auto(proc_macro2::Span),
 }
 
 pub(super) struct RawBinder {
@@ -263,12 +274,60 @@ fn parse_quant(input: ParseStream, allow_struct: bool) -> syn::Result<RawQuant> 
             break;
         }
     }
+    let triggers = parse_triggers(input)?;
     let body = expr_in(input, allow_struct)?;
     Ok(RawQuant {
         kind,
         binders,
+        triggers,
         body,
     })
+}
+
+/// 本体の前の内部属性 `#![trigger e, ..]` / `#![auto]`。引数は Ebykn の式として読む。
+/// `.eyk` では、字句の検査（[`super::tokens`]）が E0303 にしている。
+fn parse_triggers(input: ParseStream) -> syn::Result<Vec<RawTrigger>> {
+    let mut out = Vec::new();
+    while input.peek(Token![#]) && input.peek2(Token![!]) {
+        let pound: Token![#] = input.parse()?;
+        input.parse::<Token![!]>()?;
+        let content;
+        let bracket = syn::bracketed!(content in input);
+        let span = pound.span.join(bracket.span.close()).unwrap_or(pound.span);
+        let name: proc_macro2::Ident = content.parse()?;
+        // 位置は正しいので、誤りがあっても先に印を付ける（「ここには書けない」を重ねない）。
+        if name == "trigger" || name == "auto" {
+            super::proof_attr_ok(super::sp(span));
+        }
+        if name == "trigger" {
+            let exprs: Vec<syn::Expr> = content
+                .parse_terminated(syn::Expr::parse, Token![,])?
+                .into_iter()
+                .collect();
+            if exprs.is_empty() {
+                // 仕様 §5.7：`"#![trigger" ExprList "]"`。式を一つ以上持つ。
+                return Err(err(
+                    span,
+                    Message::Expected {
+                        what: Expected::TriggerExpr,
+                    },
+                ));
+            }
+            out.push(RawTrigger::Exprs { exprs, span });
+        } else if name == "auto" {
+            // 引数の崩れ（`#![auto(x)]`）は解析の終わりに引数の誤りとして出す。
+            content.parse::<TokenStream>()?;
+            out.push(RawTrigger::Auto(span));
+        } else {
+            return Err(err(
+                span,
+                Message::NotAllowedHere {
+                    written: format!("#![{name}]"),
+                },
+            ));
+        }
+    }
+    Ok(out)
 }
 
 fn peek_binder(input: ParseStream) -> bool {
@@ -672,6 +731,44 @@ pub(super) enum RawStmt {
     /// 文の位置の `borrow` とループ。`;` は含まない（続く `;` は空の文になる）。
     Atom(RawAtom),
     Item(Box<ast::Item>),
+    /// 証明の文（`.eykp` だけ）。
+    Proof(RawProof),
+}
+
+/// 証明の文（仕様 §5.7 の `ProofStmt`）。
+pub(super) enum RawProof {
+    Block(syn::Block),
+    Assert {
+        expr: syn::Expr,
+        by: Option<RawAssertBy>,
+    },
+    AssertForall {
+        quant: RawQuant,
+        by: syn::Block,
+    },
+    SpecLet(syn::Local),
+    Reveal {
+        path: syn::Path,
+        fuel: Option<syn::Expr>,
+    },
+    Hide(syn::Path),
+}
+
+pub(super) enum RawAssertBy {
+    Block(syn::Block),
+    Prover {
+        mode: proc_macro2::Ident,
+        requires: Vec<syn::Expr>,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ProofKind {
+    Block,
+    Assert,
+    SpecLet,
+    Reveal,
+    Hide,
 }
 
 fn stmt(input: ParseStream) -> syn::Result<bool> {
@@ -688,6 +785,7 @@ pub(super) enum StmtKind {
     Leak,
     Atom(AtomKind),
     Item,
+    Proof(ProofKind),
 }
 
 /// 文の先頭を見る。証明構文と Verus の文はここでエラーにする。
@@ -711,7 +809,17 @@ pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
     {
         return Ok(Some(StmtKind::Leak));
     }
+    if super::in_proof()
+        && let Some(kind) = peek_proof_stmt(&t)
+    {
+        return Ok(Some(StmtKind::Proof(kind)));
+    }
     if let Some(m) = proof_or_verus_stmt(&t) {
+        if matches!(m, Message::ProofSyntax { .. }) {
+            // `.eyk` の証明の文は中を読まない。文の終わり（`proof { }` の `}`、ほかは `;`）までを覚える。
+            let (lo, hi) = stmt_extent(input);
+            super::mark_unread(lo, hi);
+        }
         return Err(err(input.span(), m));
     }
     if let Some(kind) = peek_atom(input)
@@ -725,6 +833,78 @@ pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
     Ok(None)
 }
 
+/// 文の先頭から、文の終わり（`proof { .. }` ならその `}`、ほかは最上位の `;`。なければ入力の
+/// 終わり）までのバイト位置。
+fn stmt_extent(input: ParseStream) -> (usize, usize) {
+    let mut c = input.cursor();
+    let lo = c.span().byte_range().start;
+    let mut hi = lo;
+    let proof_block = peek_kw(input, "proof");
+    while let Some((tt, next)) = c.token_tree() {
+        hi = tt.span().byte_range().end;
+        c = next;
+        let end = match &tt {
+            TokenTree::Punct(p) => p.as_char() == ';',
+            TokenTree::Group(g) => proof_block && g.delimiter() == Delimiter::Brace,
+            _ => false,
+        };
+        if end {
+            break;
+        }
+    }
+    (lo, hi)
+}
+
+/// `take` / `put` / `borrow` / `borrow mut` の領域に、`self` でない値の消去フィールドを書いた形
+/// （`put t@nodes[r]`、`borrow a.b@nodes[r] { .. }`）。領域添字として読めないので、そのままでは
+/// `put` が識別子になり「`;` が必要」としか言えない（#84）。どの形でも Rust の式ではない。
+fn erased_region(input: ParseStream) -> Option<syn::Error> {
+    let t = peek_tts(input, 16);
+    let kw = ["take", "put", "borrow"]
+        .into_iter()
+        .find(|k| is_ident(t.first(), k))?;
+    let mut i = 1;
+    if kw == "borrow" && is_ident(t.get(1), "mut") {
+        i = 2;
+    }
+    // 受け手：`x` か `x.y.z`（`self` だけなら仕様どおりの領域）。
+    let start = i;
+    let mut base = Vec::new();
+    loop {
+        let Some(TokenTree::Ident(x)) = t.get(i) else {
+            return None;
+        };
+        base.push(x.to_string());
+        i += 1;
+        if is_punct(t.get(i), '.') {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if base == ["self"] || !is_punct(t.get(i), '@') {
+        return None;
+    }
+    let Some(TokenTree::Ident(field)) = t.get(i + 1) else {
+        return None;
+    };
+    if !is_group(t.get(i + 2), Delimiter::Bracket) {
+        return None;
+    }
+    let span = t
+        .get(start)
+        .map(|x| x.span())
+        .unwrap_or_else(|| input.span());
+    Some(err(
+        span,
+        Message::ErasedRegion {
+            kw,
+            base: base.join("."),
+            field: field.to_string(),
+        },
+    ))
+}
+
 /// 文の先頭の証明構文（仕様 §5.7）と、Ebykn にない Verus の文。
 fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
     let proof = |s: &str| {
@@ -732,6 +912,13 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
             written: s.to_string(),
         })
     };
+    // `.eykp` にも書けない Verus の書き方なので、`.eyk` でも証明ファイルへは案内しない。
+    if is_ident(t.first(), "reveal_with_fuel") && is_group(t.get(1), Delimiter::Parenthesis) {
+        return Some(Message::VerusSyntax {
+            written: "reveal_with_fuel(f, n)".into(),
+            ebykn: "reveal(f, n)".into(),
+        });
+    }
     if is_ident(t.first(), "proof") && is_group(t.get(1), Delimiter::Brace) {
         return proof("proof { .. }");
     }
@@ -741,7 +928,7 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
     if is_ident(t.first(), "spec") && is_ident(t.get(1), "let") {
         return proof("spec let");
     }
-    for kw in ["reveal", "reveal_with_fuel", "hide"] {
+    for kw in ["reveal", "hide"] {
         if is_ident(t.first(), kw) && is_group(t.get(1), Delimiter::Parenthesis) {
             return proof(kw);
         }
@@ -752,6 +939,145 @@ fn proof_or_verus_stmt(t: &[TokenTree]) -> Option<Message> {
         });
     }
     None
+}
+
+/// `.eykp` の文の先頭の証明構文（仕様 §5.7）。
+fn peek_proof_stmt(t: &[TokenTree]) -> Option<ProofKind> {
+    if is_ident(t.first(), "proof") && is_group(t.get(1), Delimiter::Brace) {
+        Some(ProofKind::Block)
+    } else if is_ident(t.first(), "assert") && !is_punct(t.get(1), '!') {
+        Some(ProofKind::Assert)
+    } else if is_ident(t.first(), "spec") && is_ident(t.get(1), "let") {
+        Some(ProofKind::SpecLet)
+    } else if is_ident(t.first(), "reveal") && is_group(t.get(1), Delimiter::Parenthesis) {
+        Some(ProofKind::Reveal)
+    } else if is_ident(t.first(), "hide") && is_group(t.get(1), Delimiter::Parenthesis) {
+        Some(ProofKind::Hide)
+    } else {
+        None
+    }
+}
+
+fn parse_proof(input: ParseStream, kind: ProofKind) -> syn::Result<RawProof> {
+    Ok(match kind {
+        ProofKind::Block => {
+            parse_kw(input, "proof")?;
+            RawProof::Block(input.parse()?)
+        }
+        ProofKind::Assert => parse_assert(input)?,
+        ProofKind::SpecLet => {
+            parse_kw(input, "spec")?;
+            let l = match input.parse::<syn::Stmt>()? {
+                syn::Stmt::Local(l) => l,
+                _ => return Err(input.error("expected `let`")),
+            };
+            // 仕様 §5.7：`"spec" "let" Pat "=" Expr ";"`。初期値のないものと `let-else` は書けない。
+            match &l.init {
+                None => {
+                    return Err(err(
+                        l.semi_token.span,
+                        Message::Expected {
+                            what: Expected::SpecLetInit,
+                        },
+                    ));
+                }
+                Some(init) if init.diverge.is_some() => {
+                    return Err(err(
+                        init.diverge.as_ref().expect("diverge").0.span,
+                        Message::NotAllowedHere {
+                            written: "spec let .. else { .. }".into(),
+                        },
+                    ));
+                }
+                Some(_) => {}
+            }
+            RawProof::SpecLet(l)
+        }
+        ProofKind::Reveal => {
+            parse_kw(input, "reveal")?;
+            let content;
+            syn::parenthesized!(content in input);
+            let path: syn::Path = content.parse()?;
+            let fuel = if content.peek(Token![,]) {
+                content.parse::<Token![,]>()?;
+                Some(content.parse()?)
+            } else {
+                None
+            };
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            input.parse::<Token![;]>()?;
+            RawProof::Reveal { path, fuel }
+        }
+        ProofKind::Hide => {
+            parse_kw(input, "hide")?;
+            let content;
+            syn::parenthesized!(content in input);
+            let path: syn::Path = content.parse()?;
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            input.parse::<Token![;]>()?;
+            RawProof::Hide(path)
+        }
+    })
+}
+
+/// `assert P;`、`assert P by { .. };`、`assert P by(mode) requires Q;`、
+/// `assert forall x in r, P by { .. };`。
+fn parse_assert(input: ParseStream) -> syn::Result<RawProof> {
+    parse_kw(input, "assert")?;
+    // `assert forall .. by { .. }` は束縛子を `by` の中で使える形（Verus の `assert forall`）。
+    // `by { .. }` が続かない `assert forall ..` は、量化子の式の `assert`。
+    if matches!(peek_atom(input), Some(AtomKind::Quant)) && peek_kw(input, "forall") {
+        let ahead = input.fork();
+        if let Ok(quant) = parse_quant(&ahead, true)
+            && peek_kw(&ahead, "by")
+            && ahead.peek2(syn::token::Brace)
+        {
+            input.advance_to(&ahead);
+            parse_kw(input, "by")?;
+            let by = input.parse()?;
+            input.parse::<Token![;]>()?;
+            return Ok(RawProof::AssertForall { quant, by });
+        }
+    }
+    let expr: syn::Expr = input.parse()?;
+    let by = if peek_kw(input, "by") {
+        parse_kw(input, "by")?;
+        if input.peek(syn::token::Brace) {
+            Some(RawAssertBy::Block(input.parse()?))
+        } else if input.peek(syn::token::Paren) {
+            let content;
+            syn::parenthesized!(content in input);
+            let mode: proc_macro2::Ident = content.parse()?;
+            if !content.is_empty() {
+                return Err(content.error("expected `)`"));
+            }
+            let mut requires = Vec::new();
+            if peek_kw(input, "requires") {
+                parse_kw(input, "requires")?;
+                loop {
+                    requires.push(input.parse()?);
+                    if !input.peek(Token![,]) {
+                        break;
+                    }
+                    input.parse::<Token![,]>()?;
+                    if input.peek(Token![;]) {
+                        break;
+                    }
+                }
+            }
+            Some(RawAssertBy::Prover { mode, requires })
+        } else {
+            return Err(input.error("expected `{` or `(` after `by`"));
+        }
+    } else {
+        None
+    };
+    input.parse::<Token![;]>()?;
+    Ok(RawProof::Assert { expr, by })
 }
 
 /// 文を読む。`lookahead_only` のとき（差し込み口から）は、項目を読むときの診断を捨てる。
@@ -779,6 +1105,7 @@ pub(super) fn parse_stmt_kind(
             RawStmt::Leak(ident)
         }
         StmtKind::Atom(k) => RawStmt::Atom(parse_atom(input, k)?),
+        StmtKind::Proof(k) => RawStmt::Proof(parse_proof(input, k)?),
         StmtKind::Item => {
             if lookahead_only {
                 RawStmt::Item(Box::new(lookahead_item(input)?))
@@ -920,6 +1247,8 @@ pub(super) fn parse_stmt_verbatim(
                 skip_to(input, c.hi)?;
                 let mut item = c.item;
                 let mut outer = super::convert::attrs(&attrs);
+                // 構文解析器が先に読んだ外部属性は、項目を読んだときには見ていない。
+                item::proof_attrs_on_item(&outer, &item.kind);
                 if let Some(a) = outer.first() {
                     item.span = a.span.to(item.span);
                 }
