@@ -15,19 +15,21 @@ description: ebykn-lang-proto のリリースの報告スライド（PDF）を�
 
 | 置き場 | 中身 |
 | --- | --- |
-| `xtask/src/slides.rs` | `cargo xtask slides-install`：固定した Typst（単体のバイナリ）とフォント（Noto Sans JP、Noto Sans Mono CJK JP）を sha256 を確かめて `~/.cache/ebykn/` に入れる。一時的なエラーは再試行する |
-| 同上 | `cargo xtask slides-build <ディレクトリ>`：`<ディレクトリ>/slides.typ` を `slides.pdf` に組み、はみ出し・空のページ・折り返したコードの行・リンクの数・1 枚の密度・変更ごとの見出し（下の「質の基準」）を検査する。どれかがあれば失敗する |
+| `xtask/src/slides/mod.rs`、`pin.rs` | `cargo xtask slides-install`：固定した Typst（単体のバイナリ）とフォント（Noto Sans JP、Noto Sans Mono CJK JP）を sha256 を確かめて `~/.cache/ebykn/` に入れる。一時的なエラーは再試行する |
+| 同上 | `cargo xtask slides-build <ディレクトリ>`：`<ディレクトリ>/slides.typ` を `slides.pdf` に組み、はみ出し・空のページ・折り返したコードの行・リンクの数・1 枚の密度・変更ごとの見出し（下の「質の基準」）・Typst の警告・小さすぎる文字・パッケージの読み込みを検査する。どれかがあれば失敗する |
+| `xtask/src/slides/selftest.rs` | `cargo xtask slides-selftest`：見本を 1 か所ずつ壊して組み、上の検査が本物のテンプレートで失敗できることを確かめる。CI の `slides` ジョブが走らせる |
 | `template/ebykn-slides.typ` | テンプレート（下の「部品」） |
 | `template/eyk.sublime-syntax`、`console.sublime-syntax`、`code.tmTheme` | `.eyk` とコマンドの出力の色分け |
 | `example/slides.typ` | 部品を一通り使った見本。CI の `slides` ジョブが組む |
 
-組むときはシステムのフォントも Typst に同梱のフォントも使わないので、手元でも CI でも同じ PDF になります。版を上げるときは `xtask/src/slides.rs` の固定値と sha256 を書き換え、見本を組み直して目で確かめます。
+組むときはシステムのフォントも Typst に同梱のフォントも使わないので、手元でも CI でも同じ PDF になります。パッケージ（`@preview/..`）は使いません。Typst はパッケージをネットから取ってきて、それを止める引数がないので、原稿かテンプレートにパッケージを読み込む行があると `slides-build` が組む前に失敗します。テンプレートは Typst の標準の機能だけで書きます。版を上げるときは `xtask/src/slides/pin.rs` の固定値と sha256 を書き換え、見本を組み直して目で確かめます。
 
 ## 1. 入力を決める
 
 - 識別子：`ebykn-release` から渡される `YYYY-MM-DD.N`。下書きなら `draft-N`。
 - 範囲：前回のリリースのタグ（初回は `origin/main`）から、今回のコミット（`develop` の先頭）まで。
-- `ebykn-release` から呼ばれたときは、`prs.txt`（入った順の PR 番号）、`issues.txt`（閉じた Issue）、`direct.txt`（PR のないコミット）、`mismatch.txt`（題と PR の食い違い）、`needs-review.json` を受け取る。手順 2 の代わりにこれを使う。`direct.txt` と `mismatch.txt` に行があれば、一覧の次に 1 枚使って載せる。
+- `ebykn-release` から呼ばれたときは、`prs.txt`（入った順の PR 番号）、`issues.txt`（PR が閉じた Issue）、`direct.txt`（PR のないコミット）、`mismatch.txt`（題と PR の食い違い）、`needs-review.json` を受け取る。手順 2 の一覧の代わりにこれを使う。`direct.txt` と `mismatch.txt` に行があれば、一覧の次に 1 枚使って載せる。
+- 受け取った一覧は番号だけなので、手順 3 では各 PR と Issue を `gh pr view` / `gh issue view` で読む。`issues.txt` には PR の本文が Refs で挙げた Issue が入らないので、PR の本文から拾う。
 - 置き場：`target/reports/<識別子>/`（`target/` はコミットしない）。PDF の元のファイルもここに置く。
 
 ```bash
@@ -105,19 +107,40 @@ git worktree add --detach $S/wt/<PR>-after  <マージコミット>
 
 ### 試し方を作る
 
-作者は、`release` のワークスペース（`ebykn-release` の手順 7 の orca のワークスペース）で試します。書いてあるとおりに打てば試せるように、次の順に書きます。
+作者は、orca のワークスペース `release`（表示名「release（作者の確認用）」。`ebykn-release` の手順 7 が作り、リリースのたびに早送りする）で試します。書いてあるとおりに打てば試せるように、次の順に書きます。
 
-ワークスペースのパスは推測で書かず、orca の一覧から取ってスライドに書きます。ワークスペースがまだなければ（初回のリリースの前）、`ebykn-release` の手順 7 が作るまで待ち、作ってから取ります。
+スライドでは、ワークスペースを名前で示します。パスは、ワークスペースがすでにあるときだけ、orca の一覧から取って書きます（推測で書かない）。初回のリリースではまだないので、名前だけを書きます。スライドを作るのは `ebykn-release` の手順 3 で、ワークスペースを作る手順 7 より前だからです。待たずに進めます。
 
 ```bash
+orca=${ORCA_CLI_COMMAND:-orca}
 repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-orca worktree list --repo "path:$repo" --limit 10000 --json \
-  | jq -r '.result.worktrees[] | select((.branch // "") == "refs/heads/release") | .path'
-```どのコマンドも、今回のコミットで実際に走らせ、その出力の例を載せます（長い出力は要点の行に絞り、省いたことを書く）。
+if ! "$orca" worktree list --repo "path:$repo" --limit 10000 --json > "$DIR/worktrees.json"; then
+  echo "orca worktree list が失敗した"; cat "$DIR/worktrees.json"; exit 1
+fi
+[ "$(jq -r '.ok' "$DIR/worktrees.json")" = true ] || { cat "$DIR/worktrees.json"; exit 1; }
+[ "$(jq -r '.result.truncated' "$DIR/worktrees.json")" = false ] || { echo "一覧が切れている"; exit 1; }
+jq -r '.result.worktrees[] | select((.branch // "") == "refs/heads/release") | .path' "$DIR/worktrees.json"
+# 空ならワークスペースはまだない（スライドには名前だけを書く）
+```
+
+スライドに載せる出力は、今回のコミット（`$HEAD`）の一時のワークツリーで走らせて取ります。手順 3 の時点では、release のワークスペースは前のリリースのままで、`playground/` には作者が書き換えたファイルがあるかもしれないので、そこでは走らせません。
+
+```bash
+S=<scratchpad>
+git worktree add --detach "$S/wt/try" "$HEAD"
+cd "$S/wt/try"
+cargo xtask verus-install
+cargo xtask playground
+export PATH="$S/wt/try/target/debug:$PATH"
+# playground/<例> でコマンドを打ち、出力を写す。出力の中の一時のワークツリーのパスは「…/」と省く
+cd - && git worktree remove --force "$S/wt/try"   # 終わったら消す
+```
+
+どのコマンドも、こうして今回のコミットで実際に走らせ、その出力の例を載せます（長い出力は要点の行に絞り、省いたことを書く）。
 
 1. 準備（最初に 1 回だけ）：ワークスペースに移り、`cargo xtask verus-install` で Verus を入れ（`ebykn verify` と `ebykn build` に要る）、`cargo xtask playground` で `ebykn` をビルドして `examples/` を `playground/` に写し、`target/debug` を `PATH` に通す（`examples/README.md` の「試し方」と同じ）。`ebykn-release` の手順 7 がワークスペースで `cargo xtask playground` を走らせるので、作者が打つときには写してあることが多い。`playground/` は `.gitignore` で無視するので、書き換えても `release` の早送りの邪魔にならない。
 2. `ebykn --help`。
-3. `playground/` の各例：何を示す例か、どの機能を試せるか、`cd playground/<例>` からの打つコマンドと出力の例を、例ごとに書く。中身は各例の `README.md` に合わせる（README の ```` ```console ```` は CI の `examples-verify` が実行して確かめている）。そのうえで、スライドに載せるコマンドは今回のコミットの `playground/` で実際に打ち、出力を写す。
+3. `playground/` の各例：何を示す例か、どの機能を試せるか、`cd playground/<例>` からの打つコマンドと出力の例を、例ごとに書く。中身は各例の `README.md` に合わせる（README の ```` ```console ```` は CI の `examples-verify` が実行して確かめている）。
    - `examples/` にない機能（新しく入ったサブコマンドなど）を案内するときは、`ebykn init` で `playground/` の下にプロジェクトを作る形で書く。
 4. 書き換えて試す：各例の README の「試してみること」から、書き味が分かる変更（契約を変えて `verify` が失敗する、権限の誤りで `check` が拒否するなど）を選び、その出力を載せる。
 5. まだ試せないもの：理由と、いつ試せるか（マイルストーンか Issue の番号）。例：付録 B の stack の push / pop の verified は M3。
@@ -174,6 +197,8 @@ cargo xtask slides-build $DIR
 - 見出し：同じ PR のページの `heading` と一覧の `heading` を揃え、同じ PR のページを続けて並べ、コードネームを外す。
 - 折り返したコードの行：要点の行に絞るか、`size: 10pt` にする。出力の長い行は手で折り返し、箱の題に「長い行は折り返した」と書く。
 - リンクの数の食い違い：`link` を直接使わず、`pr`・`issue`・`commit`・`ext-link` を使う。
+- Typst の警告（知らないフォントなど）：警告がなくなるように原稿を直す。
+- 文字の大きさ：`size:` や `text(..)` の大きさは pt で 10pt 以上にする。`em` は大きさを確かめられないので使わない。
 
 ## 8. 目で確かめる
 
@@ -189,6 +214,7 @@ pdftoppm -r 90 -png $DIR/slides.pdf $DIR/pages/p
 - 読めない大きさの文字がない（地の文 12pt 以上、コード 10pt 以上）。
 - PR・Issue・コミットのリンクがある（青い下線）。一覧の題からスライドに飛べる。
 - 修正前と修正後の色（赤と緑）と見出しが合っている。
+- 字形のない文字（絵文字や `⊢` などの記号）が、豆腐の箱（□）で出ていない。固定したフォントにない文字は警告なしに箱になり、`slides-build` も通るので、目でしか見つからない。
 
 ## 9. 渡す
 

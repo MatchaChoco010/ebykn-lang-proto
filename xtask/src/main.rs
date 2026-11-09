@@ -41,6 +41,7 @@ const USAGE: &str = "\
 
   slides-install    報告スライドの道具（固定した Typst とフォント）をキャッシュに入れる（一時的なエラーは再試行）
   slides-build <ディレクトリ>  <ディレクトリ>/slides.typ を slides.pdf に組み、はみ出し・空のページ・密度・見出し・リンクを検査する
+  slides-selftest   スキルの見本を 1 か所ずつ壊して組み、slides-build の検査が失敗することを確かめる（slides-install が要る）
 ";
 
 /// 整形の検査。`--all` は path 依存（取り込んだ `vendor/`）まで含めるので付けない。
@@ -92,6 +93,7 @@ fn main() -> ExitCode {
             }
         },
         "slides-install" => slides::install(),
+        "slides-selftest" => slides::selftest::run(&root()),
         name => match gates::ALL
             .iter()
             .chain(gates::VERUS)

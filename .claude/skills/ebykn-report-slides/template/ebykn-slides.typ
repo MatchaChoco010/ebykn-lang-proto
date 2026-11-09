@@ -279,6 +279,8 @@
 }
 
 #let overview(entries, title: "入った変更の一覧", per-page: 10, size: size-small) = {
+  // 1 ページ 10 行まで（作者の意見で決めた。SKILL.md の「質の基準」）。
+  if per-page > 10 { panic("overview の per-page は 10 以下にする（" + str(per-page) + " が渡された）") }
   let chunks = entries.chunks(per-page)
   for (i, chunk) in chunks.enumerate() {
     let t = if chunks.len() == 1 { title } else { title + "（" + str(i + 1) + "/" + str(chunks.len()) + "）" }

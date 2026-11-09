@@ -12,34 +12,9 @@ use std::process::Command;
 
 use crate::fetch;
 
-/// Typst の版。上げるときは `TYPST_SHA256` も書き換え、見本（スキルの `example/`）を組み直して目で確かめる。
-pub const TYPST_VERSION: &str = "0.15.1";
-const TYPST_ASSET: &str = "typst-x86_64-unknown-linux-musl.tar.xz";
-const TYPST_SHA256: &str = "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c";
-/// 資産を展開してできるディレクトリ。
-const TYPST_UNPACKED: &str = "typst-x86_64-unknown-linux-musl";
-
-/// フォントを取る notofonts/noto-cjk のコミット（タグ `Sans2.004`）。
-const FONTS_COMMIT: &str = "523d033d6cb47f4a80c58a35753646f5c3608a78";
-/// 取るフォント（リポジトリの中のパスと sha256）。
-const FONTS: &[(&str, &str)] = &[
-    (
-        "Sans/SubsetOTF/JP/NotoSansJP-Regular.otf",
-        "dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073",
-    ),
-    (
-        "Sans/SubsetOTF/JP/NotoSansJP-Bold.otf",
-        "1b0edfb500b73a4fa8a4fcaae1bbbd403994e08e73e3e0da37e70d3853f42c5f",
-    ),
-    (
-        "Sans/Mono/NotoSansMonoCJKjp-Regular.otf",
-        "4d01725be822d144cf9a56ade981e6fb920cd7a610b8fc24cc601a920beea5b9",
-    ),
-    (
-        "Sans/Mono/NotoSansMonoCJKjp-Bold.otf",
-        "dfdffe149bc6cbf52860dabd8b8dadbca40ae87a4fbe143b55c0258db2dadfb8",
-    ),
-];
+mod pin;
+pub mod selftest;
+use pin::{FONTS, FONTS_COMMIT, TYPST_ASSET, TYPST_SHA256, TYPST_UNPACKED, TYPST_VERSION};
 
 /// 展開が終わったことを示す印。中身は確かめた sha256。
 const MARKER: &str = ".sha256";
@@ -85,7 +60,7 @@ fn fetch_pinned(
     download: impl FnOnce(&str, &Path) -> Result<(), String>,
 ) -> Result<(), String> {
     download(url, dest)?;
-    let got = crate::verus::sha256_of(dest)?;
+    let got = fetch::sha256_of(dest)?;
     fetch::check_sha256(what, &got, sha256).inspect_err(|_| {
         let _ = std::fs::remove_file(dest);
     })
@@ -127,7 +102,7 @@ fn installed_fonts() -> Result<PathBuf, String> {
                 dir.display()
             ));
         }
-        fetch::check_sha256(font_file(path), &crate::verus::sha256_of(&file)?, sha)?;
+        fetch::check_sha256(font_file(path), &fetch::sha256_of(&file)?, sha)?;
     }
     Ok(dir)
 }
@@ -179,8 +154,7 @@ fn try_install() -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for (path, sha) in FONTS {
         let file = dir.join(font_file(path));
-        let ok =
-            file.is_file() && crate::verus::sha256_of(&file).is_ok_and(|got| got.as_str() == *sha);
+        let ok = file.is_file() && fetch::sha256_of(&file).is_ok_and(|got| got.as_str() == *sha);
         if ok {
             continue;
         }
@@ -192,6 +166,27 @@ fn try_install() -> Result<(PathBuf, PathBuf), String> {
         })?;
     }
     Ok((typst, installed_fonts()?))
+}
+
+/// Typst を走らせる。失敗したときに加え、警告（`warning:`）を出したときも失敗にする。
+/// 警告には、知らないフォント（`unknown font family`）のように、黙って見た目が崩れるものがある。
+/// `label` は表示する呼び出し（`typst eval` の長い式を出さないため）。
+fn run_typst(cmd: &mut Command, label: &str) -> Result<std::process::Output, String> {
+    eprintln!("$ {label}");
+    let out = cmd
+        .output()
+        .map_err(|e| format!("typst を起動できません: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    eprint!("{stderr}");
+    if !out.status.success() {
+        return Err(format!("typst が失敗しました（{}）:\n{stderr}", out.status));
+    }
+    if stderr.contains("warning:") {
+        return Err(format!(
+            "typst が警告を出しました。警告がなくなるように原稿を直してください:\n{stderr}"
+        ));
+    }
+    Ok(out)
 }
 
 fn run(cmd: &mut Command) -> Result<(), String> {
@@ -209,24 +204,32 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
-/// 原稿の `size: <数>pt` のうち、最小の大きさより小さいもの（行番号と値）。
+/// 原稿の文字の大きさの指定のうち、使えないもの（行番号と値）。`size: <数>pt` と、位置の引数の
+/// `text(<数>pt)` を見る。最小の大きさより小さい pt と、大きさを確かめられない `em` の指定を返す。
 pub fn small_sizes(src: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     for (i, line) in src.lines().enumerate() {
-        let mut rest = line;
-        while let Some(at) = rest.find("size:") {
-            rest = &rest[at + "size:".len()..];
-            let value: String = rest
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            let after = rest.trim_start()[value.len()..].to_string();
-            if let Ok(n) = value.parse::<f64>()
-                && after.starts_with("pt")
-                && n < MIN_SIZE_PT
-            {
-                found.push((i + 1, format!("{value}pt")));
+        for key in ["size:", "text("] {
+            let mut rest = line;
+            while let Some(at) = rest.find(key) {
+                rest = &rest[at + key.len()..];
+                let t = rest.trim_start();
+                let value: String = t
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect();
+                if value.is_empty() {
+                    continue;
+                }
+                let unit: String = t[value.len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect();
+                let too_small =
+                    matches!(value.parse::<f64>(), Ok(n) if unit == "pt" && n < MIN_SIZE_PT);
+                if too_small || unit == "em" {
+                    found.push((i + 1, format!("{value}{unit}")));
+                }
             }
         }
     }
@@ -281,6 +284,10 @@ const CHECK_EXPR: &str = r#"query(<ebykn-check>).map(it => {
 /// `typst eval --format json` の出力（JSON の文字列 1 つ）を読む。
 fn json_string(text: &str) -> Result<String, String> {
     let t = text.trim();
+    // テンプレートを使っていない原稿では記録がなく、`null` になる。空として read_check に渡す。
+    if t == "null" {
+        return Ok(String::new());
+    }
     let inner = t
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
@@ -572,6 +579,22 @@ fn typst_args(cmd: &mut Command, root: &Path, fonts: &Path) {
         .arg(fonts);
 }
 
+/// テンプレートの置き場（リポジトリの直下から）。
+pub const TEMPLATE: &str = ".claude/skills/ebykn-report-slides/template/ebykn-slides.typ";
+
+/// パッケージ（`"@preview/.."` など）を読み込む行（行番号と行）。Typst はパッケージをネットから取ってきて、
+/// 止める引数がない。取ってくると版が固定されず、手元と CI で中身が変わりうるので、組む前に拒否する。
+pub fn package_imports(src: &str) -> Vec<(usize, String)> {
+    src.lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            let t = l.trim_start().trim_start_matches('#');
+            (t.starts_with("import") || t.starts_with("include")) && t.contains("\"@")
+        })
+        .map(|(i, l)| (i + 1, l.trim().to_string()))
+        .collect()
+}
+
 pub fn build(root: &Path, dir: &str) -> bool {
     match try_build(root, Path::new(dir)) {
         Ok((pdf, check)) => {
@@ -592,7 +615,7 @@ pub fn build(root: &Path, dir: &str) -> bool {
     }
 }
 
-fn try_build(root: &Path, dir: &Path) -> Result<(PathBuf, Check), Vec<String>> {
+pub(crate) fn try_build(root: &Path, dir: &Path) -> Result<(PathBuf, Check), Vec<String>> {
     let one = |e: String| vec![e];
     let src = dir.join("slides.typ");
     let pdf = dir.join("slides.pdf");
@@ -603,11 +626,27 @@ fn try_build(root: &Path, dir: &Path) -> Result<(PathBuf, Check), Vec<String>> {
             .into_iter()
             .map(|(line, v)| {
                 format!(
-                    "{}:{line}: 文字の大きさ {v} は小さすぎます（{MIN_SIZE_PT}pt 以上にする）",
+                    "{}:{line}: 文字の大きさ {v} は使えません（pt で {MIN_SIZE_PT}pt 以上にする。em は大きさを確かめられない）",
                     src.display()
                 )
             })
             .collect());
+    }
+    let template = std::fs::read_to_string(root.join(TEMPLATE))
+        .map_err(|e| one(format!("{TEMPLATE}: {e}")))?;
+    let mut packages = Vec::new();
+    for (name, body) in [
+        (src.display().to_string(), &text),
+        (TEMPLATE.to_string(), &template),
+    ] {
+        for (line, l) in package_imports(body) {
+            packages.push(format!(
+                "{name}:{line}: パッケージは使えません（ネットから取ってくるので版が固定されない）。Typst の標準の機能で書いてください: {l}"
+            ));
+        }
+    }
+    if !packages.is_empty() {
+        return Err(packages);
     }
     let typst = installed_typst().map_err(one)?;
     let fonts = installed_fonts().map_err(one)?;
@@ -629,20 +668,19 @@ fn try_build(root: &Path, dir: &Path) -> Result<(PathBuf, Check), Vec<String>> {
         .arg(&stamp)
         .arg(&src)
         .arg(&pdf);
-    run(&mut compile).map_err(one)?;
+    run_typst(
+        &mut compile,
+        &format!("typst compile {} {}", src.display(), pdf.display()),
+    )
+    .map_err(one)?;
     let mut eval = Command::new(&typst);
     eval.args(["eval", CHECK_EXPR, "--in"]).arg(&src);
     typst_args(&mut eval, root, &fonts);
-    eprintln!("$ typst eval <検査の記録> --in {}", src.display());
-    let out = eval
-        .output()
-        .map_err(|e| one(format!("typst を起動できません: {e}")))?;
-    if !out.status.success() {
-        return Err(one(format!(
-            "typst eval が失敗しました: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
+    let out = run_typst(
+        &mut eval,
+        &format!("typst eval <検査の記録> --in {}", src.display()),
+    )
+    .map_err(one)?;
     let check = json_string(&String::from_utf8_lossy(&out.stdout))
         .and_then(|t| read_check(&t))
         .map_err(one)?;
@@ -860,14 +898,44 @@ mod tests {
         let t = json_string("\"slides 1\\noverflow 1 2 \\\"題\\\" \\u00e9\"\n").unwrap();
         assert_eq!(t, "slides 1\noverflow 1 2 \"題\" é");
         assert!(json_string("[1]").is_err());
+        // テンプレートを使わない原稿では null になる。空として read_check の分かりやすい文言に回す。
+        assert_eq!(json_string("null\n").unwrap(), "");
+        assert!(
+            read_check(&json_string("null").unwrap())
+                .unwrap_err()
+                .contains("deck.with")
+        );
         assert!(json_string("\"\\x\"").is_err());
     }
 
     #[test]
     fn fails_on_text_smaller_than_the_minimum() {
-        let src = "#text(size: 12pt)[a]\n#set text(size: 9.5pt)\n#text(size: 0.8em)[b]";
+        let src = "#text(size: 12pt)[a]\n#set text(size: 9.5pt)\n#text(14pt)[b]";
         assert_eq!(small_sizes(src), vec![(2, "9.5pt".to_string())]);
         assert!(small_sizes(&mutate(src, "9.5pt", "10pt")).is_empty());
+        // 位置の引数の大きさと、大きさを確かめられない em も捕まえる。
+        assert_eq!(
+            small_sizes(&mutate(src, "text(14pt)", "text(8pt)")),
+            vec![(2, "9.5pt".to_string()), (3, "8pt".to_string())]
+        );
+        assert_eq!(
+            small_sizes(&mutate(src, "size: 12pt", "size: 0.5em")),
+            vec![(1, "0.5em".to_string()), (2, "9.5pt".to_string())]
+        );
+        // 大きさでない引数（text(fill: ..)）は見ない。
+        assert!(small_sizes("#text(fill: red)[x]").is_empty());
+    }
+
+    #[test]
+    fn fails_on_package_imports() {
+        let src = "#import \"/.claude/x.typ\": *\n#import \"@preview/cetz:0.3.0\"\n  #include \"@local/a:1.0.0\"";
+        assert_eq!(
+            package_imports(src).iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert!(package_imports(&mutate(src, "@preview/cetz:0.3.0", "/b.typ")).len() == 1);
+        // 本物のテンプレートはパッケージを使っていない。
+        assert!(package_imports(&real(TEMPLATE)).is_empty());
     }
 
     #[test]
@@ -943,7 +1011,7 @@ mod tests {
     #[test]
     fn fails_when_try_install_fetches_outside_fetch_pinned() {
         // fetch_pinned を通らない取得は sha256 の照合をすり抜ける。
-        let src = real("xtask/src/slides.rs");
+        let src = real("xtask/src/slides/mod.rs");
         let body = crate::testutil::without_tests(&src);
         let call = "fetch::download(";
         assert_eq!(
