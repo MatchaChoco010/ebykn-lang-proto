@@ -78,6 +78,7 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
             proof,
             proof_attrs: Vec::new(),
             attr_ok: std::collections::HashSet::new(),
+            unread: Vec::new(),
         })
     });
     tokens::scan(&tokens);
@@ -138,6 +139,15 @@ struct Cx {
     proof_attrs: Vec<ProofAttrUse>,
     /// 書ける位置で読んだ証明の属性の位置（[`ProofAttrUse::span`] の `lo`）。
     attr_ok: std::collections::HashSet<usize>,
+    /// 中を読まずに診断にした範囲（バイト位置の `lo..hi`）。`.eyk` が E0303 で落とした証明のコード
+    /// （`proof { }`、`assert ..`、`lemma fn` の本体など）と、読めなかった項目。中の証明の属性には
+    /// 「ここには書けない」を重ねない（[`check_proof_attrs`]）。
+    unread: Vec<(usize, usize)>,
+}
+
+/// 中を読まずに診断にした範囲を覚える。
+pub(crate) fn mark_unread(lo: usize, hi: usize) {
+    with_cx(|cx| cx.unread.push((lo, hi)));
 }
 
 /// ファイルの中の証明の属性一つ。書ける位置（式の `#[trigger]`、量化子の本体の前の
@@ -173,7 +183,17 @@ fn check_proof_attrs(cx: &mut Cx) {
         } else {
             format!("#[{}]", a.name)
         };
-        let m = if !cx.attr_ok.contains(&a.span.lo) {
+        let ok = cx.attr_ok.contains(&a.span.lo);
+        if !ok
+            && cx
+                .unread
+                .iter()
+                .any(|(lo, hi)| *lo <= a.span.lo && a.span.hi <= *hi)
+        {
+            // 囲むコードがすでに診断になっている（E0303 か構文エラー）。
+            continue;
+        }
+        let m = if !ok {
             Message::NotAllowedHere { written }
         } else if let Some(form) = tokens::proof_attr_args_error(&a) {
             Message::ProofAttrArgs { written, form }

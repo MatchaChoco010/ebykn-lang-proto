@@ -33,3 +33,34 @@ fn bare_mut_param_in_a_trigger_is_e0004() {
         0
     );
 }
+
+/// 線形性などの本体の検査（`body.rs`）も、量化子と `assert forall` のトリガーの式をたどる。`self` のない
+/// 関数で `self@x` をトリガーにだけ書くと E0515 になる。
+fn body_codes(src: &str) -> Vec<String> {
+    let (mut project, diags) = ebykn_check::project::single("");
+    assert!(diags.is_empty());
+    let f = SourceFile::new(FileId(1), "proof/lib.eykp", src);
+    let p = parse_eykp(&f);
+    assert!(p.diags.is_empty(), "{:?}", p.diags);
+    project.files[1] = f;
+    project.asts[1] = Some(p.file);
+    ebykn_check::check(&project)
+        .diags
+        .iter()
+        .map(|d| d.code().as_str().to_string())
+        .collect()
+}
+
+#[test]
+fn body_checks_walk_triggers() {
+    for src in [
+        "fn f() ensures forall i: int, #![trigger self@order.len()] true { }",
+        "fn f() { assert forall i: int, #![trigger self@order.len()] true by { }; }",
+    ] {
+        assert!(body_codes(src).contains(&"E0515".to_string()), "{src}");
+    }
+    assert!(
+        !body_codes("fn f() { assert forall i: int, #![auto] true by { }; }")
+            .contains(&"E0515".to_string())
+    );
+}

@@ -103,7 +103,9 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 - `reveal_with_fuel(..)`：Verus の書き方として、`reveal(f, n)` を案内します。
 - `assume(..)`・`admit(..)`：Ebykn にない Verus の関数として拒否します（文言は「Verus の書き方で、書けません」。クレートの中に同じ名前の関数があれば、パスで呼べると案内します）。
-- 書けない位置の証明の属性と引数の崩れた属性、`fn` / `spec fn` の `by(..)`、証明器の名前の誤り、`unchecked lemma fn` と trait の `lemma fn` の本体（§5.7「証明構文の位置」）。
+- 書けない位置の証明の属性と引数の崩れた属性、`fn` / `spec fn` の `by(..)`、証明器の名前の誤り、`unchecked lemma fn` と trait の `lemma fn` の本体、モジュールの直下でない `lemma group`、空の `lemma group`、`pub use lemmas`（§5.7「証明構文の位置」）。
+
+`.eyk` が `E0303` でまるごと拒否したコード（`proof { }`、`assert ..`、`lemma fn` の本体など）と、読めなかった項目の中は読まないので、中の証明の属性に「ここには書けない」を重ねません。
 - マクロの引数など、Ebykn が中を読まないコードの中の証明構文（`proof { }`、`assert`、`spec let`、`assert(..)`・`reveal(..)`・`hide(..)`）。文言は「Ebykn が読まないコードの中には書けない」です。
 
 パス付きの呼び出し（`m::assume(x)`）は、クレートの中の定義に解決するときだけ利用者の関数として読みます（§5「`.eyk` では Verus の構文を拒否する」。`std::hint::assume(true)` は `E0001`）。メソッドは利用者のメソッドとして読みます。
@@ -250,7 +252,8 @@ into_graph(a, b, uses g)                                         // 移動
   - `#[trigger]`：式に付ける。
   - `#![trigger e, ..]` / `#![auto]`：量化子の束縛子の後の `,` と本体のあいだに書く（`forall x: T, #![trigger f(x)] P`、`assert forall x: T, #![auto] P by { }`）。`#![trigger]` の引数は Ebykn の式として読み（`self@nodes[p]` などを書き下すため）、一つ以上を要します。
   - `#[opaque]`・`#[memoize]`：`spec fn` に付ける。
-  - `#[rlimit(n)]`・`#[spinoff_prover]`：`fn` と `lemma fn` に付ける（Verus が検証する関数）。
+  - `#[rlimit(n)]`・`#[spinoff_prover]`：`fn` と `lemma fn` に付ける（Verus が検証する関数。`unchecked fn` / `unchecked lemma fn` には付けられない）。
+  - 項目の属性は、関数の本体の中の項目（`fn f() { #[opaque] spec fn g() -> int = 1; }`）にも同じ規則で付けられる。
 - 引数の形：`#[rlimit(n)]` の `n` は整数のリテラル、ほかの外部属性は引数を持ちません。崩れた形（`#[rlimit(x)]`、`#[opaque(1)]`、`#[trigger(x)]`）は `E0001` で、正しい形を示します。
 - `lemma group` はモジュールの直下にだけ書けます（Verus の `broadcast group` と同じ）。ブロックや `impl` の中では `E0001` です。補題を一つ以上要します。
 - `spec let` は初期値（`= e`）を要し、`let-else` の形は書けません（§5.7 の `"spec" "let" Pat "=" Expr ";"`）。

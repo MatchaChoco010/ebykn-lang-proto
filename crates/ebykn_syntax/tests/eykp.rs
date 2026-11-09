@@ -407,3 +407,108 @@ fn at_least_one_and_at_most_one() {
         "`a second by(..)` cannot be written here",
     );
 }
+
+/// `.eyk` が E0303 でまるごと拒否する証明のコードの中の属性には、「ここには書けない」を重ねない
+/// （#86 の再確認 SF1）。読めない項目の中も同じ。
+#[test]
+fn no_extra_attribute_errors_inside_rejected_code() {
+    for src in [
+        "fn f() { proof { #[trigger] g(x); } }",
+        "lemma fn l() ensures true { assert forall x: int, #![auto] g(x) by { }; }",
+        "lemma fn l() ensures true { #[trigger] g(x) }",
+        "fn f() { assert forall x: int, #![trigger g(x)] g(x); }",
+    ] {
+        let d = diags(src);
+        assert!(!d.is_empty(), "{src}");
+        assert!(d.iter().all(|d| d.contains("E0303")), "{src}: {d:?}");
+        // `.eykp` では通る。
+        assert!(diags_p(src).is_empty(), "{src}: {:?}", diags_p(src));
+    }
+    // 読めない項目の中の属性にも重ねない。
+    let d = diags_p("#[opaque] spec fn f() -> int = ;");
+    assert!(
+        !d.iter().any(|d| d.contains("cannot be written here")),
+        "{d:?}"
+    );
+}
+
+/// 関数の本体の中の項目に付けた証明の属性（#86 の再確認 SF2）。
+#[test]
+fn proof_attributes_on_items_inside_bodies() {
+    for src in [
+        "fn f() { #[opaque] spec fn g() -> int = 1; }",
+        "fn f() { #[rlimit(3)] fn g() { } }",
+        "lemma fn l() { #[rlimit(2)] lemma fn m() { } }",
+    ] {
+        assert!(diags_p(src).is_empty(), "{src}: {:?}", diags_p(src));
+    }
+    for src in [
+        "fn f() { #[opaque] spec fn g() -> int = 1; }",
+        "fn f() { #[rlimit(3)] fn g() { } }",
+    ] {
+        let d = diags(src);
+        assert!(
+            !d.is_empty() && d.iter().all(|d| d.contains("E0303")),
+            "{src}: {d:?}"
+        );
+    }
+    // 検証しない `unchecked` の関数には付かない。
+    rejects_p(
+        "#[rlimit(3)] unchecked fn g() { }",
+        "`#[rlimit]` cannot be written here",
+    );
+    rejects_p(
+        "#[spinoff_prover] unchecked lemma fn g();",
+        "`#[spinoff_prover]` cannot be written here",
+    );
+}
+
+/// `.eykp` でも通らない `lemma group` / `use lemmas` の形は、`.eyk` でも E0001（#86 の再確認 SF3）。
+#[test]
+fn lemma_group_and_use_lemmas_shapes_in_eyk() {
+    for (src, want) in [
+        (
+            "fn f() { lemma group g { a } }",
+            "`lemma group` cannot be written here",
+        ),
+        (
+            "impl S { lemma group g { a } }",
+            "`lemma group` cannot be written here",
+        ),
+        ("lemma group g { }", "expected at least one lemma"),
+        (
+            "pub use lemmas g;",
+            "`pub use lemmas` cannot be written here",
+        ),
+    ] {
+        for d in [diags(src), diags_p(src)] {
+            assert!(d.iter().any(|x| x.contains(want)), "{src}: {d:?}");
+            assert!(!d.iter().any(|x| x.contains("E0303")), "{src}: {d:?}");
+        }
+    }
+}
+
+/// 量化子の属性の誤りは、その誤りだけを出す（#86 の再確認の nit）。
+#[test]
+fn quantifier_attribute_errors_are_specific() {
+    let d = diags_p("fn f() { assert forall i: int, #![trigger] i == i; }");
+    assert!(
+        d.iter()
+            .any(|x| x.contains("expected at least one expression")),
+        "{d:?}"
+    );
+    assert!(
+        !d.iter().any(|x| x.contains("cannot be written here")),
+        "{d:?}"
+    );
+    let d = diags_p("fn f() { assert forall i: int, #![auto(x)] i == i; }");
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].contains("write `#![auto]`"), "{d:?}");
+    // 証明の文の証明の属性は、名前つきの 1 つだけ。
+    let d = diags_p("fn f() { #[trigger] proof { } }");
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(
+        d[0].contains("`#[trigger]` cannot be written here"),
+        "{d:?}"
+    );
+}

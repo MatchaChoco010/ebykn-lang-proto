@@ -53,7 +53,14 @@ fn parse_items(input: ParseStream, ctx: Ctx) -> Vec<ast::Item> {
             }
             Err(e) => {
                 push_error(e);
+                let lo = input.span().byte_range().start;
                 recover(input);
+                let hi = if input.is_empty() {
+                    usize::MAX
+                } else {
+                    input.span().byte_range().start
+                };
+                super::mark_unread(lo, hi);
             }
         }
     }
@@ -151,10 +158,9 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     }
     input.advance_to(&ahead);
     let kind = item_kind(input, ctx, &begin)?;
-    let spec_fn = matches!(kind, ast::ItemKind::SpecFn(_));
-    let verified_fn = matches!(kind, ast::ItemKind::Fn(_) | ast::ItemKind::LemmaFn(_));
-    proof_attrs_on_item(&a, spec_fn, verified_fn);
+    proof_attrs_on_item(&attrs(&a), &kind);
     // `pub use lemmas` はない（Verus の `broadcast use` は再公開しない）。
+    let mut proof_ok = true;
     if matches!(kind, ast::ItemKind::UseLemmas(_)) && !matches!(v, syn::Visibility::Inherited) {
         push(
             super::span_of(&v),
@@ -162,7 +168,41 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
                 written: "pub use lemmas".into(),
             },
         );
+        proof_ok = false;
     }
+    // `.eyk` の `lemma group` / `use lemmas` は、`.eykp` でも通らない形（置き場所、空、`pub`）を先に
+    // E0001 にし、通る形だけを E0303 にする。どちらでも `.eyk` の AST には入れない。
+    let kind = match kind {
+        ast::ItemKind::LemmaGroup(g) if !super::in_proof() => {
+            if proof_ok && ctx == Ctx::Module && !g.members.is_empty() {
+                push(
+                    span_between(&begin, input),
+                    Message::ProofSyntax {
+                        written: "lemma group".into(),
+                    },
+                );
+            }
+            ast::ItemKind::Rust(ast::Tokens {
+                tokens: tokens_between(&begin, input),
+                span: span_between(&begin, input),
+            })
+        }
+        ast::ItemKind::UseLemmas(_) if !super::in_proof() => {
+            if proof_ok {
+                push(
+                    span_between(&begin, input),
+                    Message::ProofSyntax {
+                        written: "use lemmas".into(),
+                    },
+                );
+            }
+            ast::ItemKind::Rust(ast::Tokens {
+                tokens: tokens_between(&begin, input),
+                span: span_between(&begin, input),
+            })
+        }
+        k => k,
+    };
     if ctx == (Ctx::Impl { inherent: true })
         && let Some(name) = item_name(&kind)
         && (name.is("invariant") || name.is("view"))
@@ -445,14 +485,6 @@ fn item_kind(
         return lemma_fn(input, None, ctx == Ctx::Trait);
     }
     if is_ident(a, "lemma") && is_ident(b, "group") {
-        if !super::in_proof() {
-            return Err(err(
-                input.span(),
-                Message::ProofSyntax {
-                    written: "lemma group".into(),
-                },
-            ));
-        }
         return lemma_group(input, ctx);
     }
     if starts_fn(input) {
@@ -661,9 +693,20 @@ fn spec_fn(
 }
 
 /// 項目の外部属性のうち、その項目に書ける証明の属性に印を付ける（[`super::check_proof_attrs`]）。
-fn proof_attrs_on_item(a: &[syn::Attribute], spec_fn: bool, verified_fn: bool) {
-    for at in attrs(a) {
-        if let Some(name) = convert::attr_name(&at)
+/// 文の位置の項目は、構文解析器が外部属性を先に読むので、差し込み口からも呼ぶ。
+pub(super) fn proof_attrs_on_item(a: &[ast::Attr], kind: &ast::ItemKind) {
+    // `#[rlimit(n)]` / `#[spinoff_prover]` は Verus が検証する関数だけ（`unchecked` は検証しない）。
+    let verified_fn = match kind {
+        ast::ItemKind::Fn(f) => f.unchecked.is_none(),
+        ast::ItemKind::LemmaFn(f) => f.unchecked.is_none(),
+        _ => false,
+    };
+    proof_attrs_fit(a, matches!(kind, ast::ItemKind::SpecFn(_)), verified_fn);
+}
+
+fn proof_attrs_fit(a: &[ast::Attr], spec_fn: bool, verified_fn: bool) {
+    for at in a {
+        if let Some(name) = convert::attr_name(at)
             && !at.inner
             && super::tokens::proof_attr_fits_item(name, spec_fn, verified_fn)
         {
@@ -736,6 +779,9 @@ fn lemma_fn(
         // 与える。§5.1）は `.eykp` でも本体を持てないので、`.eyk` でも E0001 にする。
         let b: syn::Block = input.parse()?;
         let span = sp(b.brace_token.span.join());
+        if !super::in_proof() {
+            super::mark_unread(span.lo, span.hi);
+        }
         if unchecked.is_some() {
             push(
                 span,
@@ -1000,8 +1046,8 @@ fn trait_member(input: ParseStream) -> syn::Result<ast::TraitItem> {
             },
         ));
     };
-    proof_attrs_on_item(
-        &a,
+    proof_attrs_fit(
+        &attrs(&a),
         matches!(kind, ast::TraitItemKind::SpecFn(_)),
         matches!(
             kind,
@@ -1187,14 +1233,6 @@ fn use_item(input: ParseStream, begin: &syn::parse::ParseBuffer) -> syn::Result<
     // `use lemmas g;`（`.eykp` だけ）と `use lemmas::x;`（Rust）を分ける。
     let t = peek_tts(input, 2);
     if is_ident(t.first(), "lemmas") && matches!(t.get(1), Some(TokenTree::Ident(_))) {
-        if !super::in_proof() {
-            return Err(err(
-                input.span(),
-                Message::ProofSyntax {
-                    written: "use lemmas".into(),
-                },
-            ));
-        }
         parse_kw(input, "lemmas")?;
         let p = input.call(syn::Path::parse_mod_style)?;
         input.parse::<Token![;]>()?;

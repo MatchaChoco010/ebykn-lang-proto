@@ -23,6 +23,11 @@ const PROOF_ATTRS: &[&str] = &[
     "memoize",
 ];
 
+/// 証明の属性（仕様 §5.7 の `ProofAttr`）の名前か。
+pub(super) fn is_proof_attr(name: &str) -> bool {
+    PROOF_ATTRS.contains(&name)
+}
+
 /// 項目の外部属性の証明の属性が、その項目に書けるか。`#[opaque]` / `#[memoize]` は `spec fn`、
 /// `#[rlimit(n)]` / `#[spinoff_prover]` は検証する関数（`fn`、`lemma fn`）に付く（Verus の
 /// `verifier::opaque` などと同じ）。`#[trigger]` は式に付く。
@@ -35,10 +40,10 @@ pub(super) fn proof_attr_fits_item(name: &str, spec_fn: bool, verified_fn: bool)
 }
 
 /// 書ける位置の証明の属性の引数が崩れていれば、正しい形。`#![trigger ..]` の引数は構文解析が
-/// 式として読み、`#![auto]` の引数は構文解析が拒否する。
+/// 式として読む。
 pub(super) fn proof_attr_args_error(a: &super::ProofAttrUse) -> Option<&'static str> {
     if a.inner {
-        return None;
+        return (a.name == "auto" && !a.args.is_empty()).then_some("#![auto]");
     }
     match a.name.as_str() {
         "rlimit" => {

@@ -294,6 +294,10 @@ fn parse_triggers(input: ParseStream) -> syn::Result<Vec<RawTrigger>> {
         let bracket = syn::bracketed!(content in input);
         let span = pound.span.join(bracket.span.close()).unwrap_or(pound.span);
         let name: proc_macro2::Ident = content.parse()?;
+        // 位置は正しいので、誤りがあっても先に印を付ける（「ここには書けない」を重ねない）。
+        if name == "trigger" || name == "auto" {
+            super::proof_attr_ok(super::sp(span));
+        }
         if name == "trigger" {
             let exprs: Vec<syn::Expr> = content
                 .parse_terminated(syn::Expr::parse, Token![,])?
@@ -308,10 +312,10 @@ fn parse_triggers(input: ParseStream) -> syn::Result<Vec<RawTrigger>> {
                     },
                 ));
             }
-            super::proof_attr_ok(super::sp(span));
             out.push(RawTrigger::Exprs { exprs, span });
-        } else if name == "auto" && content.is_empty() {
-            super::proof_attr_ok(super::sp(span));
+        } else if name == "auto" {
+            // 引数の崩れ（`#![auto(x)]`）は解析の終わりに引数の誤りとして出す。
+            content.parse::<TokenStream>()?;
             out.push(RawTrigger::Auto(span));
         } else {
             return Err(err(
@@ -810,6 +814,11 @@ pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
         return Ok(Some(StmtKind::Proof(kind)));
     }
     if let Some(m) = proof_or_verus_stmt(&t) {
+        if matches!(m, Message::ProofSyntax { .. }) {
+            // `.eyk` の証明の文は中を読まない。文の終わり（`proof { }` の `}`、ほかは `;`）までを覚える。
+            let (lo, hi) = stmt_extent(input);
+            super::mark_unread(lo, hi);
+        }
         return Err(err(input.span(), m));
     }
     if let Some(kind) = peek_atom(input)
@@ -821,6 +830,28 @@ pub(super) fn peek_stmt(input: ParseStream) -> syn::Result<Option<StmtKind>> {
         return Ok(Some(StmtKind::Item));
     }
     Ok(None)
+}
+
+/// 文の先頭から、文の終わり（`proof { .. }` ならその `}`、ほかは最上位の `;`。なければ入力の
+/// 終わり）までのバイト位置。
+fn stmt_extent(input: ParseStream) -> (usize, usize) {
+    let mut c = input.cursor();
+    let lo = c.span().byte_range().start;
+    let mut hi = lo;
+    let proof_block = peek_kw(input, "proof");
+    while let Some((tt, next)) = c.token_tree() {
+        hi = tt.span().byte_range().end;
+        c = next;
+        let end = match &tt {
+            TokenTree::Punct(p) => p.as_char() == ';',
+            TokenTree::Group(g) => proof_block && g.delimiter() == Delimiter::Brace,
+            _ => false,
+        };
+        if end {
+            break;
+        }
+    }
+    (lo, hi)
 }
 
 /// 文の先頭の証明構文（仕様 §5.7）と、Ebykn にない Verus の文。
@@ -1165,6 +1196,8 @@ pub(super) fn parse_stmt_verbatim(
                 skip_to(input, c.hi)?;
                 let mut item = c.item;
                 let mut outer = super::convert::attrs(&attrs);
+                // 構文解析器が先に読んだ外部属性は、項目を読んだときには見ていない。
+                item::proof_attrs_on_item(&outer, &item.kind);
                 if let Some(a) = outer.first() {
                     item.span = a.span.to(item.span);
                 }

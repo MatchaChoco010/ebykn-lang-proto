@@ -289,7 +289,7 @@ fn proof_items_are_rejected_in_eyk() {
         "lemma group g { a, b }",
         "1:1: E0303: `lemma group` is proof syntax",
     );
-    rejects("use lemmas g;", "1:5: E0303: `use lemmas` is proof syntax");
+    rejects("use lemmas g;", "1:1: E0303: `use lemmas` is proof syntax");
     // `use lemmas::x;` は Rust の use。
     assert_eq!(heads("use lemmas::foo;"), ["use"]);
 }

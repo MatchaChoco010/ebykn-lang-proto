@@ -37,6 +37,9 @@ fn bx(e: syn::Expr) -> Box<ast::Expr> {
 /// 診断を足し、中を読まないトークン列で置き換える。
 fn rejected<T: ToTokens>(t: &T, m: Message) -> ast::Expr {
     let tk = tokens(t);
+    if matches!(m, Message::ProofSyntax { .. }) {
+        crate::parse::mark_unread(tk.span.lo, tk.span.hi);
+    }
     push(tk.span, m);
     let span = tk.span;
     mk(Vec::new(), ast::ExprKind::Rust(tk), span)
@@ -1030,8 +1033,12 @@ pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt 
             },
             RawStmt::Item(i) => ast::StmtKind::Item(i),
             RawStmt::Proof(raw) => {
-                // 証明の文には属性を付けられない（仕様 §5.7 の `ProofAttr` は式・項目に付く）。
-                if let Some(at) = attrs(&a).first() {
+                // 証明の文には属性を付けられない（仕様 §5.7 の `ProofAttr` は式・項目に付く）。証明の
+                // 属性は、解析の終わりに名前つきで「ここには書けない」を出すので、ここでは数えない。
+                if let Some(at) = attrs(&a)
+                    .iter()
+                    .find(|at| !attr_name(at).is_some_and(crate::parse::tokens::is_proof_attr))
+                {
                     push(
                         at.span,
                         Message::NotAllowedHere {
