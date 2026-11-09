@@ -428,10 +428,10 @@ impl Message {
                 "構文エラー: `{word}` は Ebykn の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
             ),
             (Message::EditionKeyword { word, since }, En) => format!(
-                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name"
+                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name of a function, type, module, or field, and another name such as `{word}_` for a local name (variable, parameter, pattern binding)"
             ),
             (Message::EditionKeyword { word, since }, Ja) => format!(
-                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
+                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。関数・型・モジュール・フィールドの名前に使うなら `r#{word}` と書き、局所の名前（変数、引数、パターンの束縛）には `{word}_` などの別の名前を使います"
             ),
             (Message::RawKeywordBinding { word }, En) => format!(
                 "`r#{word}` cannot be used as a local name (variable, parameter, pattern binding, quantified variable, return value name, region, const generic parameter) because Verus cannot verify it; use another name such as `{word}_`"

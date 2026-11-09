@@ -171,7 +171,8 @@ fn the_message_points_to_the_crate_path() {
 
 // ---- 版の予約語（#104） ----
 
-/// 版の予約語（`gen` など）を名前に使う綴り。どれも `r#` がなければ拒否し、`r#` があれば通す。
+/// 版の予約語（`gen` など）を名前に使う綴り。どれも `r#` がなければ拒否し、`r#` があれば版の予約語
+/// としては拒否しない（局所の名前の `r#gen` は E0103。`raw_keyword.rs`、#119）。
 const EDITION_SPELLINGS: &[&str] = &[
     "pub fn NAME() {}",
     "pub fn f() { let NAME = 1u64; }",
@@ -207,7 +208,7 @@ fn edition_keywords_are_rejected_without_raw_prefix() {
     for (name, since) in EDITION_KEYWORDS {
         for t in EDITION_SPELLINGS {
             rejected_as_edition_keyword(&fill(t, name), name, *since);
-            // `r#` を付ければ通る（`run` は版 2024 のプロジェクト）。
+            // `r#` を付ければ版の予約語として拒否しない（`run` は版 2024 のプロジェクト）。
             let raw = fill(t, &format!("r#{name}"));
             let (_, lines) = run(&raw);
             assert!(

@@ -116,7 +116,7 @@ Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#g
 
 ### Rust の版の予約語は `r#` を付けて名前にする
 
-`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は `r#gen` と書くよう案内します。`r#gen` は書き下しでも `r#gen` のままです。
+`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は、関数・型・モジュール・フィールドの名前なら `r#gen` と書き、局所の名前なら `gen_` などの別の名前を使うよう案内します（局所の名前の `r#gen` は `E0103`。§4「Rust の予約語の raw の綴りは、局所の名前に使えない」）。`r#gen` は書き下しでも `r#gen` のままです。
 
 - 生成する `build/verus/` は `Ebykn.toml` の `edition`（既定は `2024`）でビルドするので、`r#` のない `gen` は生成コードの構文エラーになります。rustc の edition 2024 と同じく、書いた所で拒否します。
 - 書いた所とは、識別子の位置すべてです（関数・変数・引数・フィールド・型・モジュールの名前、パス、マクロの引数の中）。トークン列で判定するので、`stringify!(gen)` のように Rust 2024 でも書ける形も拒否します。
