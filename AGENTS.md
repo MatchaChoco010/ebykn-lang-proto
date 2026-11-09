@@ -35,6 +35,7 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 | `develop` | すべての作業が入る統合ブランチ | コーディネーター。作者の承認なしでマージする |
 | `feature/<Issue 番号>-<短い名前>` | 1 つの Issue の作業 | ワーカー。`develop` に PR を出す |
 
+- GitHub の既定のブランチは `develop`。`gh pr create` で `--base` を省くと `develop` に向くが、手順では `--base develop` を明示する。PR の本文の `Closes #N` は、`develop` へのマージで Issue を閉じる。`release` → `main` の PR では効かないので書かない。
 - `main`・`release`・`develop` はずっと使い続け、履歴を書き換えない（force push しない）。どれにも直接コミットしない。
 - 問題が見つかったら、直す変更を新しい PR として `develop` の先頭に積む。過去の履歴は直さない。
 - コーディネーターのワークスペースは、ユーザーの指示を受けるために待機させる。作業は orca のワークツリーで行う。
@@ -123,11 +124,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 
 マージ後、コーディネーターはワーカーを解放し（orca の release）、ワークツリーを削除し、リモートのブランチを消す。
 
-マージ後、コーディネーターは PR が閉じるはずの Issue が閉じたかを確かめ、閉じていなければ閉じる。
-
-- GitHub は、既定のブランチ（`main`）にマージされた PR の `Closes #N` でしか、Issue を確実に閉じない。`develop` にマージした #22（Closes #18）では #18 が閉じず、#26（Closes #17）では #17 が閉じた。`main` を既定のブランチのままにするので、この手順が要る。
-- 閉じるはずの Issue は、PR の `closingIssuesReferences`（`gh pr view <番号> --json closingIssuesReferences`）と、本文の `Closes #N`。`develop` をベースにして作った PR では `closingIssuesReferences` が空になる（#32）ので、本文も読む。
-- 閉じていない Issue には `PR #<番号> で develop に入った` とコメントして `gh issue close` する。コマンドは [.claude/skills/ebykn-pr/SKILL.md](.claude/skills/ebykn-pr/SKILL.md) の 6。
+マージ後、コーディネーターは PR の `closingIssuesReferences`（`gh pr view <番号> --json closingIssuesReferences`）の Issue が閉じたかを確かめ、閉じていなければ `PR #<番号> で develop に入った` とコメントして閉じる。コマンドは [.claude/skills/ebykn-pr/SKILL.md](.claude/skills/ebykn-pr/SKILL.md) の 6。
 
 ## リリースと作者の確認
 

@@ -48,7 +48,10 @@ cargo xtask ci
 ```bash
 git push -u origin feature/<Issue 番号>-<短い名前>
 gh pr create --base develop --head feature/<Issue 番号>-<短い名前> --title "<日本語の題>" --body-file <最終稿>
+gh pr view <番号> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'
 ```
+
+既定のブランチは `develop` なので `--base` を省いても `develop` に向くが、明示する。本文の `Closes #N` の Issue が `closingIssuesReferences` に載っていることを確かめる。載っていなければ、本文の書き方（閉じる動詞と `#N` のあいだ）を直して `gh pr edit` する。
 
 ## 5. CI を見届ける
 
@@ -64,14 +67,11 @@ gh pr checks <番号> --watch
 
 マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（取り込みのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。詳しくは AGENTS.md の「マージ」。
 
-マージしたら、コーディネーターは PR が閉じるはずの Issue が閉じたかを確かめる。GitHub は既定のブランチ（`main`）にマージされた PR の `Closes #N` でしか Issue を確実に閉じないので、`develop` へのマージでは閉じないことがある。閉じるはずの Issue は、`closingIssuesReferences` と本文の `Closes #N`（close / fix / resolve とその活用形）の両方から取る。本文は、コードのフェンスとインラインのコードを除いてから読む（例として書いた `Closes #N` を拾わないため）。`develop` をベースにして作った PR では `closingIssuesReferences` が空になるためで、本文で閉じない Issue を閉じる動詞の後に書かない規則（2）があるので、本文から取っても誤って閉じない。
+マージしたら、コーディネーターは PR の `closingIssuesReferences` の Issue が閉じたかを確かめ、閉じていなければコメントして閉じる。
 
 ```bash
 pr=<PR 番号>
-gh pr view "$pr" --json closingIssuesReferences,body \
-  --jq '.closingIssuesReferences[].number, (.body | gsub("```[\\s\\S]*?```"; "") | gsub("`[^`\n]*`"; ""))' \
-  | grep -oiE '(^[0-9]+$)|\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-  | grep -oE '[0-9]+$' | sort -un \
+gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' \
   | while read -r n; do
       [ "$(gh issue view "$n" --json state --jq .state)" = CLOSED ] \
         || gh issue close "$n" --comment "PR #$pr で develop に入った"

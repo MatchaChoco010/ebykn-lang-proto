@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Issue の分類（種類・優先度・blocker）
-    url: https://github.com/MatchaChoco010/ebykn-lang-proto/blob/main/AGENTS.md#issue
+    url: https://github.com/MatchaChoco010/ebykn-lang-proto/blob/develop/AGENTS.md#issue
     about: 起票の前に AGENTS.md の「Issue」の節を読んでください

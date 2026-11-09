@@ -111,16 +111,12 @@ PR が閉じた Issue と、判断待ちの Issue を集める。
 ```bash
 . <scratchpad>/release-<id>/vars
 while read -r n; do
-  gh pr view "$n" --json body,closingIssuesReferences \
-    --jq '.closingIssuesReferences[].number, (.body | gsub("```[\\s\\S]*?```"; "") | gsub("`[^`\n]*`"; ""))' \
-    | grep -oiE '(^[0-9]+$)|\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-    | grep -oE '[0-9]+$'
+  gh pr view "$n" --json closingIssuesReferences --jq '.closingIssuesReferences[].number'
 done < "$dir/prs.txt" | awk '!seen[$0]++' > "$dir/issues.txt"
 gh issue list --label "needs review" --state open --limit 200 --json number,title,url > "$dir/needs-review.json"
 ```
 
-- Issue は、閉じたかどうか（`closedByPullRequestsReferences` や Issue の状態）ではなく、PR の `closingIssuesReferences` から集める。既定のブランチは `main` なので、`develop` へのマージでは Issue が閉じないことがある。閉じていない Issue は、マージのときにコーディネーターが手で閉じている（AGENTS.md の「マージ」）。
-- `develop` をベースにして作った PR では `closingIssuesReferences` が空になる（#32）。そのため本文の `Closes #N`（close / fix / resolve とその活用形）も読み、両方を合わせる。本文は、コードのフェンスとインラインのコードを除いてから読む（例として書いた `Closes #N` を拾わないため）。
+Issue は、閉じたかどうか（Issue の状態や `closedByPullRequestsReferences`）ではなく、PR の `closingIssuesReferences` から集める。Issue はあとから開き直されたり、手で閉じられたりするためで、PR が何を閉じると言ったかは PR の側にしか残らない。
 
 ## 5. 報告スライドの PDF を作る
 
@@ -187,6 +183,7 @@ git tag --list 'report/*' --merged "$sha" --no-merged origin/main --sort=v:refna
 
 - 「確認待ちのリリース」は、上の `git tag` の一覧と同じにする。前からある行はそのまま残し、今回の行を足す。一覧にないタグの行（`main` に入ったもの）は消す。作者は確認待ちのリリースを複数まとめてマージするので、一覧はいつも最新にする。
 - 「判断待ちの Issue」は `needs-review.json` で書き直す。
+- 本文とコメントに `Closes #N` を書かない。`main` は既定のブランチではないので効かず、Issue は `develop` へのマージで閉じている。閉じた Issue は「閉じた Issue：#N」のように、閉じる動詞を付けずに書く。
 
 コメント（今回のリリースの分）：
 
