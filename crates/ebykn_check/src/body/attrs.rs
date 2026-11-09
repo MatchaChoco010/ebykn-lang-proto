@@ -1,5 +1,6 @@
 //! 文と式の属性（#27、#49、PR #59 のレビュー）：組み込みでない属性の拒否、権限の状態を変えるか発散する
-//! 文・式・欄の `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性。
+//! 文・式・欄の `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性と範囲の式の
+//! 属性。
 
 use ebykn_syntax::ast::{self, Expr, ExprKind, StmtKind};
 use ebykn_syntax::diag::{CheckMsg, Message, Unimpl};
@@ -129,7 +130,10 @@ impl Walker<'_> {
     /// 再確認）。論理文脈の式は Verus なしのビルドで消える。
     pub(super) fn expr_attrs(&mut self, e: &Expr) {
         self.builtin_attrs_only(&e.attrs);
-        let ok = std::mem::replace(&mut self.attr_ok, false)
+        // 範囲の式は、安定版の Rust が許す位置でも属性を受けない（`a..b` の属性は構文解析器が左の項に移して
+        // E0658、`..b` の属性は構文解析器が拒否する。#130）。
+        let range = matches!(e.kind, ExprKind::Range { .. });
+        let ok = (std::mem::replace(&mut self.attr_ok, false) && !range)
             || self.attr_lead == Some(e as *const Expr as usize);
         if !ok && !self.logic && !e.attrs.is_empty() {
             self.diags.push(
