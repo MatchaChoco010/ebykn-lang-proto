@@ -115,6 +115,11 @@ fn e0404_in_literals_and_patterns() {
         "E0404",
         "write `@order`",
     );
+    // `#[cfg]` の付いた欄も同じ（#59 の `cfg` の欄の扱いと重ねる）。
+    let c = codes(&in_pool(
+        "pub fn f(b: Pool) -> Pool { Pool { len: 0, #[cfg(test)] nodes: b.len, ..b } }",
+    ));
+    assert!(c.iter().any(|c| c == "E0404"), "{c:?}");
     // 分解代入の左辺はリテラルの形。
     rejects(
         &in_pool("pub fn f(x: Pool) { let mut n = 0; Pool { len: n, order: _, .. } = x; }"),

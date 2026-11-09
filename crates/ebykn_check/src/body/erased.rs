@@ -13,7 +13,9 @@ use ebykn_syntax::span::Span;
 
 use crate::index::{StructInfo, ptr_or_cell};
 
-use super::Walker;
+use std::collections::BTreeSet;
+
+use super::{Walker, path_text};
 
 /// `.` の前の値の型。
 enum Recv<'a> {
@@ -336,9 +338,71 @@ fn struct_name(s: &StructInfo) -> String {
     s.path.last().cloned().unwrap_or_default()
 }
 
-pub(super) fn member_name(m: &Member) -> String {
+fn member_name(m: &Member) -> String {
     match m {
         Member::Named(i) => i.name.clone(),
         Member::Unnamed { index, .. } => index.to_string(),
+    }
+}
+
+impl Walker<'_> {
+    /// 構造体リテラル。消去フィールドは `@f: e` で与える（`f: e` は E0404、`..base` なしの欠けは E0402）。
+    pub(super) fn struct_lit(&mut self, e: &Expr, lit: &ast::StructLit) -> bool {
+        let info = if lit.qself.is_none() {
+            self.struct_of_path(&lit.path)
+        } else {
+            None
+        };
+        let mut d = false;
+        let mut given = BTreeSet::new();
+        for f in &lit.fields {
+            if f.erased {
+                let name = member_name(&f.member);
+                match info.and_then(|s| s.erased_kind(&name)) {
+                    Some(k) => {
+                        self.facts.erased.insert(f.span.into(), k);
+                    }
+                    None => self.push(
+                        f.span,
+                        CheckMsg::NotErasedField {
+                            ty: path_text(&lit.path),
+                            field: name.clone(),
+                        },
+                    ),
+                }
+                given.insert(name);
+                // 消去フィールドの値は仕様の世界（`Tracked(..)` / `Ghost(..)` に入る）。
+                let prev = std::mem::replace(&mut self.logic, true);
+                self.expr(&f.expr);
+                self.logic = prev;
+            } else {
+                if self.named_erased(info, &f.member, DotForm::Literal, f.span) {
+                    given.insert(member_name(&f.member));
+                }
+                if crate::index::has_cfg(&f.attrs) {
+                    // 構造体リテラルの欄の `#[cfg]` も、消えると欄の値の式ごと消える。
+                    d |= self.cfg_guarded(f.span, |w| w.expr(&f.expr));
+                } else {
+                    d |= self.expr(&f.expr);
+                }
+            }
+        }
+        if let Some(Some(base)) = &lit.rest {
+            d |= self.expr(base);
+        } else if let Some(s) = info {
+            for (name, _, _) in &s.erased {
+                if !given.contains(name) {
+                    self.push(
+                        e.span,
+                        CheckMsg::MissingErasedField {
+                            ty: path_text(&lit.path),
+                            field: name.clone(),
+                            pattern: false,
+                        },
+                    );
+                }
+            }
+        }
+        d
     }
 }
