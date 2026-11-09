@@ -154,7 +154,7 @@ PDF の作り方はそのスキルが受け持つ。スライドはリリース�
 
 範囲の PR を動かして実例を作る途中で問題が見つかったら、AGENTS.md の「見つけた問題」のとおり扱う。
 
-- `ebykn-issue` スキルで Issue にし、本文に `report/$id` のスライドを作る途中で見つかったと書く。番号を `$dir/found.txt` に 1 行に 1 つ書く。手順 9 の報告に含める。
+- `ebykn-issue` スキルで Issue にし、本文に `report/$id` のスライドを作る途中で見つかったと書く。番号を `$dir/found.txt` に 1 行に 1 つ書く。手順 5 の Release の本文、手順 8 の PR のコメント、手順 9 の報告に載せる。
 - リリースは止めない。範囲は手順 1 で決めた `$sha` のまま進める。直す PR は `develop` に積み、次のリリースに入る。
 - 見つかった問題のせいで PDF が作れないときだけ、ここで止まって報告する。
 
@@ -173,7 +173,7 @@ EOF
 
 前回のタグは、手順 1 のとおり `git tag --list 'report/*' --sort=-v:refname` の先頭（`2026-11-09.10` は `2026-11-09.9` より後に並ぶ）。言語のリリースのタグ（`v0.1.0` など）は `report/` の外なので混ざらない。
 
-ここから先で止まったら、手順 1 からやり直す。手順 1 が、Release のないタグを `mode=resume-release` として見つける。
+ここから手順 6 までで止まったら、手順 1 からやり直す。手順 1 が、Release のないタグを `mode=resume-release` として見つける。
 
 ## 5. Release を作る
 
@@ -197,6 +197,12 @@ bash -euo pipefail <<'EOF'
     echo "## PR のないコミット"
     echo
     sed 's/^\([0-9a-f]\{12\}\)[0-9a-f]* /- `\1` /' "$dir/direct.txt"
+  fi
+  if [ -s "$dir/found.txt" ]; then
+    echo
+    echo "## 報告スライドの作成で見つかった Issue"
+    echo
+    while read -r n; do gh issue view "$n" --json number,title --jq '"- #\(.number) \(.title)"' < /dev/null; done < "$dir/found.txt"
   fi
 } > "$dir/release-notes.md"
 cat "$dir/release-notes.md"
@@ -239,7 +245,9 @@ EOF
 
 作者が `release` ブランチで動作を確かめるための orca のワークスペースを、今回のコミットまで進める。初めてリリースを切るときに作り、2 回目からは早送りする。ワークスペースの名前は `release`、表示名は `release（作者の確認用）` にする。
 
-この手順のコマンドは、まだ実際には動かしていない。`release` ブランチがまだないため。初回のリリースで動かしたら、下の「確かめていないこと」を確かめ、違っていたらこの手順を直す PR を出す。
+この手順のコマンドは、まだ実際には動かしていない。`release` ブランチがまだないため。初回のリリースで動かしたら、下の「確かめたこと・確かめていないこと」と食い違いがないかを見て、違っていたらこの手順を直す PR を出す。
+
+orca の CLI は、失敗すると終了コード 1 で終わり、エラーの JSON を標準出力に出す。`set -e` の下でそのまま `> ファイル` にすると、理由を出さずに止まるので、どの呼び出しも `if ! "$orca" … > ファイル; then … cat ファイル; exit 1; fi` で包み、そのあとで `.ok` を確かめる。
 
 まず、ワークスペースがあるかを調べる。
 
@@ -252,10 +260,15 @@ git fetch origin release
 [ "$(git rev-parse origin/release)" = "$sha" ] || { echo "止まる：origin/release が ${sha} ではない"; exit 1; }
 repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")   # 元のリポジトリ
 
-# orca のワークスペースのうち、release を取り出しているもの・表示名が同じもの・名前が release のもの
-"$orca" worktree list --repo "path:$repo" --limit 10000 --json > "$dir/worktrees.json"
+# orca のワークスペースのうち、release を取り出しているもの・表示名が同じもの・パスが /release で終わるもの
+if ! "$orca" worktree list --repo "path:$repo" --limit 10000 --json > "$dir/worktrees.json"; then
+  echo "止まる：orca worktree list が失敗した"; cat "$dir/worktrees.json"; exit 1
+fi
 [ "$(jq -r '.ok' "$dir/worktrees.json")" = true ] || { echo "止まる：orca worktree list が失敗した"; cat "$dir/worktrees.json"; exit 1; }
 [ "$(jq -r '.result.truncated' "$dir/worktrees.json")" = false ] || { echo "止まる：orca worktree list の一覧が切れている"; exit 1; }
+# 一覧に入っていないホストがあると、空の答えは「ワークスペースがない」ことを示さない
+[ "$(jq '.result.hostScope.omittedHostIds | length' "$dir/worktrees.json")" = 0 ] \
+  || { echo "止まる：orca worktree list が調べていないホストがある"; jq -c '.result.hostScope' "$dir/worktrees.json"; exit 1; }
 jq -c --arg d "$display" '[.result.worktrees[]
   | select(.branch == "refs/heads/release" or .displayName == $d or (.path | endswith("/release")))
   | {path, branch, displayName}]' "$dir/worktrees.json" > "$dir/release-ws.json"
@@ -270,7 +283,7 @@ EOF
 
 | `release-ws.json` | `release-git.txt` | すること |
 | --- | --- | --- |
-| 空（`[]`） | 空 | 初回。下の「作る」へ |
+| 空（`[]`） | 空 | 初回（または作者がワークスペースを消した）。下の「作る」へ |
 | 1 件で、`branch` が `refs/heads/release` | その 1 件のパスだけ | 2 回目以降。下の「早送りする」へ |
 | 1 件で、`branch` が `refs/heads/release` でない | — | 止まる。作者がワークスペースで別のブランチに切り替えたのかもしれない。触らずに報告する |
 | 2 件以上 | — | 止まる。どれを使うかを決めずに報告する |
@@ -284,48 +297,60 @@ bash -euo pipefail <<'EOF'
 orca=${ORCA_CLI_COMMAND:-orca}
 display='release（作者の確認用）'
 repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-# ローカルの release がないこと（あると orca は名前に番号を付ける）
-! git show-ref --verify --quiet refs/heads/release || { echo "止まる：ローカルに release ブランチがすでにある"; exit 1; }
+[ "$(jq 'length' "$dir/release-ws.json")" = 0 ] && [ ! -s "$dir/release-git.txt" ] \
+  || { echo "止まる：release のワークスペースか、release を取り出したワークツリーがある"; exit 1; }
 
-"$orca" worktree create --repo "path:$repo" --name release \
-  --base-branch origin/release --branch release \
-  --no-parent --setup skip \
-  --comment "作者の確認用。リリースのたびに origin/release まで早送りする" \
-  --json > "$dir/release-create.json"
+# ローカルの release が残っているとき（作者がワークスペースだけを消したときなど）は、origin/release まで早送りしておく。
+# 取り出されていないことは release-git.txt が空であることで確かめてある。orca は、同じコミットにあって取り出されていないローカルの release を使い回す
+if git show-ref --verify --quiet refs/heads/release; then
+  git merge-base --is-ancestor release origin/release \
+    || { echo "止まる：ローカルの release に origin/release にないコミットがある"; git log --oneline origin/release..release; exit 1; }
+  git branch -f release origin/release
+fi
+
+if ! "$orca" worktree create --repo "path:$repo" --name release \
+    --base-branch origin/release --branch release \
+    --no-parent --setup skip \
+    --comment "作者の確認用。リリースのたびに origin/release まで早送りする" \
+    --json > "$dir/release-create.json"; then
+  echo "止まる：orca worktree create が失敗した"; cat "$dir/release-create.json"; exit 1
+fi
 [ "$(jq -r '.ok' "$dir/release-create.json")" = true ] || { echo "止まる：orca worktree create が失敗した"; cat "$dir/release-create.json"; exit 1; }
 ws=$(jq -r '.result.worktree.path' "$dir/release-create.json")
 [ -d "$ws" ] || { echo "止まる：作ったワークスペースのパスが読めない：$ws"; exit 1; }
+printf 'ws=%s\nws_display=%s\n' "$ws" "$display" > "$dir/release-ws.txt"
 
-# 取り出したブランチが release でなければ（orca が番号を付けた）、release を取り出し直す
-b=$(git -C "$ws" symbolic-ref --short HEAD)
-if [ "$b" != release ]; then
-  git -C "$ws" switch -c release --track origin/release
-  git -C "$ws" branch -d "$b"
-fi
-git -C "$ws" branch --set-upstream-to=origin/release release
+[ "$(git -C "$ws" symbolic-ref --short HEAD)" = release ] \
+  || { echo "止まる：$ws が release ではなく $(git -C "$ws" symbolic-ref --short HEAD) を取り出した"; exit 1; }
+[ "$(git -C "$ws" rev-parse --abbrev-ref 'release@{upstream}')" = origin/release ] \
+  || { echo "止まる：$ws の release の上流が origin/release ではない"; exit 1; }
 [ "$(git -C "$ws" rev-parse HEAD)" = "$sha" ] || { echo "止まる：$ws の HEAD が ${sha} ではない"; exit 1; }
 
-"$orca" worktree set --worktree "path:$ws" --display-name "$display" --json > /dev/null
-printf 'ws=%s\nws_display=%s\nws_state=作った\n' "$ws" "$display" > "$dir/release-ws.txt"
+if ! "$orca" worktree set --worktree "path:$ws" --display-name "$display" --json > "$dir/release-set.json"; then
+  echo "止まる：orca worktree set が失敗した"; cat "$dir/release-set.json"; exit 1
+fi
+[ "$(jq -r '.ok' "$dir/release-set.json")" = true ] || { echo "止まる：orca worktree set が失敗した"; cat "$dir/release-set.json"; exit 1; }
+echo 'ws_state=作った' >> "$dir/release-ws.txt"
 cat "$dir/release-ws.txt"
 EOF
 ```
 
-- `--branch release` で、orca の付ける接頭辞（`MatchaChoco010/`）なしの `release` というブランチにする。`--base-branch origin/release` で、その出発点を `origin/release` にする。orca の `--branch` は既存のブランチを取り出すのではなく、新しいブランチを作る。名前が使われていれば番号を付ける。そのため、ローカルの `release` がないことを先に確かめ、番号が付いたら取り出し直す。
+- `--branch release` で、orca の付ける接頭辞（`MatchaChoco010/`）なしの `release` というブランチにする。`--base-branch origin/release` で、その出発点を `origin/release` にする。orca は、ローカルの `release` がなければ `origin/release` の位置に作って上流を設定し、同じコミットにあって取り出されていないローカルの `release` があれば、それを使い回す。そのため、残っているローカルの `release` は先に早送りしておく。
+- orca が名前に番号を付けるのは、残っているディレクトリや、大文字小文字だけが違う名前とぶつかったときだけ。そのときは `release` 以外のブランチを取り出すので、止まって報告する。
 - `--no-parent`：コーディネーターのワークスペースの子にしない。作者が使う、独立したワークスペースにする。
 - `--setup skip`：リポジトリの setup のフックを走らせない。
 - `--agent` を付けない。orca は最初のターミナル（シェル）だけを開く。作者はそこで試す。
 - 表示名は `worktree create` では付けられないので、`worktree set --display-name` で付ける。
+- ローカルの `release` に `origin/release` にないコミットがあって止まったら、作者に、そのコミットが要るかを聞く。要らなければ、作者の了承を得てから `git branch -D release` で消し、この手順をやり直す。
 
 ### 早送りする（2 回目以降）
-
-`ws` には、`release-ws.json` の 1 件の `path` を入れる。
 
 ```bash
 bash -euo pipefail <<'EOF'
 . <scratchpad>/release-<id>/vars
 display='release（作者の確認用）'
-ws=<release-ws.json の path>
+[ "$(jq 'length' "$dir/release-ws.json")" = 1 ] || { echo "止まる：release のワークスペースが 1 つではない"; exit 1; }
+ws=$(jq -r '.[0].path' "$dir/release-ws.json")
 printf 'ws=%s\nws_display=%s\n' "$ws" "$display" > "$dir/release-ws.txt"
 
 [ "$(git -C "$ws" symbolic-ref --short HEAD)" = release ] || { echo "止まる：$ws が release を取り出していない"; exit 1; }
@@ -348,14 +373,13 @@ EOF
 - 作者がワークスペースでコミットしていたら（`release` に `origin/release` にないコミットがある）、同じく止まる。
 - ここで止まっても、タグ・Release・`release` の早送りは済んでいる。ワークスペースは進めずに手順 8 に進み、手順 9 の報告に、止まった理由と `status` か `log` の出力を書く。作者が片づけたら、この手順だけをやり直す（何度やり直してもよい）。
 
-### 確かめていないこと
+### 確かめたこと・確かめていないこと
 
-`release` ブランチがまだないので、次は orca のヘルプ（`orca worktree create --help` など）から読んだだけで、動かして確かめていない。`worktree list --repo "path:<元のリポジトリ>" --json` が `.ok` と `.result.truncated`（切れていなければ `false`）を返すことと、`git worktree list --porcelain` を読む `awk` は、手元で確かめた。
+`release` ブランチがまだないので、この手順は通しては動かしていない。
 
-- `--branch release --base-branch origin/release` で、ローカルの `release` が `origin/release` の位置に作られるか。リモートに `release` があるだけで、orca が名前を「使われている」とみなして番号を付けるか。付けたときは、上の取り出し直しで直る想定。
-- 作ったブランチに上流が設定されるか。されなくても、`branch --set-upstream-to` で設定する。
-- `worktree create --json` の結果で、パスが `.result.worktree.path` にあるか（`worktree show --json` と `worktree current --json` の形から推した）。
-- 番号付きのブランチを取り出し直したあとで、orca がワークスペースのブランチを正しく表示するか。
+- 手元で動かして確かめた：`worktree list --repo "path:<元のリポジトリ>" --json` が `.ok`、`.result.truncated`（切れていなければ `false`）、`.result.hostScope.omittedHostIds`（すべてのホストを調べたら空）を返すこと。orca が失敗すると終了コード 1 で終わること。`git worktree list --porcelain` を読む `awk`。
+- orca 本体のソースを読んで確かめた（PR #36 のレビュー）：`--branch release --base-branch origin/release` で、ローカルの `release` が番号なしで `origin/release` の位置に作られること。上流を orca が設定すること。同じコミットにあって取り出されていないローカルの `release` は使い回すこと。番号が付くのは、残っているディレクトリか、大文字小文字だけが違う名前とぶつかったときだけであること。エラーの JSON を標準出力に出すこと。
+- まだ確かめていない：`worktree create --json` の結果で、パスが `.result.worktree.path` にあること（`worktree show --json` と `worktree current --json` の形から推した）。
 
 ## 8. release → main の PR
 
@@ -411,6 +435,7 @@ GitHub の画面でマージするときは、PR の先頭のコミットがこ�
 - PR：#<番号>, …（<件数> 件）
 - 閉じた Issue：#<番号>, …
 - PR のないコミット：`<コミット 12 桁>` <題>, …（なければこの行を消す）
+- 報告スライドの作成で見つかった Issue：#<番号>, …（found.txt。なければこの行を消す）
 
 <何が入ったかを 2〜4 文で>
 ```
