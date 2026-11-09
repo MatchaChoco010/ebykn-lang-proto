@@ -183,8 +183,87 @@ fn regions_and_spec_fields() {
     );
     has(
         &src,
-        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res",
+        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; #[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res",
     );
+}
+
+/// #21 の既定 D：`borrow mut` のブロックの外へ抜ける文の前で、権限を領域に戻す。
+#[test]
+fn jumps_out_of_borrow_mut_put_the_permission_back() {
+    const INS: &str = "proof { self.r.borrow_mut().insert(__eyk_perm_p); }";
+    let f = |body: &str| {
+        format!(
+            "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>, n: u64) -> Option<u64> requires old(self)@r.contains(p), {{ {body} Some(0) }} }}"
+        )
+    };
+    // break / continue / return：抜ける文の直前。
+    has(
+        &f("loop { borrow mut self@r[p] { if (*p).val == 0 { break; } } }"),
+        &format!("{{ {INS} break }}"),
+    );
+    has(
+        &f("loop { borrow mut self@r[p] { if (*p).val == 0 { continue; } } }"),
+        &format!("{{ {INS} continue }}"),
+    );
+    has(
+        &f("borrow mut self@r[p] { return None; }"),
+        &format!("{{ let __eyk_exit = None; {INS} return __eyk_exit }}"),
+    );
+    // 値を持って抜けるなら、値を先に評価する（値の式が権限を読む）。
+    has(
+        &f("borrow mut self@r[p] { if (*p).val > 1 { return Some((*p).val); } }"),
+        &format!(
+            "{{ let __eyk_exit = Some((*p.read(Tracked(&__eyk_perm_p))).val); {INS} return __eyk_exit }}"
+        ),
+    );
+    // `?` は明示の match に展開する（戻り値の型が Option）。
+    has(
+        &f("let o: Option<u64> = None; borrow mut self@r[p] { (*p).val = o?; }"),
+        &format!("match o {{ Some(__eyk_ok) => __eyk_ok, None => {{ {INS} return None }} }}"),
+    );
+    // 入れ子なら内側から戻す。
+    has(
+        &f("loop { borrow mut self@r[p] { borrow mut self@r[q] { break; } } }"),
+        "{ proof { self.r.borrow_mut().insert(__eyk_perm_q); self.r.borrow_mut().insert(__eyk_perm_p); } break }",
+    );
+    // ブロックの中で閉じる break と、共有の borrow は戻さない。
+    lacks(
+        &f("borrow mut self@r[p] { loop { break; } }"),
+        &format!("{INS} break"),
+    );
+    lacks(
+        &f("'a: { borrow mut self@r[p] { 'b: { break 'b; } } }"),
+        &format!("{INS} break"),
+    );
+    has(
+        &f("'a: { borrow mut self@r[p] { 'b: { break 'a; } } }"),
+        &format!("{{ {INS} break 'a }}"),
+    );
+    lacks(&f("loop { borrow self@r[p] { break; } }"), "insert");
+    // `borrow mut` の外の `?` と、クロージャの中の `return` はそのまま。
+    has(&f("let o: Option<u64> = None; let v = o?;"), "let v = o?;");
+    has(
+        &f("borrow mut self@r[p] { let g = || { return 1u64; }; }"),
+        "let g = | | { return 1u64; };",
+    );
+}
+
+/// 本体の後の、権限を戻す文は、発散の解析に頼らず常に置く（届かないときの rustc の警告は
+/// `#[allow(unreachable_code)]` で止める。PR #51 のレビューの B1）。
+#[test]
+fn borrow_mut_bodies_always_have_the_trailing_insert() {
+    const TAIL: &str = "#[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res";
+    for body in [
+        "loop { borrow mut self@r[p] { break; } }",
+        // 右辺だけが抜ける `&&` / `||`：通常の経路で戻す文が要る。
+        "borrow mut self@r[p] { let _b = c && { return; }; }",
+        "borrow mut self@r[p] { let _b = c || { return; }; }",
+    ] {
+        let src = format!(
+            "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>, c: bool) requires old(self)@r.contains(p), {{ {body} }} }}"
+        );
+        has(&src, TAIL);
+    }
 }
 
 #[test]

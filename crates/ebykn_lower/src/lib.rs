@@ -85,6 +85,11 @@ pub(crate) struct Cx<'a> {
     pub rename: BTreeMap<String, String>,
     /// `gives q@` の `q`（本体の末尾と `return` に権限を付ける）。
     pub gives: Option<String>,
+    /// 抜ける文の行き先（ループ・ラベル付きのブロック）と、開いている `borrow mut`。内側ほど後ろ
+    /// （#21 の既定 D：ブロックの外へ抜ける文の前で権限を領域に戻す）。
+    pub exits: Vec<expr::ExitScope>,
+    /// 関数の戻り値の型の形（`borrow mut` の中の `?` を展開するとき）。
+    pub try_kind: Option<expr::TryKind>,
     pub logic: bool,
     pub ensures: bool,
     pub report: &'a RefCell<Report>,
@@ -183,6 +188,8 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
             perms: BTreeMap::new(),
             rename: BTreeMap::new(),
             gives: None,
+            exits: Vec::new(),
+            try_kind: None,
             logic: false,
             ensures: false,
             report: &report,

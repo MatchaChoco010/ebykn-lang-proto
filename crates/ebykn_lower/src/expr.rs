@@ -23,6 +23,37 @@ pub enum PermKind {
     MutRef,
 }
 
+/// 抜ける文の行き先と、開いている `borrow mut`（[`Cx::exits`](crate::Cx)）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitScope {
+    /// ループ（`is_loop`）か、ラベル付きのブロック。
+    Frame {
+        label: Option<String>,
+        is_loop: bool,
+    },
+    /// `borrow mut` のブロック。抜けるときに置く、権限を領域に戻す文（`r.insert(__eyk_perm_p);`）。
+    BorrowMut { insert: String },
+}
+
+/// 関数の戻り値の型の形（`?` の失敗の値の作り方）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryKind {
+    Option,
+    Result,
+}
+
+/// 戻り値の型の最後の名前が `Option` / `Result` なら、その形。
+pub fn try_kind(t: &ast::Type) -> Option<TryKind> {
+    let TypeKind::Path { qself: None, path } = &t.kind else {
+        return None;
+    };
+    match path.segments.last()?.ident.name.as_str() {
+        "Option" => Some(TryKind::Option),
+        "Result" => Some(TryKind::Result),
+        _ => None,
+    }
+}
+
 pub fn perm_var(p: &str) -> String {
     format!("__eyk_perm_{p}")
 }
@@ -331,40 +362,40 @@ impl Cx<'_> {
                     format!("&{}{}", if *mutable { "mut " } else { "" }, self.expr(expr))
                 }
             }
-            ExprKind::Block { label, block } => format!(
-                "{}{}",
-                label
-                    .as_ref()
-                    .map(|l| format!("'{}: ", l.name))
-                    .unwrap_or_default(),
-                self.block(block)
-            ),
+            ExprKind::Block { label: None, block } => self.block(block),
+            ExprKind::Block {
+                label: Some(l),
+                block,
+            } => {
+                self.exits.push(ExitScope::Frame {
+                    label: Some(l.name.clone()),
+                    is_loop: false,
+                });
+                let b = self.block(block);
+                self.exits.pop();
+                format!("'{}: {b}", l.name)
+            }
             ExprKind::Unsafe(b) => format!("unsafe {}", self.block(b)),
             ExprKind::Const(b) => format!("const {}", self.block(b)),
-            ExprKind::Break { label, expr } => format!(
-                "break{}{}",
-                label
-                    .as_ref()
-                    .map(|l| format!(" '{}", l.name))
-                    .unwrap_or_default(),
-                expr.as_ref()
-                    .map(|x| format!(" {}", self.expr(x)))
-                    .unwrap_or_default()
-            ),
-            ExprKind::Continue { label } => format!(
-                "continue{}",
-                label
-                    .as_ref()
-                    .map(|l| format!(" '{}", l.name))
-                    .unwrap_or_default()
-            ),
+            ExprKind::Break { label, expr } => {
+                let l = label.as_ref().map(|l| l.name.as_str());
+                let ins = self.jump_inserts(l);
+                let v = expr.as_ref().map(|x| self.expr(x));
+                let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
+                with_inserts(&ins, v, |v| {
+                    format!("break{l}{}", v.map(|v| format!(" {v}")).unwrap_or_default())
+                })
+            }
+            ExprKind::Continue { label } => {
+                let l = label.as_ref().map(|l| l.name.as_str());
+                let ins = self.jump_inserts(l);
+                let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
+                with_inserts(&ins, None, |_| format!("continue{l}"))
+            }
             ExprKind::Return(x) => {
+                let ins = self.return_inserts();
                 let v = x.as_ref().map(|x| self.expr(x));
-                match (&self.gives, v) {
-                    (Some(g), Some(v)) => format!("return ({v}, Tracked({}))", perm_var(g)),
-                    (_, Some(v)) => format!("return {v}"),
-                    (_, None) => "return".into(),
-                }
+                with_inserts(&ins, v, |v| self.ret(v))
             }
             ExprKind::Call { func, args } => self.call(e, func, args),
             ExprKind::MethodCall {
@@ -428,7 +459,7 @@ impl Cx<'_> {
                 end.as_ref().map(|x| self.expr(x)).unwrap_or_default()
             ),
             ExprKind::Struct(lit) => self.struct_lit(lit),
-            ExprKind::Try(x) => format!("{}?", self.expr(x)),
+            ExprKind::Try(x) => self.try_(x),
             ExprKind::Tuple(es) => {
                 if es.len() == 1 {
                     format!("({},)", self.expr(&es[0]))
@@ -648,11 +679,14 @@ impl Cx<'_> {
             })
             .unwrap_or_default();
         let contract = self.clauses_simple(&c.contract);
+        // クロージャの中の `return` / `break` は外のブロックを抜けない。
+        let exits = std::mem::take(&mut self.exits);
+        let body = self.expr(&c.body);
+        self.exits = exits;
         let s = format!(
-            "{}|{}|{ret}{contract} {}",
+            "{}|{}|{ret}{contract} {body}",
             if c.capture { "move " } else { "" },
             params.join(", "),
-            self.expr(&c.body)
         );
         self.rename = saved;
         s
@@ -692,7 +726,64 @@ impl Cx<'_> {
             let es: Vec<String> = c.exprs.iter().map(|e| self.in_logic(e)).collect();
             clauses.push_str(&format!(" {kw} {},", es.join(", ")));
         }
-        format!("{label}{head}{clauses} {}", self.block(&l.body))
+        self.exits.push(ExitScope::Frame {
+            label: l.label.as_ref().map(|x| x.name.clone()),
+            is_loop: true,
+        });
+        let body = self.block(&l.body);
+        self.exits.pop();
+        format!("{label}{head}{clauses} {body}")
+    }
+
+    // ---- ブロックを抜ける文（#21 の既定 D） ----
+
+    /// `break` / `continue` の前に置く、権限を戻す文（内側の `borrow mut` から順に）。行き先は
+    /// ラベルが同じ枠、ラベルがなければいちばん内側のループ（`ebykn_check` の §6.2 と同じ）。
+    /// 行き先より内側で開いた `borrow mut` だけを戻す。
+    fn jump_inserts(&self, label: Option<&str>) -> Vec<String> {
+        let target = self.exits.iter().rposition(|x| match (x, label) {
+            (ExitScope::Frame { label: f, .. }, Some(l)) => f.as_deref() == Some(l),
+            (ExitScope::Frame { is_loop, .. }, None) => *is_loop,
+            (ExitScope::BorrowMut { .. }, _) => false,
+        });
+        match target {
+            Some(t) => borrow_inserts(&self.exits[t + 1..]),
+            None => Vec::new(),
+        }
+    }
+
+    /// `return` / `?` の前に置く、権限を戻す文（開いているすべての `borrow mut`）。
+    fn return_inserts(&self) -> Vec<String> {
+        borrow_inserts(&self.exits)
+    }
+
+    /// `return v`（`gives` があれば権限を付ける）。
+    fn ret(&self, v: Option<String>) -> String {
+        match (&self.gives, v) {
+            (Some(g), Some(v)) => format!("return ({v}, Tracked({}))", perm_var(g)),
+            (_, Some(v)) => format!("return {v}"),
+            (_, None) => "return".into(),
+        }
+    }
+
+    /// `e?`。`borrow mut` の中では、失敗の経路で権限を戻してから返すよう、明示の `match` に展開する
+    /// （形は関数の戻り値の型の `Option` / `Result`。どちらでもなければ `ebykn_check` が拒否している）。
+    fn try_(&mut self, x: &Expr) -> String {
+        let ins = self.return_inserts();
+        let v = self.expr(x);
+        if ins.is_empty() {
+            return format!("{v}?");
+        }
+        let (ok, err, fail) = match self.try_kind {
+            Some(TryKind::Option) => ("Some(__eyk_ok)", "None", "None"),
+            Some(TryKind::Result) | None => (
+                "Ok(__eyk_ok)",
+                "Err(__eyk_err)",
+                "Err(::core::convert::From::from(__eyk_err))",
+            ),
+        };
+        let fail = with_inserts(&ins, None, |_| self.ret(Some(fail.into())));
+        format!("match {v} {{ {ok} => __eyk_ok, {err} => {fail} }}")
     }
 
     pub fn mac(&mut self, m: &ast::Macro) -> String {
@@ -873,11 +964,15 @@ impl Cx<'_> {
         let v = perm_var(&p);
         if mutable {
             let saved = self.perms.insert(p.clone(), PermKind::Owned);
-            let b = self.block(body);
-            restore(&mut self.perms, &p, saved);
             let rx = self.region_exec(&r, true);
+            self.exits.push(ExitScope::BorrowMut {
+                insert: format!("{rx}.insert({v});"),
+            });
+            let b = self.block(body);
+            self.exits.pop();
+            restore(&mut self.perms, &p, saved);
             format!(
-                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; proof {{ {rx}.insert({v}); }} __eyk_res }}"
+                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ proof {{ {rx}.insert({v}); }} __eyk_res }}; __eyk_res }}"
             )
         } else {
             let saved = self.perms.insert(p.clone(), PermKind::Ref);
@@ -1022,6 +1117,38 @@ fn range_type(r: &Expr) -> Option<String> {
         }
     }
     Some("int".into())
+}
+
+/// 枠の並びのうち `borrow mut` の戻す文を、内側から順に。
+fn borrow_inserts(scopes: &[ExitScope]) -> Vec<String> {
+    scopes
+        .iter()
+        .rev()
+        .filter_map(|x| match x {
+            ExitScope::BorrowMut { insert } => Some(insert.clone()),
+            ExitScope::Frame { .. } => None,
+        })
+        .collect()
+}
+
+/// 抜ける文 `jump` の前に、権限を戻す文 `ins` を置く。値があれば先に評価して束縛する（値の式が
+/// 借りている権限を読むことがある）。
+fn with_inserts(
+    ins: &[String],
+    v: Option<String>,
+    jump: impl FnOnce(Option<String>) -> String,
+) -> String {
+    if ins.is_empty() {
+        return jump(v);
+    }
+    let proof = format!("proof {{ {} }}", ins.join(" "));
+    match v {
+        Some(v) => format!(
+            "{{ let __eyk_exit = {v}; {proof} {} }}",
+            jump(Some("__eyk_exit".into()))
+        ),
+        None => format!("{{ {proof} {} }}", jump(None)),
+    }
 }
 
 fn restore(m: &mut BTreeMap<String, PermKind>, k: &str, saved: Option<PermKind>) {

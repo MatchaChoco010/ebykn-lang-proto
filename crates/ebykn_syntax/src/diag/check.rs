@@ -156,6 +156,10 @@ pub enum Unimpl {
     NestedItem,
     /// 中を読まないマクロの引数の中の権限の操作。
     PermInMacro,
+    /// マクロの引数の中の `return` / `break` / `continue` / `?`（#21 の既定 D。抜ける前に権限を戻せない）。
+    JumpInMacro,
+    /// Rust のトークンのまま持つ式（`.await` など）の中の `return` / `break` / `continue` / `?`（同上）。
+    JumpInRustExpr,
     /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
@@ -168,6 +172,9 @@ pub enum Unimpl {
     EnvMacro,
     /// `file!`（`unchecked fn` の本体の外。#27 の既定）。
     FileMacro,
+    /// 戻り値の型を `Option<..>` / `Result<..>` と書いていない関数の、`borrow mut` の中の `?`
+    /// （#21 の既定 D。失敗の経路で権限を戻す展開の形を決められない）。
+    TryInBorrowMut,
 }
 
 impl Unimpl {
@@ -255,11 +262,29 @@ impl Unimpl {
             (Unimpl::FileMacro, Lang::Ja) => {
                 "`unchecked fn` の本体の外の `file!` はまだ扱えません。パスは cargo のクレートのコンパイルの仕方で変わる（Verus で検証するときは相対、別のクレートから依存されると絶対）ためです。値が要るなら `unchecked fn` で包みます"
             }
+            (Unimpl::TryInBorrowMut, Lang::En) => {
+                "`?` inside `borrow mut` is supported only when the function's return type is written as `Option<..>` or `Result<..>`, because the permission is put back before returning on the failure path, which needs the shape of the failure value; write the `match` explicitly"
+            }
+            (Unimpl::TryInBorrowMut, Lang::Ja) => {
+                "`borrow mut` の中の `?` は、関数の戻り値の型を `Option<..>` か `Result<..>` と書いたときだけ扱えます。失敗の経路では権限を戻してから返すので、失敗の値の形が要るためです。`match` で明示的に書きます"
+            }
             (Unimpl::CfgInBody, Lang::En) => {
                 "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"
             }
             (Unimpl::CfgInBody, Lang::Ja) => {
                 "関数の中（文・式・match の腕・欄・引数）の `cfg!` と `#[cfg(..)]` はまだ扱えません。Verus が検証するコードと Verus なしでビルドするコードが食い違いうるためです。条件付きのコードは別の項目に分けます"
+            }
+            (Unimpl::JumpInMacro, Lang::En) => {
+                "`return`, `break`, `continue` and `?` inside the arguments of a macro are not supported yet, because Ebykn does not rewrite them: a jump out of a `borrow mut` block there would skip putting the permission back, and the permission checks would not see it; move the jump out of the macro (if it is inside a closure, bind the closure with `let` outside the macro)"
+            }
+            (Unimpl::JumpInMacro, Lang::Ja) => {
+                "マクロの引数の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこれらを書き換えないので、そこから `borrow mut` のブロックを抜けると権限を戻さずに抜け、権限の検査も見ないためです。抜ける文をマクロの外に出します（クロージャの中にあるなら、クロージャを `let` でマクロの外に出します）"
+            }
+            (Unimpl::JumpInRustExpr, Lang::En) => {
+                "`return`, `break`, `continue` and `?` inside this expression (such as `.await`, which Ebykn keeps as Rust tokens) are not supported yet, because Ebykn does not read it: a jump out there would skip putting a `borrow mut` permission back, and the permission checks would not see it; compute the value with `let` before the expression"
+            }
+            (Unimpl::JumpInRustExpr, Lang::Ja) => {
+                "この式（Ebykn が Rust のトークンのまま持つ `.await` など）の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこの式の中を読まないので、そこから抜けると `borrow mut` の権限を戻さずに抜け、権限の検査も見ないためです。値は式の前で `let` に束縛してから使います"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"
@@ -457,12 +482,6 @@ pub enum CheckMsg {
         at: LoopPoint,
     },
 
-    /// `borrow` ブロックを `break` / `continue` で抜ける（#21 の既定）。
-    JumpOutOfBorrow {
-        name: String,
-        is_continue: bool,
-    },
-
     // E0512
     PermInClosure {
         name: String,
@@ -536,7 +555,7 @@ impl CheckMsg {
             WriteShared { .. } => Code::E0508,
             ConsumeBorrowed { .. } => Code::E0509,
             BranchMismatch { .. } => Code::E0510,
-            LoopMismatch { .. } | JumpOutOfBorrow { .. } => Code::E0511,
+            LoopMismatch { .. } => Code::E0511,
             PermInClosure { .. } => Code::E0512,
             SpecFieldAsRegion { .. } => Code::E0513,
             MethodCallUses { .. } => Code::E0514,
@@ -754,14 +773,6 @@ impl CheckMsg {
             (PermDiscarded, Ja) => {
                 "ここで返る権限が捨てられます。結果を `let x = ..;` で変数に束縛します".into()
             }
-            (JumpOutOfBorrow { name, is_continue }, En) => format!(
-                "cannot `{}` out of the `borrow` block of `{name}`; end the block first",
-                if *is_continue { "continue" } else { "break" }
-            ),
-            (JumpOutOfBorrow { name, is_continue }, Ja) => format!(
-                "`{name}` の `borrow` ブロックから `{}` で抜けることはできません。先にブロックを終えます",
-                if *is_continue { "continue" } else { "break" }
-            ),
             (AssignHeld { name }, En) => format!(
                 "cannot assign to `{name}` while its permission `{name}@` is held"
             ),

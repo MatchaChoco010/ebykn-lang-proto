@@ -353,6 +353,8 @@ fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<
     c.perms = BTreeMap::new();
     c.rename = BTreeMap::new();
     c.gives = None;
+    c.exits = Vec::new();
+    c.try_kind = sig.ret.as_ref().and_then(|r| crate::expr::try_kind(&r.ty));
     for u in contract.uses() {
         if let UsesItem::Perm { mode, ident: i, .. } = u {
             let k = match mode {

@@ -91,10 +91,15 @@ pub struct Walker<'a> {
     frames: Vec<Frame>,
     /// クロージャの中なら、外の Γ と R。
     closure_outer: Option<(Env, BTreeSet<String>)>,
+    /// 式として読むマクロの引数の中（`return` / `break` / `continue` / `?` は E0003。#21 の既定 D）。
+    in_macro: bool,
     /// 論理文脈（契約・`spec fn` の本体・`seq!` の引数など）か。
     logic: bool,
-    /// 開いている `borrow` ブロックの名前と、開いたときの枠の数（#21 の既定）。
-    borrows: Vec<(String, usize)>,
+    /// 開いている `borrow` ブロックの名前と、開いたときの枠の数、`borrow mut` か（#21 の既定 D）。
+    borrows: Vec<(String, usize, bool)>,
+    /// 関数の戻り値の型が `Option<..>` / `Result<..>` と書いてあるか（`borrow mut` の中の `?` を
+    /// 書き下しで展開できるか）。
+    try_known: bool,
     /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
     bound_source: Option<SpanKey>,
 }
@@ -112,14 +117,36 @@ impl<'a> Walker<'a> {
             var_types: BTreeMap::new(),
             frames: Vec::new(),
             closure_outer: None,
+            in_macro: false,
             logic: false,
             borrows: Vec::new(),
+            try_known: false,
             bound_source: None,
         }
     }
 
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
+        // 名前が `Option` / `Result` でも、クレートで定義した型なら std の型ではない（展開の形が合わない）。
+        self.try_known = sig.ret.as_ref().is_some_and(|r| {
+            try_type(&r.ty)
+                && match &r.ty.kind {
+                    ast::TypeKind::Path { qself: None, path } => {
+                        let segs: Vec<String> =
+                            path.segments.iter().map(|s| s.ident.name.clone()).collect();
+                        matches!(
+                            self.cx.index.resolve(
+                                self.cx.module,
+                                path.leading_colon,
+                                &segs,
+                                self.cx.self_ty
+                            ),
+                            crate::index::Resolved::Unknown
+                        )
+                    }
+                    _ => false,
+                }
+        });
         for p in &sig.params {
             let (ast::Param::Typed { attrs, span, .. } | ast::Param::Receiver { attrs, span, .. }) =
                 p;
@@ -921,6 +948,15 @@ impl<'a> Walker<'a> {
                     let d = self.expr(rhs);
                     self.place(lhs, false);
                     d
+                } else if matches!(op, ast::BinOp::And | ast::BinOp::Or) {
+                    // 右辺は左辺の値によって評価しないことがある（`if` の `else` のない形と同じ）。右辺だけが
+                    // 抜けても、式は必ず抜けるとは数えない。
+                    let d = self.expr(lhs);
+                    let start = self.env.clone();
+                    let dr = self.expr(rhs);
+                    let after = std::mem::replace(&mut self.env, start.clone());
+                    self.merge(e.span, vec![(after, dr), (start, false)]);
+                    d
                 } else {
                     self.expr(lhs) | self.expr(rhs)
                 }
@@ -952,6 +988,7 @@ impl<'a> Walker<'a> {
             },
             ExprKind::Unsafe(b) | ExprKind::Const(b) => self.block(b),
             ExprKind::Break { label, expr } => {
+                self.jump_in_macro(e.span);
                 if let Some(x) = expr {
                     self.expr(x);
                 }
@@ -959,10 +996,12 @@ impl<'a> Walker<'a> {
                 true
             }
             ExprKind::Continue { label } => {
+                self.jump_in_macro(e.span);
                 self.jump(label.as_ref().map(|l| l.name.as_str()), true, e.span);
                 true
             }
             ExprKind::Return(x) => {
+                self.jump_in_macro(e.span);
                 if let Some(x) = x {
                     self.expr(x);
                 }
@@ -970,8 +1009,18 @@ impl<'a> Walker<'a> {
                 true
             }
             ExprKind::Try(x) => {
+                self.jump_in_macro(e.span);
                 let d = self.expr(x);
-                // `?` の早期 return は `return` と同じ扱い（仕様 §6.2）。
+                // `borrow mut` の中の `?` は、書き下しで失敗の経路に権限を戻す `match` に展開する。
+                // 失敗の値の形は戻り値の型で決めるので、`Option` / `Result` と書いていなければ扱えない。
+                if !self.try_known && self.borrows.iter().any(|(_, _, m)| *m) {
+                    self.diags.push(
+                        e.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::TryInBorrowMut)),
+                    );
+                }
+                // `?` の早期 return は `return` と同じ扱い（仕様 §6.2）。抜ける経路では `borrow`
+                // ブロックが終わる（#21 の既定 D）。借りた権限は `Owned` でないので E0505 に数えない。
                 self.exit(e.span);
                 d
             }
@@ -1062,7 +1111,18 @@ impl<'a> Walker<'a> {
                 }
                 false
             }
-            ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer | ExprKind::Rust(_) => false,
+            ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer => false,
+            // Rust のトークンのまま持つ式（`.await` など）は中を読まないので、その中の脱出は
+            // 権限を戻せず、§6.2 の検査も見ない（E0003。#21 の案 D）。
+            ExprKind::Rust(tk) => {
+                if jump_in_tokens(tk.tokens.clone()) {
+                    self.diags.push(
+                        e.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInRustExpr)),
+                    );
+                }
+                false
+            }
         }
     }
 
@@ -1397,7 +1457,7 @@ impl<'a> Walker<'a> {
             None => false,
         };
         if introduced && let Some(x) = &x {
-            self.borrows.push((x.clone(), self.frames.len()));
+            self.borrows.push((x.clone(), self.frames.len(), mutable));
         }
         let d = self.block(body);
         if introduced && let Some(x) = x {
@@ -1574,17 +1634,12 @@ impl<'a> Walker<'a> {
         let Some(target) = target else {
             return;
         };
-        // `borrow` ブロックを `break` / `continue` で抜けるのは E0511（#21 の既定 A。`loop` と
-        // ラベル付きのブロックも同じ）。抜けた先の Γ には、借りた権限を残さない。
-        let crossed: Vec<String> = self
-            .borrows
-            .iter()
-            .filter(|(_, depth)| *depth > target)
-            .map(|(n, _)| n.clone())
-            .collect();
-        for name in crossed {
-            env.remove(&name);
-            self.push(span, CheckMsg::JumpOutOfBorrow { name, is_continue });
+        // 行き先より内側で開いた `borrow` ブロックは、抜ける点で終わる（#21 の既定 D。書き下しは
+        // 抜ける前に権限を領域に戻す）。抜けた先の Γ は、借りた権限を消したもので比べる。
+        for (name, depth, _) in &self.borrows {
+            if *depth > target {
+                env.remove(name);
+            }
         }
         if let Some(f) = self.frames.get_mut(target) {
             if is_continue {
@@ -1596,6 +1651,7 @@ impl<'a> Walker<'a> {
     }
 
     fn macro_call(&mut self, m: &ast::Macro) -> bool {
+        let prev_macro = std::mem::replace(&mut self.in_macro, true);
         match &m.args {
             ast::MacroArgs::Exprs(es) => {
                 let prev = std::mem::replace(&mut self.logic, true);
@@ -1612,6 +1668,7 @@ impl<'a> Walker<'a> {
             }
             ast::MacroArgs::Tokens => self.macro_tokens(m),
         }
+        self.in_macro = prev_macro;
         // 発散するマクロ（Rust と同じ）。
         matches!(
             m.path.segments.last().map(|s| s.ident.name.as_str()),
@@ -1627,6 +1684,22 @@ impl<'a> Walker<'a> {
             self.diags.push(
                 m.span,
                 Message::Check(CheckMsg::Unimplemented(Unimpl::PermInMacro)),
+            );
+        }
+        if jump_in_tokens(m.tokens.clone()) {
+            self.diags.push(
+                m.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInMacro)),
+            );
+        }
+    }
+
+    /// 式として読むマクロの引数の中の、抜ける式（E0003）。
+    fn jump_in_macro(&mut self, span: Span) {
+        if self.in_macro {
+            self.diags.push(
+                span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInMacro)),
             );
         }
     }
@@ -1853,4 +1926,27 @@ fn path_text(p: &ast::Path) -> String {
         .map(|s| s.ident.name.as_str())
         .collect::<Vec<_>>()
         .join("::")
+}
+
+/// 型の最後の名前が `Option` / `Result` か（`ebykn_lower` が `?` を展開する形）。
+fn try_type(t: &ast::Type) -> bool {
+    match &t.kind {
+        ast::TypeKind::Path { qself: None, path } => path
+            .segments
+            .last()
+            .is_some_and(|s| matches!(s.ident.name.as_str(), "Option" | "Result")),
+        _ => false,
+    }
+}
+
+/// 中を読まないマクロの引数の中の `return` / `break` / `continue` / `?`（グループの中も見る）。クロージャの
+/// 中かどうかは読み分けない（#21 の既定 D。読めない形は大きく失敗させる）。
+fn jump_in_tokens(ts: proc_macro2::TokenStream) -> bool {
+    use proc_macro2::TokenTree;
+    ts.into_iter().any(|t| match t {
+        TokenTree::Ident(i) => matches!(i.to_string().as_str(), "return" | "break" | "continue"),
+        TokenTree::Punct(p) => p.as_char() == '?',
+        TokenTree::Group(g) => jump_in_tokens(g.stream()),
+        TokenTree::Literal(_) => false,
+    })
 }

@@ -1,0 +1,13 @@
+verified borrow_exit::Pool::invariant
+verified borrow_exit::Pool::find_zero
+failed borrow_exit::Pool::find_zero_leaked
+verified borrow_exit::Pool::skip_zero
+verified borrow_exit::Pool::big_or_zero
+verified borrow_exit::Pool::set_some
+verified borrow_exit::Pool::set_ok
+verified borrow_exit::Pool::short_circuit
+verified borrow_exit::Pool::nested
+verified borrow_exit::Pool::inner_loop
+verified borrow_exit::Pool::labeled
+verified borrow_exit::Pool::loop_then_take
+results 16 verified, 1 errors
