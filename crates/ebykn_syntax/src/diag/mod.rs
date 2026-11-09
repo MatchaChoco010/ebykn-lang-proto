@@ -1,7 +1,7 @@
 //! 診断（仕様 §10.1）。
 //!
 //! 形式は `ファイル:行:列: コード: メッセージ`。文言は英語と日本語を持ち、既定は英語。
-//! `--json` 用に rustc 互換の JSON も出せる。構文エラーのコードは `E0001`、プロジェクトの誤りは
+//! `--json` 用に rustc 互換の JSON も出せる。構文エラーのコードは `E0001`、`.eyk` の証明構文は `E0303`、プロジェクトの誤りは
 //! `E0002`、未実装の機能は `E0003`、`ensures` の裸の `&mut` 引数は `E0004`（`OPEN.md`）。§6 の検査の文言は [`check`] にある。
 
 mod check;
@@ -29,6 +29,8 @@ pub enum Code {
     E0101,
     /// `#[verifier::..]` の使用。
     E0102,
+    /// `.eyk` に証明構文。
+    E0303,
     /// tuple struct・enum（・unit struct）に `owns` / `spec`。
     E0401,
     /// `impl T` の中での `invariant` / `view` の直接定義。
@@ -79,6 +81,7 @@ impl Code {
             Code::E0001 => "E0001",
             Code::E0101 => "E0101",
             Code::E0102 => "E0102",
+            Code::E0303 => "E0303",
             Code::E0401 => "E0401",
             Code::E0403 => "E0403",
             Code::E0002 => "E0002",
@@ -137,8 +140,14 @@ pub enum Message {
     VerusSyntax { written: String, ebykn: String },
     /// Verus の書き方で、Ebykn の `.eyk` には対応する書き方がない。
     VerusOnly { written: String },
-    /// 証明構文（仕様 §5.7）。`.eykp` にだけ書け、まだ対応していない。
+    /// E0303：`.eyk` に証明構文（仕様 §5.7）。証明構文は `.eykp` にだけ書ける。
     ProofSyntax { written: String },
+    /// `.eykp` で、証明の文（`assert`、`proof { .. }` など）を文でない位置に書いた。
+    ProofStmtOnly { written: String },
+    /// Ebykn が中を読まないコード（マクロの引数など）の中の証明構文。`.eykp` でも書けない。
+    ProofInOpaque { written: String },
+    /// 証明の属性の引数の形が違う。`form` は正しい形。
+    ProofAttrArgs { written: String, form: &'static str },
     /// 性質ファイル（仕様 §8）にだけ書ける。
     PropsOnly { written: String },
     /// 比較演算子の連鎖（Rust と同じく書けない）。
@@ -214,6 +223,14 @@ pub enum Expected {
     AndOrExpr,
     /// 呼び出しの `uses` の後の領域（`r`、`&r`、`&mut r`、`self@x`）。
     UsesArg,
+    /// 証明器の指定（`by(..)` の中）。
+    ProverMode,
+    /// `spec let` の初期値（`= e`）。
+    SpecLetInit,
+    /// `#![trigger ..]` の式（一つ以上）。
+    TriggerExpr,
+    /// `lemma group` の中の補題（一つ以上）。
+    LemmaGroupMember,
 }
 
 impl Expected {
@@ -263,6 +280,22 @@ impl Expected {
             (Expected::UsesArg, Lang::Ja) => {
                 "`uses` の後に、`,` で並べて呼び出しの `)` で閉じる領域（`r`、`&r`、`&mut r`、`&mut self@x`）"
             }
+            (Expected::ProverMode, Lang::En) => {
+                "a prover mode (`bit_vector`, `nonlinear_arith`, `integer_ring`, `compute` or `compute_only`)"
+            }
+            (Expected::LemmaGroupMember, Lang::En) => {
+                "at least one lemma in `lemma group g { .. }`"
+            }
+            (Expected::LemmaGroupMember, Lang::Ja) => "`lemma group g { .. }` の中に一つ以上の補題",
+            (Expected::TriggerExpr, Lang::En) => "at least one expression in `#![trigger ..]`",
+            (Expected::TriggerExpr, Lang::Ja) => "`#![trigger ..]` の中に一つ以上の式",
+            (Expected::SpecLetInit, Lang::En) => "`= expr` in `spec let` (`spec let p = e;`)",
+            (Expected::SpecLetInit, Lang::Ja) => {
+                "`spec let` の初期値の `= 式`（`spec let p = e;`）"
+            }
+            (Expected::ProverMode, Lang::Ja) => {
+                "証明器の指定（`bit_vector`、`nonlinear_arith`、`integer_ring`、`compute`、`compute_only` のどれか）"
+            }
         }
     }
 }
@@ -272,6 +305,7 @@ impl Message {
         match self {
             Message::ReservedPrefix { .. } => Code::E0101,
             Message::VerifierAttr => Code::E0102,
+            Message::ProofSyntax { .. } => Code::E0303,
             Message::ErasedOnNonNamed { .. } => Code::E0401,
             Message::DirectInvariantOrView { .. } => Code::E0403,
             Message::Check(m) => m.code(),
@@ -279,15 +313,22 @@ impl Message {
         }
     }
 
+    /// `.eyk` の診断としての文言。
     pub fn text(&self, lang: Lang) -> String {
+        self.text_in(lang, ".eyk")
+    }
+
+    /// 拡張子 `src`（`.eyk` か `.eykp`）のファイルの診断としての文言。`.eykp` は `.eyk` の写しなので
+    /// `.eyk` と同じ規則に従うが、文言はそのファイルの拡張子で書く。
+    pub fn text_in(&self, lang: Lang, src: &str) -> String {
         use Lang::{En, Ja};
         match (self, lang) {
             (Message::Check(m), _) => m.text(lang),
             (Message::VerusBuiltin { name, written }, En) => format!(
-                "syntax error: `{written}` is Verus syntax and cannot be written in `.eyk`; to use your own function or item named `{name}`, write its path from the crate (`crate::..::{name}`)"
+                "syntax error: `{written}` is Verus syntax and cannot be written in `{src}`; to use your own function or item named `{name}`, write its path from the crate (`crate::..::{name}`)"
             ),
             (Message::VerusBuiltin { name, written }, Ja) => format!(
-                "構文エラー: `{written}` は Verus の書き方で、`.eyk` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
+                "構文エラー: `{written}` は Verus の書き方で、`{src}` には書けません。`{name}` という名前の自分の関数や項目を使うなら、クレートからのパス（`crate::..::{name}`）で書きます"
             ),
             (Message::Deferred(n), _) => n.written.clone(),
             (Message::Lex, En) => {
@@ -314,17 +355,35 @@ impl Message {
                 "構文エラー: `{written}` は Verus の書き方です。Ebykn では `{ebykn}` と書きます"
             ),
             (Message::VerusOnly { written }, En) => format!(
-                "syntax error: `{written}` is Verus syntax and cannot be written in `.eyk`"
+                "syntax error: `{written}` is Verus syntax and cannot be written in `{src}`"
             ),
             (Message::VerusOnly { written }, Ja) => format!(
-                "構文エラー: `{written}` は Verus の書き方で、`.eyk` には書けません"
+                "構文エラー: `{written}` は Verus の書き方で、`{src}` には書けません"
             ),
             (Message::ProofSyntax { written }, En) => format!(
-                "syntax error: `{written}` is proof syntax; it can only be written in `.eykp`, which is not supported yet"
+                "`{written}` is proof syntax and cannot be written in `.eyk`; write it in the proof file (`proof/*.eykp`)"
             ),
             (Message::ProofSyntax { written }, Ja) => format!(
-                "構文エラー: `{written}` は証明構文で、`.eykp` にだけ書けます（`.eykp` はまだ読めません）"
+                "`{written}` は証明構文で、`.eyk` には書けません。証明ファイル（`proof/*.eykp`）に書きます"
             ),
+            (Message::ProofInOpaque { written }, En) => format!(
+                "syntax error: `{written}` cannot be written in code that Ebykn does not read (such as the arguments of a macro)"
+            ),
+            (Message::ProofInOpaque { written }, Ja) => format!(
+                "構文エラー: `{written}` は、Ebykn が読まないコード（マクロの引数など）の中には書けません"
+            ),
+            (Message::ProofAttrArgs { written, form }, En) => {
+                format!("syntax error: the arguments of `{written}` are malformed; write `{form}`")
+            }
+            (Message::ProofAttrArgs { written, form }, Ja) => {
+                format!("構文エラー: `{written}` の引数の形が違います。`{form}` と書きます")
+            }
+            (Message::ProofStmtOnly { written }, En) => {
+                format!("syntax error: `{written}` can only be written as a statement")
+            }
+            (Message::ProofStmtOnly { written }, Ja) => {
+                format!("構文エラー: `{written}` は文としてだけ書けます")
+            }
             (Message::PropsOnly { written }, En) => format!(
                 "syntax error: `{written}` can only be written in a props file, which is not supported yet"
             ),
@@ -351,18 +410,18 @@ impl Message {
                 "構文エラー: 比較演算子は連ねて書けません。`a < b && b < c` と書きます".into()
             }
             (Message::MacroNotAllowed { name }, En) => format!(
-                "syntax error: macro `{name}!` cannot be called in `.eyk`; only these macros can: {}. To use your own macro, write the function that needs it as an `unchecked fn`",
+                "syntax error: macro `{name}!` cannot be called in `{src}`; only these macros can: {}. To use your own macro, write the function that needs it as an `unchecked fn`",
                 crate::ALLOWED_MACROS.join(", ")
             ),
             (Message::MacroNotAllowed { name }, Ja) => format!(
-                "構文エラー: `.eyk` ではマクロ `{name}!` を呼べません。呼べるのは次のマクロだけです: {}。自作のマクロが要るなら、それを使う関数を `unchecked fn` にします",
+                "構文エラー: `{src}` ではマクロ `{name}!` を呼べません。呼べるのは次のマクロだけです: {}。自作のマクロが要るなら、それを使う関数を `unchecked fn` にします",
                 crate::ALLOWED_MACROS.join("、")
             ),
             (Message::Unread { written }, En) => format!(
-                "syntax error: `{written}` cannot be written in `.eyk`, because it brings in code that Ebykn does not read"
+                "syntax error: `{written}` cannot be written in `{src}`, because it brings in code that Ebykn does not read"
             ),
             (Message::Unread { written }, Ja) => format!(
-                "構文エラー: `{written}` は `.eyk` に書けません。Ebykn が読まないコードを取り込むためです"
+                "構文エラー: `{written}` は `{src}` に書けません。Ebykn が読まないコードを取り込むためです"
             ),
             (Message::AttrPosition { written }, En) => format!(
                 "syntax error: the attribute `{written}` cannot be written here; an inner attribute (`#![..]`) or an attribute on a statement or expression must be one of Rust's built-in attributes (`allow`, `cfg`, `doc`, ..), and `#![feature(..)]` cannot be written. A derive or attribute macro of a dependency can be written on an item, where `ebykn verify` lists the items it makes as assumptions"
@@ -371,16 +430,16 @@ impl Message {
                 "構文エラー: 属性 `{written}` はここに書けません。内側の属性（`#![..]`）と、文・式に付ける属性は、Rust の組み込みの属性（`allow`、`cfg`、`doc` など）だけです。`#![feature(..)]` は書けません。依存クレートの derive や属性マクロは項目に付けて書けます。そのとき、マクロが作る項目は `ebykn verify` が前提の一覧に出します"
             ),
             (Message::VstdDirect { name }, En) => format!(
-                "syntax error: `.eyk` cannot refer to the crate `{name}` directly; write the bare names instead (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, ..) without `{name}::`"
+                "syntax error: `{src}` cannot refer to the crate `{name}` directly; write the bare names instead (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, ..) without `{name}::`"
             ),
             (Message::VstdDirect { name }, Ja) => format!(
-                "構文エラー: `.eyk` はクレート `{name}` を直接参照できません。`{name}::` を書かずに、裸の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!` など）を使います"
+                "構文エラー: `{src}` はクレート `{name}` を直接参照できません。`{name}::` を書かずに、裸の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!` など）を使います"
             ),
             (Message::ReservedRename { written }, En) => format!(
-                "syntax error: `{written}` cannot be written in `.eyk`; the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to something else"
+                "syntax error: `{written}` cannot be written in `{src}`; the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to something else"
             ),
             (Message::ReservedRename { written }, Ja) => format!(
-                "構文エラー: `{written}` は `.eyk` に書けません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude` という名前をほかのものに付けることはできません"
+                "構文エラー: `{written}` は `{src}` に書けません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude` という名前をほかのものに付けることはできません"
             ),
             (Message::NotAllowedHere { written }, En) => {
                 format!("syntax error: `{written}` cannot be written here")
@@ -462,7 +521,7 @@ impl Diagnostic {
             self.span.start.line,
             self.span.start.col,
             self.code().as_str(),
-            self.message.text(lang)
+            self.message.text_in(lang, src_ext(&file.path))
         )
     }
 
@@ -471,7 +530,7 @@ impl Diagnostic {
         let s = &self.span;
         let mut out = String::new();
         out.push_str("{\"$message_type\":\"diagnostic\",\"message\":");
-        json_str(&mut out, &self.message.text(lang));
+        json_str(&mut out, &self.message.text_in(lang, src_ext(&file.path)));
         out.push_str(",\"code\":{\"code\":");
         json_str(&mut out, self.code().as_str());
         let level = if self.code().is_warning() {
@@ -493,6 +552,15 @@ impl Diagnostic {
         json_str(&mut out, &format!("{}\n", self.render(file, lang)));
         out.push('}');
         out
+    }
+}
+
+/// 診断の文言に書く拡張子。`.eykp` のファイルなら `.eykp`、ほかは `.eyk`。
+fn src_ext(path: &str) -> &'static str {
+    if path.ends_with(".eykp") {
+        ".eykp"
+    } else {
+        ".eyk"
     }
 }
 

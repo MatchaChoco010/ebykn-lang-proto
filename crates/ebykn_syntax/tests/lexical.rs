@@ -123,13 +123,13 @@ fn ext_eq_is_eykp_only() {
     assert_eq!(
         diags("fn f() { a =~= b }"),
         [
-            "src/lib.eyk:1:10: E0001: syntax error: `=~=` is proof syntax; it can only be written in `.eykp`, which is not supported yet"
+            "src/lib.eyk:1:10: E0303: `=~=` is proof syntax and cannot be written in `.eyk`; write it in the proof file (`proof/*.eykp`)"
         ]
     );
     assert_eq!(
         diags_in("fn f() { a =~= b }", Lang::Ja),
         [
-            "src/lib.eyk:1:10: E0001: 構文エラー: `=~=` は証明構文で、`.eykp` にだけ書けます（`.eykp` はまだ読めません）"
+            "src/lib.eyk:1:10: E0303: `=~=` は証明構文で、`.eyk` には書けません。証明ファイル（`proof/*.eykp`）に書きます"
         ]
     );
 }
