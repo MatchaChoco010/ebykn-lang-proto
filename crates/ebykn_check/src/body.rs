@@ -932,10 +932,7 @@ impl<'a> Walker<'a> {
                                 ),
                             }
                         }
-                        FieldPat::ErasedRest { attrs, span } => {
-                            self.no_cfg(attrs, *span);
-                            rest = true;
-                        }
+                        FieldPat::ErasedRest { .. } => rest = true,
                     }
                 }
                 if let Some(s) = info
