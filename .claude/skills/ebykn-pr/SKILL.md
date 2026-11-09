@@ -5,7 +5,7 @@ description: ebykn-lang-proto で PR を作る手順。ゲートを通し、日�
 
 # PR を作る
 
-前提：作業は orca のワークツリーの作業用ブランチで行い、1 つの Issue に 1 つの PR にする（AGENTS.md）。
+前提：作業は orca のワークツリーで行い、1 つの Issue に 1 つの PR にする（AGENTS.md）。ワークツリー名は `<種類>-<Issue 番号>-<短い名前>` で、ブランチ名は orca が付ける `<GitHub ユーザー名>/<ワークツリー名>`（`git branch --show-current` で分かる）をそのまま使う。
 
 ## 1. ゲートを通す
 

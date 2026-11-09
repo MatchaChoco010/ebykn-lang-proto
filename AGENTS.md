@@ -28,7 +28,7 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 
 - main のワークスペースは、ユーザーの指示を受けるために待機させる。作業は orca のワークツリー（作業用ブランチ）で行う。
 - main で解決してよいのは、ブランチのマージで生じた問題のように main でしか解決できないものだけ。main に直接コミットしない。
-- ブランチ名は `<種類>/<Issue 番号>-<短い名前>`（例：`harness/3-vibe-lang-structure`、`fix/12-linearity-loop`）。
+- orca のワークツリー名は `<種類>-<Issue 番号>-<短い名前>`（例：`harness-3-vibe-lang-structure`、`fix-12-linearity-loop`）。ブランチ名は orca が付ける `<GitHub ユーザー名>/<ワークツリー名>` をそのまま使う。
 - 1 つの Issue に 1 つの PR。
 
 ## Issue
