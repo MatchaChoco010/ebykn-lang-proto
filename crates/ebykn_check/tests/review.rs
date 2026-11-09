@@ -452,6 +452,107 @@ fn perm_spellings_inside_unread_tokens_are_e0003() {
     }
 }
 
+/// 関数の本体の中の、権限に行き着く項目は E0003（#117）。索引に入らないので、§6.2 の検査がそれを
+/// 通した呼び出しを引けない。
+#[test]
+fn nested_items_leading_to_permissions_are_e0003() {
+    for body in [
+        "use crate::mk as m4; let q = m4(1); 0",
+        "use crate::mk; let q = mk(1); leak q@; 0",
+        "use crate::m::*; 0",
+        "use crate::*; 0",
+        "use ebykn_prelude::Ptr as P2; 0",
+        "fn lmk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q } let q = lmk(1); 0",
+        "fn eat(p: Ptr<Node>) uses p@ { leak p@; } 0",
+        "type P3 = Ptr<Node>; let q = P3::new(Node { val: 1 }); 0",
+        "type P4 = P; 0",
+        "struct L; impl L { fn mk5() -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q } } 0",
+        "use crate::mk as m4; let _b = matches!({ let q = m4(1); 1u64 }, 1); 0",
+        // 権限を持つ名前のあるモジュールと型への別名（`mm::mk2`、`WW::mkw`）。
+        "use crate::m2 as mm; let q = mm::mk2(1); 0",
+        "use crate::m3 as mm; let q = mm::m2::mk2(1); 0",
+        "use crate::m4 as mm; let q = mm::mk2(1); 0",
+        "use crate::W as WW; let q = WW::mkw(); 0",
+        "type WT = W; let q = WT::mkw(); 0",
+        "type X = <Node as Tr>::Out; 0",
+        "if true { use crate::mk as m4; let q = m4(1); } 0",
+        "let c = || { use crate::mk as m4; let q = m4(1); 0u64 }; c()",
+        // 行き先を引けない別名（#75 の再確認）。本体の中の別名は索引に入らないので、ここで拒む。
+        "type PX2<T> = T; let q = PX2::<Ptr<Node>>::new(Node { val: 1 }); 0",
+        "type X3 = X; let q = X3::new(Node { val: 1 }); 0",
+        "use crate::X as X4; let q = X4::new(Node { val: 1 }); 0",
+        // prelude のクレートの根の別名（#131）。
+        "use ebykn_prelude as ep; let q = ep::Ptr::new(Node { val: 1 }); 0",
+        "use ebykn_prelude::{self as ep}; let q = ep::Cell::new(1u64); 0",
+    ] {
+        let src = format!("{PRELUDE}{SPELL_PRE}{NESTED_PRE}pub fn f() -> u64 {{ {body} }}\n");
+        let (_, lines) = run(&src);
+        assert!(
+            lines.iter().any(|l| l.contains("E0003")
+                && l.contains("items inside a function body that lead to permissions")),
+            "{body}:\n{}",
+            lines.join("\n")
+        );
+    }
+    // 本体の中の、型の引数を持つ入れ子の `fn` の中の `T::Out::new(..)` も E0003（#75 の再確認）。
+    rejects(
+        &format!(
+            "{PRELUDE}{SPELL_PRE}pub fn f() -> u64 {{ fn inner<T: Tr<Out = Ptr<Node>>>() -> u64 {{ let q = T::Out::new(Node {{ val: 1 }}); 0 }} 0 }}\n"
+        ),
+        "E0003",
+        "through an associated type",
+    );
+    // 権限に行き着かない項目は今のまま。
+    accepts(&format!(
+        "{PRELUDE}{SPELL_PRE}{NESTED_PRE}pub fn f() -> u64 {{ use std::cmp::max; type N = u64; fn h(x: u64) -> u64 {{ x }} use crate::m5 as m6; type V = crate::V5; let n: N = max(h(m6::id5(1)), 2); let _v = V {{ x: n }}; n }}\n"
+    ));
+}
+
+/// [`nested_items_leading_to_permissions_are_e0003`] の前置き。`m3` は `m2` を入れ子に持ち、`m4` は
+/// `m2` を glob で取り込む。`m5` と `V5` は権限を持たない。
+const NESTED_PRE: &str = "pub mod m2 { use super::*; pub fn mk2(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q } }
+pub mod m3 { pub use super::m2; }
+pub mod m4 { pub use super::m2::*; }
+pub mod m5 { pub fn id5(x: u64) -> u64 { x } }
+pub struct V5 { pub x: u64 }
+impl V5 { pub fn get(&self) -> u64 { self.x } }
+pub struct W;
+impl W { pub fn mkw() -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q } }
+";
+
+/// モジュールの直下で prelude のクレートに別名を付けても、§6.2 の検査がその呼び出しを引く（#131）。
+/// これまでは `ep::Ptr::new(..)` を引けず、権限を捨てても verified になっていた。
+#[test]
+fn prelude_crate_aliases_are_resolved() {
+    for (pre, call) in [
+        ("use ebykn_prelude as ep;", "ep::Ptr::new(Node { val: 1 })"),
+        ("use ebykn_prelude::{self as ep};", "ep::Cell::new(1u64)"),
+        ("use ebykn_prelude as ep;", "ep::Ptr::<Node>::empty()"),
+        ("", "ebykn_prelude::Ptr::new(Node { val: 1 })"),
+    ] {
+        rejects(
+            &format!("{PRELUDE}{pre}\npub fn f() -> u64 {{ let q = {call}; 0 }}\n"),
+            "E0505",
+            "still owned",
+        );
+        accepts(&format!(
+            "{PRELUDE}{pre}\npub fn f() -> u64 {{ let q = {call}; leak q@; 0 }}\n"
+        ));
+    }
+}
+
+/// 読まないトークンの中の、`gives` を持つ入れ子の `fn` は E0003（#117）。
+#[test]
+fn nested_gives_fn_inside_unread_tokens_is_e0003() {
+    rejects(
+        &format!(
+            "{PRELUDE}{SPELL_PRE}pub fn f() -> u64 {{ let _f = async {{ fn g(x: u64) -> (r: u64) gives r@ {{ x }} 1u64 }}; 0 }}\n"
+        ),
+        "E0003",
+        "permissions cannot be used inside this expression",
+    );
+}
+
 /// 領域を渡す呼び出し（`f(x, uses &mut r)`。#19）をマクロの引数の中に書くと E0003。
 #[test]
 fn region_passing_calls_inside_macro_arguments_are_e0003() {
@@ -616,36 +717,27 @@ pub mod mm { pub type X = <super::Node as super::Tr>::Out; pub type PX<T> = T; }
 }
 
 /// 解決できない頭で、最後の名前が権限を作る・受け渡す関数の名前（`new`、`empty`、`uses` / `gives` を
-/// 持つ関数）なら E0003（#75 の再確認）。解決できない綴りが新しく見つかっても黙って通さない。
+/// 持つ関数）なら E0003（#75 の再確認）。解決できない綴りが新しく見つかっても黙って通さない。今の索引が
+/// 引けない形の例として、深さの守りを越える別名の鎖を使う。
 #[test]
 fn unresolved_heads_with_perm_function_names_are_e0003() {
-    const PRE: &str =
-        "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }
-use ebykn_prelude::Ptr as PU;
-use ebykn_prelude as ep;
-use ep::Ptr as P3;
-pub mod pm { pub use super::mk; }
-";
+    let mut pre = String::from("use ebykn_prelude as e0;\n");
+    for k in 1..=24 {
+        pre.push_str(&format!("use e{} as e{k};\n", k - 1));
+    }
     const CALL: &str = "a path that cannot be resolved";
     for (body, needle) in [
-        (
-            "let q = ::ebykn_prelude::Ptr::new(Node { val: 1 }); 0",
-            CALL,
-        ),
-        ("let q = pm::mk(1); 0", CALL),
-        ("let q = ep::Ptr::new(Node { val: 1 }); 0", CALL),
-        ("let q = ep::Cell::new(1u64); 0", CALL),
-        ("let q = P3::new(Node { val: 1 }); 0", CALL),
-        ("let q = P3::<Node>::empty(); 0", CALL),
+        ("let q = e24::Ptr::new(Node { val: 1 }); 0", CALL),
+        ("let q = e24::Cell::<u64>::empty(); 0", CALL),
         // 値として使う形も同じ。
-        ("let g = P3::new; let q = g(Node { val: 1 }); 0", CALL),
+        ("let g = e24::Ptr::new; let q = g(Node { val: 1 }); 0", CALL),
         // 読まないトークンの中。
         (
-            "let _b = matches!({ let q = P3::new(Node { val: 1 }); 1u64 }, 1); 0",
+            "let _b = matches!({ let q = e24::Ptr::new(Node { val: 1 }); 1u64 }, 1); 0",
             "arguments of this macro",
         ),
     ] {
-        let src = format!("{PRELUDE}{PRE}pub fn f() -> u64 {{ {body} }}\n");
+        let src = format!("{PRELUDE}{pre}pub fn f() -> u64 {{ {body} }}\n");
         let (_, lines) = run(&src);
         assert!(
             lines
@@ -655,18 +747,6 @@ pub mod pm { pub use super::mk; }
             lines.join("\n")
         );
     }
-    // サブモジュールから、モジュールの直下の別名を通す形。
-    let src = format!(
-        "{PRELUDE}{PRE}pub mod sm {{ pub fn g() -> u64 {{ let q = crate::PU::new(crate::Node {{ val: 1 }}); 0 }} }}\n"
-    );
-    let (_, lines) = run(&src);
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("E0003") && l.contains(CALL)),
-        "{}",
-        lines.join("\n")
-    );
     // std と依存クレートのパス、外への別名、クレートの型の上のトレイトのメソッドは今のまま。
     accepts(&format!(
         "{PRELUDE}use std::collections::BTreeMap;\ntype V = Vec<u64>;\nuse crate::V as W;\npub trait Mk {{ fn new() -> Self; }}\npub struct S5 {{ x: u64 }}\nimpl Mk for S5 {{ fn new() -> Self {{ S5 {{ x: 0 }} }} }}\npub fn k() -> u64 {{ let _a = Vec::<u64>::new(); let _b = String::new(); let _c = std::vec::Vec::<u64>::new(); let _d = V::new(); let _e = W::new(); let _f = BTreeMap::<u64, u64>::new(); let _g = S5::new(); let _h = matches!(Vec::<u64>::new().len(), 0); let new = 1u64; new }}\n"
@@ -718,9 +798,9 @@ fn unresolved_roots_outside_the_allow_list_are_e0003() {
     ));
 }
 
-/// 2 つ目以降の区切りの `super`（`super::super::mk`）を解決し、§6.2 の検査に通す（#75 の 4 回目の再確認）。
-/// これまでは解決できず、別名（`zz`、`yy`）で呼ぶと安全側の規則にも掛からずに抜けていた。別名はモジュールの
-/// 中の `use` を読まないと引けないので、ここでは安全側の規則で E0003 になる。
+/// 2 つ目以降の区切りの `super`（`super::super::mk`）と、その先の `use` の別名（`zz`、`yy`）を解決し、§6.2 の
+/// 検査に通す（#75 の 4 回目の再確認の 3）。これまでは解決できず、別名で呼ぶと安全側の規則にも掛からずに
+/// 抜けていた。
 #[test]
 fn super_after_the_first_segment_is_resolved() {
     const PRE: &str = "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\nuse crate::mk as zz;\n";
@@ -732,6 +812,8 @@ fn super_after_the_first_segment_is_resolved() {
     for (uses, call) in [
         ("", "super::super::mk(1)"),
         ("use super::super::mk;", "mk(1)"),
+        ("", "super::super::zz(1)"),
+        ("use super::super::zz as yy;", "yy(1)"),
     ] {
         rejects(
             &src(uses, &format!("let q = {call}; 0")),
@@ -740,31 +822,200 @@ fn super_after_the_first_segment_is_resolved() {
         );
         accepts(&src(uses, &format!("let q = {call}; leak q@; 0")));
     }
-    for (uses, body, needle) in [
-        (
-            "",
-            "let q = super::super::zz(1); 0",
-            "a path that cannot be resolved",
-        ),
-        (
-            "use super::super::zz as yy;",
-            "let q = yy(1); 0",
-            "a path that cannot be resolved",
-        ),
-        (
+    rejects(
+        &src(
             "use super::super::zz as yy;",
             "let _b = matches!({ let q = yy(1); 1u64 }, 1); 0",
-            "arguments of this macro",
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
+}
+
+/// prelude のクレートの別名・再公開・`extern crate`・先頭の `::`・モジュールの中の `use` を通した呼び出しを
+/// 解決し、§6.2 の検査に通す（#127 の再確認の B2 と S1、#131）。捨てれば E0505、`leak` すれば通る。
+#[test]
+fn calls_through_imports_and_reexports_are_resolved() {
+    const MK: &str =
+        "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\n";
+    for (pre, sub, call) in [
+        // B2：prelude のクレートの別名の別の綴り。
+        (
+            "use ebykn_prelude as ep;",
+            true,
+            "crate::ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "use ebykn_prelude as ep;",
+            true,
+            "super::ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "use ebykn_prelude as ep; use ep::Ptr as P3;",
+            false,
+            "P3::new(Node { val: 1 })",
+        ),
+        (
+            "pub mod pm { pub use ebykn_prelude as ep; }",
+            false,
+            "pm::ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "pub mod pm { pub use ebykn_prelude as ep; } use pm::*;",
+            false,
+            "ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "extern crate ebykn_prelude as ep;",
+            false,
+            "ep::Ptr::new(Node { val: 1 })",
+        ),
+        // S1：先頭の `::`、再公開した gives の関数、サブモジュールからの別名。
+        ("", false, "::ebykn_prelude::Ptr::new(Node { val: 1 })"),
+        ("pub mod pm { pub use super::mk; }", false, "pm::mk(1)"),
+        (
+            "use ebykn_prelude::Ptr as PU;",
+            true,
+            "crate::PU::new(Node { val: 1 })",
         ),
     ] {
-        let (_, lines) = run(&src(uses, body));
+        let f = |tail: &str| {
+            let body = format!("let q = {call}; {tail}0");
+            if sub {
+                format!(
+                    "{PRELUDE}{MK}{pre}\npub mod sm {{ use super::Node; pub fn g() -> u64 {{ {body} }} }}\n"
+                )
+            } else {
+                format!("{PRELUDE}{MK}{pre}\npub fn g() -> u64 {{ {body} }}\n")
+            }
+        };
+        rejects(&f(""), "E0505", "still owned");
+        accepts(&f("leak q@; "));
+    }
+    // 関数の本体の中の `extern crate .. as ..` は、本体の中の `use` と同じく E0003（#117）。
+    let (_, lines) = run(&format!(
+        "{PRELUDE}pub fn g() -> u64 {{ extern crate ebykn_prelude as ep; let q = ep::Ptr::new(Node {{ val: 1 }}); 0 }}\n"
+    ));
+    assert!(
+        lines.iter().any(|l| l.contains("E0003")
+            && l.contains("items inside a function body that lead to permissions")),
+        "{}",
+        lines.join("\n")
+    );
+}
+
+/// ルートの `extern crate X as Y;` の別名は extern prelude に入り、どのモジュールからも `Y::..` と `::Y::..` で
+/// 引ける（#127 の 4 回目の再確認の 2）。これまではルートでしか引けず、ほかのモジュールと先頭の `::` で
+/// 黙って通っていた。
+#[test]
+fn extern_prelude_aliases_are_resolved_everywhere() {
+    const MK: &str =
+        "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\n";
+    for (pre, sub, call) in [
+        (
+            "extern crate ebykn_prelude as ep;",
+            true,
+            "ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "extern crate ebykn_prelude as ep;",
+            false,
+            "::ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "extern crate ebykn_prelude as ep;",
+            true,
+            "::ep::Ptr::new(Node { val: 1 })",
+        ),
+        (
+            "extern crate ebykn_prelude as ep;",
+            true,
+            "P::new(Node { val: 1 }) /*use ep::Ptr as P;*/",
+        ),
+        ("extern crate self as me;", true, "me::mk(1)"),
+        (
+            "extern crate self as me;",
+            true,
+            "yy(1) /*use me::mk as yy;*/",
+        ),
+        ("extern crate self as me;", true, "mk(1) /*use me::*;*/"),
+    ] {
+        let (call, uses) = match call.split_once(" /*") {
+            Some((c, u)) => (c, u.trim_end_matches("*/")),
+            None => (call, ""),
+        };
+        let f = |tail: &str| {
+            let body = format!("let q = {call}; {tail}0");
+            if sub {
+                format!(
+                    "{PRELUDE}{MK}{pre}\npub mod sm {{ use super::Node; {uses} pub fn g() -> u64 {{ {body} }} }}\n"
+                )
+            } else {
+                format!("{PRELUDE}{MK}{pre}\npub fn g() -> u64 {{ {body} }}\n")
+            }
+        };
+        rejects(&f(""), "E0505", "still owned");
+        accepts(&f("leak q@; "));
+    }
+    // 値として使う形と、本体の中の `use ep::Ptr as P;` は E0003。
+    for (pre, body, needle) in [
+        (
+            "extern crate self as me;",
+            "let g = me::mk; 0",
+            "can only be called directly",
+        ),
+        (
+            "extern crate ebykn_prelude as ep;",
+            "use ep::Ptr as P; let q = P::new(Node { val: 1 }); 0",
+            "items inside a function body that lead to permissions",
+        ),
+    ] {
+        let (_, lines) = run(&format!(
+            "{PRELUDE}{MK}{pre}\npub mod sm {{ use super::Node; pub fn g() -> u64 {{ {body} }} }}\n"
+        ));
         assert!(
             lines
                 .iter()
                 .any(|l| l.contains("E0003") && l.contains(needle)),
-            "{uses} {body}:\n{}",
+            "{pre} {body}:\n{}",
             lines.join("\n")
         );
+    }
+    // 再公開した列挙子（`pub use super::Color::*;` の `cm::Red`）は値として引く。
+    accepts(&format!(
+        "{PRELUDE}pub enum Color {{ Red, Blue }}\npub mod cm {{ pub use super::Color::*; }}\npub fn f() -> u64 {{ let _e = cm::Red; 0 }}\n"
+    ));
+}
+
+/// glob をたどる名前の解決は、互いに取り込む glob があっても、同じところを二度たどらない（#127 の 4 回目の
+/// 再確認の 1。これまでは子が 3 つで 212 秒かかった）。
+#[test]
+fn glob_resolution_does_not_blow_up() {
+    let mut fanout = String::new();
+    for k in 0..8 {
+        fanout.push_str(&format!(
+            "pub mod c{k} {{ use super::*; pub fn f{k}() -> u64 {{ let _v = Vec::<u64>::new(); 1 }} }}\npub use c{k}::*;\n"
+        ));
+    }
+    let mut mutual = String::new();
+    for k in 0..6 {
+        let others: String = (0..6)
+            .filter(|j| *j != k)
+            .map(|j| format!("pub use super::m{j}::*; "))
+            .collect();
+        mutual.push_str(&format!(
+            "pub mod m{k} {{ {others}pub fn g{k}() -> u64 {{ let _v = Vec::<u64>::new(); 1 }} }}\n"
+        ));
+    }
+    for src in [fanout, mutual] {
+        let start = std::time::Instant::now();
+        let (_, lines) = run(&format!("{PRELUDE}{src}pub fn h() -> u64 {{ 0 }}\n"));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(lines.is_empty(), "{}", lines.join("\n"));
     }
 }
 

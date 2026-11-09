@@ -220,6 +220,8 @@ pub enum Unimpl {
     TypeRelativeCall,
     /// 解決できず、外（std と依存クレート）とも言えないパスの呼び出しか値（#75 の再確認）。
     UnresolvedPath,
+    /// 関数の本体の中の、権限に行き着く項目（`uses` / `gives` を持つ `fn`、`use` / `type` の別名。#117）。
+    NestedPermItem,
     /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
@@ -369,6 +371,12 @@ impl Unimpl {
             }
             (Unimpl::TypeRelativeCall, Lang::Ja) => {
                 "関連型・型の引数・行き先を引けない型の別名を通るパスの呼び出し（`Self::A::f(..)`、`T::A::f(..)`、`type X = <T as Tr>::A;` や `type X<T> = T;` の `X::f(..)`）はまだ扱えません。権限の検査が、その関数が権限を受け渡すかを引けないためです。具体的な型を通して呼びます（`Ptr::<Node>::new(..)`）"
+            }
+            (Unimpl::NestedPermItem, Lang::En) => {
+                "items inside a function body that lead to permissions (a `fn` or method with `uses` / `gives`, or a `use` / `type` (including a glob `use`) of such a function, of a permission type, or of a type or module that has them) are not supported yet, because the permission checks do not see calls through them; move the item to the module level"
+            }
+            (Unimpl::NestedPermItem, Lang::Ja) => {
+                "関数の本体の中の、権限に行き着く項目（`uses` / `gives` を持つ `fn` やメソッド、そうした関数・権限の型や、それを持つ型・モジュールの `use`（glob を含む）と `type`）はまだ扱えません。それを通した呼び出しを、権限の検査が見ないためです。項目をモジュールの直下に移します"
             }
             (Unimpl::PermFnValue, Lang::En) => {
                 "a function that takes or returns permissions (one with `uses` / `gives`, or `Ptr::new` and the like) can only be called directly as `f(..)` or `T::f(..)` for now; using it as a value or through a qualified path (`<T>::f`) hides the call from the permission checks"

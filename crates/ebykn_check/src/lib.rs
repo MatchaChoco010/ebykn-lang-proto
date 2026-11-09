@@ -168,7 +168,12 @@ pub fn check_nested_items(
             ItemKind::LemmaFn(_) => true,
             _ => false,
         };
-        if assumption {
+        if nested_perm_item(index, module, item) {
+            diags.push(
+                item.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::NestedPermItem)),
+            );
+        } else if assumption {
             diags.push(
                 item.span,
                 Message::Check(CheckMsg::Unimplemented(Unimpl::NestedAssumption)),
@@ -181,6 +186,65 @@ pub fn check_nested_items(
         } else {
             check_items(index, module, std::slice::from_ref(item), diags, facts);
         }
+    }
+}
+
+/// 関数の本体の中の項目で、権限に行き着くもの（#117）。索引に入らないので、§6.2 の検査はそれを通した
+/// 呼び出しを引けない。`uses` / `gives` を持つ入れ子の `fn` とメソッド、権限に行き着く名前
+/// （[`index::leads_to_perm`]。権限の型、権限を作る関数、`uses` / `gives` を持つ関数、そうしたメソッドを
+/// 持つ型、そうした名前を持つモジュール）への `use`（glob を含む）と `type`。右辺が修飾パス
+/// （`<T as Tr>::X`）か別名の型の引数（`type PX<T> = T;`）の `type` と、行き先を引けない別名
+/// （[`index::alias_unresolved`]）への `use` / `type` は、権限の型に行き着くかを引けないので拒む。
+fn nested_perm_item(index: &Index, module: &[String], item: &ast::Item) -> bool {
+    let perm_fn = |c: &ast::Contract| c.uses().next().is_some() || c.gives().next().is_some();
+    match &item.kind {
+        ItemKind::Fn(f) => perm_fn(&f.contract),
+        ItemKind::Impl(imp) => imp.items.iter().any(|i| match &i.kind {
+            ItemKind::Fn(f) => perm_fn(&f.contract),
+            _ => false,
+        }),
+        // `extern crate X as Y;` は `use X as Y;` と同じ（`extern crate ebykn_prelude as ep;`）。
+        ItemKind::Rust(t) => index::parse_extern_crate(&t.tokens).is_some_and(|u| {
+            let (index::Import::Name { path, .. } | index::Import::Glob { path }) = &u;
+            index::leads_to_perm(index, &index.resolve(module, false, path, None))
+        }),
+        // 解決できず外とも言えない `use`（安全側。[`Index::unresolvable_path`]）も拒む。
+        ItemKind::Use(t) => index::parse_use(&t.tokens).iter().any(|u| {
+            let (index::Import::Name { path, .. } | index::Import::Glob { path }) = u;
+            index::leads_to_perm(index, &index.resolve(module, false, path, None))
+                || unresolved_alias(index, module, false, path)
+                || index.unresolvable_path(module, false, path, None, &BTreeSet::new(), true, false)
+        }),
+        ItemKind::TypeAlias(a) => match &a.ty.kind {
+            ast::TypeKind::Path { qself: None, path } => {
+                let segs: Vec<String> =
+                    path.segments.iter().map(|s| s.ident.name.clone()).collect();
+                // 右辺が別名の型の引数（`type PX<T> = T;`）なら、行き先を引けない。
+                segs.first()
+                    .is_some_and(|f| type_param_names(&a.generics).any(|p| &p == f))
+                    || index::leads_to_perm(
+                        index,
+                        &index.resolve(module, path.leading_colon, &segs, None),
+                    )
+                    || unresolved_alias(index, module, path.leading_colon, &segs)
+            }
+            ast::TypeKind::Path { qself: Some(_), .. } => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// パスが、行き先を引けない型の別名（[`index::alias_unresolved`]）を指すか。
+fn unresolved_alias(
+    index: &Index,
+    module: &[String],
+    leading_colon: bool,
+    segs: &[String],
+) -> bool {
+    match index.resolve_exact(module, leading_colon, segs, None) {
+        index::Resolved::Type(p) => index::alias_unresolved(index, &p, 0),
+        _ => false,
     }
 }
 

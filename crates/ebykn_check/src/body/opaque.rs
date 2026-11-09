@@ -112,8 +112,9 @@ impl Walker<'_> {
                 || self.perm_fn_name(&n)
                 || held(&n)
                 || match n.as_str() {
-                    // 局所の別名と、呼び出しで領域を渡す `f(x, uses &mut r)`（#19。`uses` は予約語）。
-                    "use" | "type" | "uses" => true,
+                    // 局所の別名、`uses` / `gives` を持つ入れ子の `fn`（#117）、呼び出しで領域を渡す
+                    // `f(x, uses &mut r)`（#19。`uses` は予約語）。
+                    "use" | "type" | "uses" | "gives" => true,
                     "self" => pc(next, '@'),
                     // 型に相対的なパス `Self::A::f`、`T::A::f`（関連型を通る。トークンの外の
                     // `type_relative` と同じ）。
