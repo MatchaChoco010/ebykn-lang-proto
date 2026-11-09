@@ -59,13 +59,33 @@ gh pr view <番号> --json closingIssuesReferences --jq '[.closingIssuesReferenc
 gh pr checks <番号> --watch
 ```
 
-`ci-required` が緑になるまで、落ちたら直して push する。`develop` と衝突したら `develop` に rebase して push し直す（feature ブランチなので `--force-with-lease` でよい）。
+`ci-required` が緑になるまで、落ちたら直して push する。
+
+`develop` の ruleset は strict で、PR の head が `develop` の先頭に追いついていなければ、緑でもマージできない（AGENTS.md の「作業の場所」）。
+
+- `develop` と衝突したら、`develop` に rebase して push し直す（feature ブランチなので `--force-with-lease` でよい）。push のたびに CI が走り直すので、もう一度 `gh pr checks <番号> --watch` で `ci-required` が緑になるまで見届けてから報告する。前の緑は、新しい head には効かない。
+- 衝突がなく、`develop` に遅れているだけなら、ワーカーは何もしなくてよい。マージのときに、コーディネーターが update-branch で追いつかせる（下の 6）。
+- コーディネーターが update-branch をしたあとで直しを頼まれたら、リモートの feature ブランチに `develop` を取り込んだマージのコミットが足されている。手元を `git pull --ff-only` で合わせてから直すか、`develop` に rebase して `--force-with-lease` で push する。
 
 ## 6. マージしない
 
 ワーカーは PR をマージしない。PR の URL と CI の結果を報告して終える。
 
 マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（取り込みのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。詳しくは AGENTS.md の「マージ」。
+
+コーディネーターは、PR の head を `develop` の先頭に追いつかせてから、自動マージを予約する。衝突があれば update-branch は失敗するので、ワーカーに rebase を頼む。
+
+```bash
+pr=<PR 番号>
+gh pr view "$pr" --json mergeStateStatus --jq .mergeStateStatus   # BEHIND なら develop に遅れている
+gh pr update-branch "$pr"             # BEHIND のときだけ打つ。衝突があれば失敗する
+gh pr merge "$pr" --squash --auto     # 取り込みのコミットを含む PR は --merge --auto
+gh pr checks "$pr" --watch            # update-branch のあとの CI
+gh pr view "$pr" --json state --jq .state   # MERGED になってから片付ける
+```
+
+- 自動マージは、`ci-required` が緑で、head が `develop` の先頭に追いついているときに GitHub が行う。待つあいだに `develop` が進むと、もう一度 update-branch が要る。
+- マージした head のブランチは GitHub が消す。コーディネーターはリモートのブランチを消さない。状態が `MERGED` になる前にブランチを消すと、PR が閉じてしまう。
 
 マージしたら、コーディネーターは PR の `closingIssuesReferences` の Issue が閉じたかを確かめ、閉じていなければコメントして閉じる。
 

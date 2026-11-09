@@ -48,6 +48,16 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 
 - GitHub の既定のブランチは `develop`。`gh pr create` で `--base` を省くと `develop` に向くが、手順では `--base develop` を明示する。PR の本文の `Closes #N` は、`develop` へのマージで Issue を閉じる。`release` → `main` の PR では効かないので書かない。
 - `main`・`release`・`develop` はずっと使い続け、履歴を書き換えない（force push しない）。どれにも直接コミットしない。
+- リポジトリは public で、3 本のブランチを GitHub の ruleset で守っている。ruleset は誰も迂回できない（迂回できる人を置いていない）。
+
+| ブランチ | ruleset |
+| --- | --- |
+| `develop` | 削除と force push を禁止。PR が必須で、マージの方法は squash とマージコミットだけ。`ci-required` が必須で、PR の head が `develop` の先頭に追いついていること（strict） |
+| `release` | 削除と force push を禁止。PR は要らず、早送りの直接の push は通る（`ebykn-release` の手順 6） |
+| `main` | 削除と force push を禁止。PR が必須で、マージの方法はマージコミットだけ。`ci-required` が必須（strict ではない。`release` は `main` のマージコミットを含まないので、追いつかせると `release` に余計なコミットが入る） |
+
+- リポジトリの設定：自動マージを許す。マージした PR の head のブランチを GitHub が自動で消す（`release` は ruleset が削除を禁じているので消えない）。update-branch を許す。rebase のマージは使えない。
+- `develop` を strict にしたのは、PR の CI がほかの PR のマージより前に走ると、その結果のままマージした `develop` が赤くなりうるため（PR #57 と #89 の README の件）。
 - 問題が見つかったら、直す変更を新しい PR として `develop` の先頭に積む。過去の履歴は直さない（「見つけた問題」）。
 - コーディネーターのワークスペースは、ユーザーの指示を受けるために待機させる。作業は orca のワークツリーで行う。
 - orca のワークツリーの元は `origin/develop`。ワークツリー名は `<種類>-<Issue 番号>-<短い名前>`（例：`harness-3-vibe-lang-structure`、`fix-12-linearity-loop`）。例外は 2 つ（「リリースと作者の確認」）。作者の確認用のワークスペース `release` は、元が `origin/release` で、ブランチは `release`。毎朝のリリースのオートメーションが走るたびに作るワークツリーは、名前とブランチを Orca が付ける（元は `origin/develop`）。
@@ -134,7 +144,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 2. PR 本文を日本語で書き、ファイルに保存する。変更点、確認したこと、決めた既定、関連 Issue（`Closes #N`）を書く。
 3. yomiyasu スキル（`yomiyasu:yomiyasu`）を呼び、PR 向けの設定（`--doc-type pr`）で推敲する。スキルの手順どおり lint → 書き直し → `run --final ... --doc-type pr` → `verify` まで通し、verify を通した最終稿を変えずに使う。推敲は必須。
 4. `gh pr create --base develop --head feature/<Issue 番号>-<短い名前> --title "<日本語の題>" --body-file <最終稿>`。
-5. `gh pr checks <番号> --watch` で CI を見届ける。落ちたら直して push し、`ci-required` が緑になるまで繰り返す。
+5. `gh pr checks <番号> --watch` で CI を見届ける。落ちたら直して push し、`ci-required` が緑になるまで繰り返す。`develop` に rebase して push し直したときも、CI を見届け直す（`develop` は strict なので、前の緑は新しい head に効かない）。
 6. ワーカーは PR をマージしない。マージは次の「マージ」に従ってコーディネーターが行う。
 
 ### マージ
@@ -148,13 +158,14 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 
 - squash でマージする。コミットの題は GitHub が付ける既定のまま変えない。題の末尾には `(#N)` が付く（題の本体は PR の題。PR のコミットが 1 つなら、そのコミットの題）。リリースのときに、この `(#N)` と GitHub の記録を突き合わせる。
 - 取り込みのコミットを含む PR は例外で、マージコミットでマージする（「外部から取り込むコード」）。題は既定の `Merge pull request #N from ...` のまま。
-- `develop` と衝突したら、ワーカーが feature ブランチを `develop` に rebase して push し直す。
+- `develop` は strict なので、PR の head が `develop` の先頭に追いついていなければ、緑でもマージできない。衝突がなければ、コーディネーターが `gh pr update-branch <番号>` で追いつかせ、`gh pr merge <番号> --squash --auto` で自動マージを予約する。update-branch のあとに CI がもう一度走り、`ci-required` が緑になると GitHub がマージする。
+- `develop` と衝突したら、ワーカーが feature ブランチを `develop` に rebase して push し直し、CI を見届け直す。
 - `needs review` の Issue の判断は、マージを止めない。既定で実装してマージし、作者の判断が既定と違えば、作り直しの PR を積む。
 - 開発ルールやゲートを変える PR も、同じ条件でマージする。3 文書をエージェントが変更しない規則はそのまま。
 
-`release` へは早送りだけで進め、`main` へは作者がマージコミットでマージする（次の「リリースと作者の確認」）。
+`release` へは早送りだけで進め、`main` へは作者がマージコミットでマージする（次の「リリースと作者の確認」）。`release` → `main` の PR では update-branch を使わない（`main` のマージコミットが `release` に入る）。
 
-マージ後、コーディネーターはワーカーを解放し（orca の release）、ワークツリーを削除し、リモートのブランチを消す。
+マージ後（自動マージを予約したなら、PR の状態が `MERGED` になったのを `gh pr view <番号> --json state` で確かめてから）、コーディネーターはワーカーを解放し（orca の release）、ワークツリーを削除する。リモートのブランチは GitHub が消す。マージが済む前にブランチを消すと、PR が閉じてしまう。
 
 マージ後、コーディネーターは PR の `closingIssuesReferences`（`gh pr view <番号> --json closingIssuesReferences`）の Issue が閉じたかを確かめ、閉じていなければ `PR #<番号> で develop に入った` とコメントして閉じる。コマンドは [.claude/skills/ebykn-pr/SKILL.md](.claude/skills/ebykn-pr/SKILL.md) の 6。
 
@@ -185,7 +196,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 ### 作者の確認
 
 - 作者は、都合のよいときにスライドを読み、`release` のワークスペースでエージェントを起動して質問し、ターミナルで動作を確かめる。そのエージェントは [.claude/skills/ebykn-release-workspace/SKILL.md](.claude/skills/ebykn-release-workspace/SKILL.md) に従う。質問に答え、作者が直したいことを Issue にしてコーディネーターに知らせる。`release` のワークスペースでは実装しない。
-- 問題がなければ、作者がリリースの PR を `main` にマージコミットでマージする。報告していない範囲を入れないよう、`gh pr merge <番号> --merge --match-head-commit <本文にあるコミット>` でマージする（GitHub の画面でマージするなら、PR の先頭がそのコミットであることを確かめる）。確認待ちのリリースが複数あれば、まとめて入る。squash や rebase をすると、次のリリースの PR で同じ変更が差分にもう一度出る。
+- 問題がなければ、作者がリリースの PR を `main` にマージコミットでマージする。報告していない範囲を入れないよう、`gh pr merge <番号> --merge --match-head-commit <本文にあるコミット>` でマージする（GitHub の画面でマージするなら、PR の先頭がそのコミットであることを確かめる）。確認待ちのリリースが複数あれば、まとめて入る。`main` の ruleset はマージコミットだけを許す（squash や rebase をすると、次のリリースの PR で同じ変更が差分にもう一度出るため）。`ci-required` が緑でなければ、ruleset がマージを止める。
 - 作者が問題を伝えたら、コーディネーターは「見つけた問題」のとおり Issue と直す PR を `develop` に積む。直したものは次の朝のリリースに入る。急ぐときは、コーディネーターが手でリリースを切る。スライドは前回のタグからの差分になる。
 
 ## コマンド
@@ -212,7 +223,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 - pre-commit フックは `git config core.hooksPath .githooks` で有効にする。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
 - toolchain は `rust-toolchain.toml`（1.96.0）。Verus は自分の toolchain（固定値の `toolchain`）で動き、`verus-*` のコマンドがそれを指定する。Verus のクレートはルートの Cargo ワークスペースから `exclude` してある。
 - Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes`・`formal-oracle` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` の「M0 の実測」と `docs/current-spec.md` を見直す。
-- CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と、`main`・`develop` への `push` だけにする。`develop` への `push` は、リリースを切る前に `develop` の先頭が緑であることを確かめるため（PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない）。
+- CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。CI の時間を短く保つため、ジョブはキャッシュを使い、トリガーは `pull_request` と、`main`・`develop` への `push` だけにする。`develop` への `push` は、リリースを切る前に `develop` の先頭が緑であることを確かめるため（`develop` の ruleset は strict なので、PR の CI は `develop` の先頭との組み合わせを試しているが、マージしたあとの先頭そのものも確かめる）。
 
 ## ゲートの規則
 
