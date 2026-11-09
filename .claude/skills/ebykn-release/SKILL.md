@@ -11,8 +11,8 @@ description: ebykn-lang-proto でリリースを切る手順。ワークツリ�
 - 取り消せない操作（タグの push、Release、`release` の早送り）は、確認と PDF が済んでから手順 4〜6 でまとめて行う。手順 1〜3 で止まっても、リモートには何も残らない。
 - `release` は早送りだけで進める。force push しない。直接コミットしない。`release` の先頭は、いつも Release のある報告済みのタグにする。
 - 押したタグと Release は消さない。手順 6 までのどこかで止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。手順 7 以降で止まったら、その手順からやり直す（`release` はもうタグまで進んでいるので、手順 1 は新しいリリースとみなす）。止まった点ごとの続け方は「止まった回を続ける」。
-- 取り消せない操作（タグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）が、権限の判定で拒否されたり確認を求められたりしたら、そこで止まる。別の方法で回り込まない。手順 9 の「止まったとき」の形で、止まった手順・`$dir`・PDF のパスを知らせる。残りの手順は、コーディネーターが「止まった回を続ける」の表に従って行う。コーディネーターは、同じマシンの `$dir` を読める。
-- 手順 0〜3 は、ローカルの操作と `gh` の読み取りだけなので、権限では止まらない想定。見つけた問題の `gh issue create` が拒否されたら、作る予定だった Issue の題と本文を `$dir/pending-issues/<番号>.md`（1 から数える）に残し、手順 9 の知らせに書く。リリースは止めない。
+- どの手順でも、コマンドが権限の判定で拒否されたり確認を求められたりしたら、そこで止まる。別の方法で回り込まない。取り消せない操作（タグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）だけでなく、手順 0〜3 で使うもの（スライドの道具のダウンロード、`git worktree add`、yomiyasu など）も同じ。手順 9 の「止まったとき」の形で、止まった手順・`$dir`・PDF のパス（まだなければ「なし」）を知らせる。残りの手順は、コーディネーターが「止まった回を続ける」の表に従って行う。コーディネーターは、同じマシンの `$dir` を読める。
+- 例外は、見つけた問題の `gh issue create` が拒否されたとき。作る予定だった Issue の題と本文を `$dir/pending-issues/<番号>.md`（1 から数える）に残し、手順 9 の知らせに書く。リリースは止めない。
 - コマンドのブロックは、どれも `bash -euo pipefail <<'EOF'` … `EOF` で包んで打つ。Bash ツールのシェルは zsh のことがあり、zsh では `"$sha:refs/..."` の `:r` が修飾子として展開されるため。ブロックの中でも、`:` の前の変数は `${sha}` のように括る。
 - シェルの変数はブロックをまたいで残らないので、手順 1 で作る `vars` を各ブロックの最初に読み込む。`<scratchpad>` と `<id>` は実際の値に置き換える。
 
@@ -74,6 +74,16 @@ last=$(gh pr list --base main --head release --state merged --limit 1 --json hea
 
 latest=$(git tag --list 'report/*' --sort=-v:refname | head -n1)
 
+# 手元にだけあるタグ（手順 4 の push の前か途中で止まった回のもの）は消す。リモートにないので、何も押していない
+while [ -n "$latest" ]; do
+  rc=0; git ls-remote --exit-code origin "refs/tags/${latest}" > /dev/null || rc=$?
+  [ "$rc" != 0 ] || break
+  [ "$rc" = 2 ] || { echo "止まる：git ls-remote が失敗した（終了コード $rc）"; exit 1; }
+  echo "手元にだけある ${latest} を消す"
+  git tag -d "$latest"
+  latest=$(git tag --list 'report/*' --sort=-v:refname | head -n1)
+done
+
 # 止まったリリースがあれば、同じ識別子で再開する
 mode=new
 if [ -n "$latest" ]; then
@@ -118,6 +128,7 @@ EOF
 - 「止まる」が出たら（`exit 1` で終わる）、そこで止まって報告する。`develop` が進んでいなければ、リリースは切らない。これは失敗ではなく、何もすることがなかったという結果として手順 9 で知らせる。
 - 既定のブランチが `develop` でなければ止まる。GitHub の `commits/<sha>/pulls` は、既定のブランチの上のコミットにしか、マージ済みの PR を返さない。既定のブランチが変わると、手順 2 で範囲のすべてのコミットが「PR のないコミット」に見える。
 - 前回のリリースの PR が `main` に squash か rebase で入っていたら止まる。次の PR の差分に同じ変更がもう一度出る。作者の操作が要るが、この時点ではリリースの PR がない（前回の PR は閉じ、今回の PR はまだ作っていない）ので、手順 9 の知らせにだけ書く。コーディネーターは、作者が次に話しかけたときに伝える（催促はしない）。
+- 手元にだけある `report/*` のタグ（`git ls-remote --exit-code` が 2 で終わる）は消す。手順 4 の push が失敗したか、権限で止まった回のタグで、リモートには何も残っていない。そのまま残すと、`git fetch --prune --tags` でも消えず、次の回の手順 1 が `resume-release` を選び、手順 5 の `--verify-tag` で毎回止まる。`ls-remote` がほかの理由で失敗したら（通信など）、消さずに止まる。
 - `gh release view` の失敗は、`release not found` のときだけ Release がないとみなす。通信の失敗などほかのエラーでは止まり、再開と取り違えない。
 - 新しく切るとき（`mode=new`）は、作業用のフォルダを消してから作る。前に手順 3 までで止まった回の出力を使わないため。
 - `mode` で、どこから進めるかが決まる。
@@ -211,9 +222,12 @@ bash -euo pipefail <<'EOF'
 . <scratchpad>/release-<id>/vars
 printf '報告 %s\n\n前回：%s（%s）\n今回：%s\n' "$id" "$prev" "$prev_sha" "$sha" \
   | git tag -a "report/${id}" -F - "$sha"
-git push origin "refs/tags/report/${id}"
+git push origin "refs/tags/report/${id}" \
+  || { git tag -d "report/${id}"; echo "止まる：タグを push できない"; exit 1; }
 EOF
 ```
+
+- push が失敗したら（認証や通信）、手元のタグを消して止まる。リモートには何も残らないので、手順 0〜3 で止まったときと同じに扱える。このブロックが権限の判定で拒否されたときは、タグも作られない。ほかの理由で手元にだけタグが残っても、次の手順 1 が消す。
 
 前回のタグは、手順 1 のとおり `git tag --list 'report/*' --sort=-v:refname` の先頭（`2026-11-09.10` は `2026-11-09.9` より後に並ぶ）。言語のリリースのタグ（`v0.1.0` など）は `report/` の外なので混ざらない。
 
@@ -613,7 +627,7 @@ EOF
 
 ## コーディネーターが知らせを受けたら
 
-- 終わったとき：`found.txt` の Issue と `pending-issues/` の Issue を、AGENTS.md の着手順で割り振る（`pending-issues/` のものは、先に `ebykn-issue` で作る）。作者には報告しない（催促しない）。
+- 終わったとき：`found.txt` の Issue と `pending-issues/` の Issue を、AGENTS.md の着手順で割り振る（`pending-issues/` のものは、先に `ebykn-issue` で作る）。作者には報告しない（催促しない）。ただし、そのうち `needs review` の Issue は、AGENTS.md の「人間の判断が要るもの」のとおり、作者が次にコーディネーターに話しかけたときに番号を伝える（催促はしない）。
 - 止まったとき：理由に応じて直し、次の「止まった回を続ける」の表に従って続ける。CI が赤ければ、直す PR を `develop` に積み、緑になったら手で切るか、次の朝に任せる。
 - 「作者に伝えること」は、作者が次に話しかけたときに伝える。催促しない。
 - どちらでも、続きが済んだら、知らせにあるワークツリーを片付ける。リリースのワークツリーはどこにも push しないブランチなので、ブランチごと消す。`$dir` はオートメーションのエージェントの scratchpad にあり、ワークツリーとは別なので残る。
@@ -631,8 +645,8 @@ EOF
 
 | 止まった点 | リモートの状態 | 続け方 |
 | --- | --- | --- |
-| 手順 0〜3 | 何も押していない | 次の朝に任せるか、`orca automations run <id>` で走らせる。手で切ってもよい（手順 1 から） |
-| 手順 4〜6 | タグか Release は押したが、`release` がタグまで進んでいない | 手で手順 1 を走らせると、`resume-release` か `resume-ff` で同じ識別子を再開する。そのとき、手順 1 のブロックの `dir=` を知らせの `$dir` にし、PDF と手順 2 の出力を使い回す。次の回に任せてもよい（次の回の手順 1 も同じように再開するが、`$dir` は新しくなるので、手順 2・3 を作り直す） |
+| 手順 0〜4 の push の前 | 何も押していない（手元にだけあるタグは、次の手順 1 が消す） | 次の朝に任せるか、`orca automations run <id>` で走らせる。手で切ってもよい（手順 1 から） |
+| 手順 4 の push のあと〜6 | タグか Release は押したが、`release` がタグまで進んでいない | 手で手順 1 を走らせると、`resume-release` か `resume-ff` で同じ識別子を再開する。そのとき、手順 1 のブロックの `dir=` を知らせの `$dir` にし、PDF と手順 2 の出力を使い回す。次の回に任せてもよい（次の回の手順 1 も同じように再開するが、`$dir` は新しくなるので、手順 2・3 を作り直す） |
 | 手順 7〜8 | `release` はタグまで進んだ | 手順 1 は新しいリリースとみなすので、走らせない。知らせの `$dir/vars` を読む。読めなければ、知らせの「識別子と範囲」から `vars` を作り直す（下のブロック）。手順 2 の出力が `$dir` になければ手順 2 のブロックを走らせ、止まった手順（7 か 8）から 9 の前まで行う |
 | 手順 9（知らせが届かない） | すべて済んだ | 「見回り」で見つける。結果は Release と PR のコメントにある |
 
@@ -658,7 +672,7 @@ EOF
 
 知らせが届かない回は、ワークツリーが残り、止まった点も分からない。知らせが届かないのは、手順 0 で Run を確かめられなかった、権限の確認で止まった、Orca が終了した、マシンがスリープした、エージェントの文脈が尽きた、などのとき。Orca は new-per-run のワークツリーを消さない。
 
-コーディネーターは、毎朝の知らせが届かなかった日と、手でリリースを切る前に見回る。
+コーディネーターは、毎朝の知らせが届かなかった日、手でリリースを切る前、作者が次にコーディネーターに話しかけたときに見回る。待っているコーディネーターは、届かなかった知らせには気づけないため。
 
 ```bash
 bash -euo pipefail <<'EOF'
@@ -667,11 +681,14 @@ orca=${ORCA_CLI_COMMAND:-orca}
 "$orca" automations runs --id <オートメーションの id> --limit 20 --json
 repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 "$orca" worktree list --repo "path:$repo" --limit 10000 --json \
-  | jq -r '.result.worktrees[] | "\(.path)\t\(.branch // "")\t\(.displayName // "")"'
+  | jq -r '.result.worktrees[] | "\(.id)\t\(.path)\t\(.branch // "")\t\(.displayName // "")"'
 EOF
 ```
 
-- `runs` の各回について、状態と、その回のワークスペースを読む。終わっていない回（実行中か待ち）には触らない。
+- `runs` の各回について、状態と、その回のワークスペース（`workspaceId`）を読む。`worktree list` の 1 列目の `id` と突き合わせる。
+  - 終わっていない状態：`pending`、`dispatching`、`dispatched`。この回には触らない。
+  - 終わった状態：`completed`、`dispatch_failed`、`skipped_*`（`skipped_precheck` など）。
+  - `dispatch_failed` の回でも、エージェントがまだ生きていることがある。手で続ける前に、そのエージェントを止めるか、ワークツリーを消してから続ける。
 - 終わった回のワークスペースが `worktree list` に残っていて、その回の知らせを受け取っていなければ、「知らせのなかった回」とする。
   - リモートの状態（`report/*` のタグ、Release、`release` の位置、リリースの PR のコメント）で止まった点を決め、「止まった回を続ける」の表に従って続ける。
   - リリースの PR まで進んだ回なら、PR に「毎朝の回 <日時> は知らせを送らずに終わった（<分かった理由>）」とコメントして目印にする。PR まで進んでいなければ、作者が次に話しかけたときに伝える。催促はしない。
@@ -733,7 +750,10 @@ EOF
 ```bash
 bash -euo pipefail <<'EOF'
 orca=${ORCA_CLI_COMMAND:-orca}
-run=$("$orca" orchestration run-current --json | jq -r '.result.runId // empty')
+if ! cur=$("$orca" orchestration run-current --json); then
+  echo "止まる：orca orchestration run-current が失敗した"; echo "$cur"; exit 1
+fi
+run=$(printf '%s\n' "$cur" | jq -r '.result.runId // empty')
 [ -n "$run" ] || { echo "止まる：このワークスペースに Run が結び付いていない"; exit 1; }
 "$orca" orchestration run-show --id "$run" --json --full | jq -e '.result.run.legacy == 0' > /dev/null \
   || { echo "止まる：$run を確かめられない（legacy か、見つからない）"; exit 1; }
@@ -744,7 +764,7 @@ ebykn-lang-proto の毎朝のリリースです。このワークツリーは or
 1. AGENTS.md を読み、ebykn-release スキルを手順 0 から最後まで実行してください。手順 0 の Run の id には、上の id を使ってください。
 2. develop が前回のリリースから進んでいなければ、手順 1 で止まります。それも結果として手順 9 で知らせてください。
 3. 終わったら、途中で止まったときも、スキルの手順 9 のとおり、コーディネーターの Run に結果を送ってください。手順 0 で Run を確かめられなくても、リリースは止めずに進め、スキルのとおり PR のコメントに書いてください。
-4. タグや release の push、gh release create、gh pr create・edit・comment が、権限の判定で拒否されたり確認を求められたりしたら、回り込まずにそこで止まり、手順 9 で、止まった手順・$dir・PDF のパスを知らせてください。
+4. どの手順でも、コマンドが権限の判定で拒否されたり確認を求められたりしたら、回り込まずにそこで止まり、手順 9 で、止まった手順・$dir・PDF のパスを知らせてください。タグや release の push、gh release create、gh pr create・edit・comment だけでなく、手順 0〜3 のコマンドも同じです。例外は gh issue create で、拒否されたらスキルのとおり本文を $dir/pending-issues/ に残して進めてください。
 5. 作者（ユーザー）に、レビューや確認を催促しないでください。結果は Release、リリースの PR の本文とコメント、コーディネーターへの知らせにだけ残します。
 6. develop・release・main に直接コミットしないでください。このワークツリーと $dir は消さずに残してください。コーディネーターが続きに使い、片付けます。
 PROMPT
@@ -771,7 +791,7 @@ EOF
 
 ### 作ったあとに確かめる
 
-出力の id で設定を確かめ、一度走らせる。
+作成の出力の `.result.automation.id`（最上位の `.id` は要求の id で、オートメーションの id ではない）で設定を確かめ、一度走らせる。
 
 ```bash
 bash -euo pipefail <<'EOF'

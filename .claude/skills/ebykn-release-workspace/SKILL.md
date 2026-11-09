@@ -76,11 +76,16 @@ EOF
 bash -euo pipefail <<'EOF'
 orca=${ORCA_CLI_COMMAND:-orca}
 : > <scratchpad>/coordinator-run
-aid=$("$orca" automations list --json \
-  | jq -r '[.. | objects | select(.name? == "ebykn-daily-release") | .id] | unique | .[]')
+if ! list=$("$orca" automations list --json); then
+  echo "Run を確かめられない：orca automations list が失敗した"; echo "$list"; exit 1
+fi
+aid=$(printf '%s\n' "$list" | jq -r '[.. | objects | select(.name? == "ebykn-daily-release") | .id] | unique | .[]')
 [ "$(printf '%s\n' "$aid" | grep -c .)" = 1 ] \
   || { echo "Run を確かめられない：オートメーション ebykn-daily-release が 1 つに決まらない"; exit 1; }
-run=$("$orca" automations show "$aid" --json | jq -r '.. | strings' \
+if ! shown=$("$orca" automations show "$aid" --json); then
+  echo "Run を確かめられない：orca automations show が失敗した"; echo "$shown"; exit 1
+fi
+run=$(printf '%s\n' "$shown" | jq -r '.. | strings' \
   | sed -n 's/^コーディネーターの Run の id：\(run_[0-9A-Za-z_]*\)$/\1/p' | head -n1)
 [ -n "$run" ] || { echo "Run を確かめられない：プロンプトに Run の id がない"; exit 1; }
 "$orca" orchestration run-show --id "$run" --json --full | jq -e '.result.run.legacy == 0' > /dev/null \
