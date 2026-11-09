@@ -554,6 +554,11 @@ mod verbatim;
 mod whitespace;
 
 mod verus;
+// EBYKN: Ebykn の差し込み口（ebykn_hook.rs）。
+#[cfg(all(feature = "parsing", feature = "full"))]
+mod ebykn_hook;
+#[cfg(all(feature = "parsing", feature = "full"))]
+pub use crate::ebykn_hook::{set_ebykn_hook, EbyknHook, EbyknSite};
 pub use crate::verus::rejoin_tokens;
 pub use crate::verus::{
     Assert, AssertForall, Assume, AssumeSpecification, AtomicSpec, AtomicallyBlock, BigAnd,

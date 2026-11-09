@@ -421,8 +421,18 @@ pub(crate) mod parsing {
     }
 
     fn pat_path_or_macro_or_struct_or_range(input: ParseStream) -> Result<Pat> {
+        // EBYKN: Ebykn の構造体パターン（`@name`、`@..` を含むもの）。
+        #[cfg(feature = "full")]
+        let begin = input.fork();
         let expr_style = true;
         let (qself, path) = path::parsing::qpath(input, expr_style)?;
+        #[cfg(feature = "full")]
+        if qself.is_none()
+            && input.peek(token::Brace)
+            && crate::ebykn_hook::call(crate::ebykn_hook::EbyknSite::PatStructBody, input)?
+        {
+            return Ok(Pat::Verbatim(verbatim::between(&begin, input)));
+        }
 
         if qself.is_none()
             && input.peek(Token![!])

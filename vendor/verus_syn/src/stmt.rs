@@ -205,6 +205,13 @@ pub(crate) mod parsing {
         let begin = input.fork();
         let attrs = input.call(Attribute::parse_outer)?;
 
+        // EBYKN: Ebykn の文（take / put / leak / borrow / ループ / 項目）。
+        if crate::ebykn_hook::call(crate::ebykn_hook::EbyknSite::Stmt, input)? {
+            return Ok(Stmt::Item(crate::item::Item::Verbatim(
+                crate::verbatim::between(&begin, input),
+            )));
+        }
+
         // brace-style macros; paren and bracket macros get parsed as
         // expression statements.
         let ahead = input.fork();

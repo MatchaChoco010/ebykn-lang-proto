@@ -1892,6 +1892,17 @@ pub(crate) mod parsing {
                     question_token: input.parse()?,
                 });
             } else if input.peek(Token![@]) {
+                // EBYKN: Ebykn の消去フィールド `e@name`。
+                #[cfg(feature = "printing")]
+                {
+                    let before = input.fork();
+                    if crate::ebykn_hook::call(crate::ebykn_hook::EbyknSite::Trailer, input)? {
+                        let mut tokens = quote::ToTokens::into_token_stream(e);
+                        tokens.extend(verbatim::between(&before, input));
+                        e = Expr::Verbatim(tokens);
+                        continue;
+                    }
+                }
                 e = Expr::View(View {
                     attrs: Vec::new(),
                     expr: Box::new(e),
@@ -1984,6 +1995,16 @@ pub(crate) mod parsing {
     // interactions, as they are fully contained.
     #[cfg(feature = "full")]
     fn atom_expr(input: ParseStream, allow_struct: AllowStruct) -> Result<Expr> {
+        // EBYKN: Ebykn の式（forall / exists / and / or / borrow / ループ）。
+        let begin = input.fork();
+        if crate::ebykn_hook::call(
+            crate::ebykn_hook::EbyknSite::Atom {
+                allow_struct: allow_struct.0,
+            },
+            input,
+        )? {
+            return Ok(Expr::Verbatim(verbatim::between(&begin, input)));
+        }
         if input.peek(token::Group) {
             expr_group(input, allow_struct)
         } else if input.peek(Lit) {
@@ -2150,8 +2171,19 @@ pub(crate) mod parsing {
         input: ParseStream,
         #[cfg(feature = "full")] allow_struct: AllowStruct,
     ) -> Result<Expr> {
+        // EBYKN: Ebykn の構造体リテラル（`@name: e` を含むもの）。
+        #[cfg(feature = "full")]
+        let begin = input.fork();
         let expr_style = true;
         let (qself, path) = path::parsing::qpath(input, expr_style)?;
+        #[cfg(feature = "full")]
+        if qself.is_none()
+            && allow_struct.0
+            && input.peek(token::Brace)
+            && crate::ebykn_hook::call(crate::ebykn_hook::EbyknSite::StructBody, input)?
+        {
+            return Ok(Expr::Verbatim(verbatim::between(&begin, input)));
+        }
         rest_of_path_or_macro_or_struct(
             qself,
             path,
