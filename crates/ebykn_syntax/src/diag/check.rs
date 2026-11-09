@@ -331,6 +331,23 @@ pub enum CheckMsg {
     // E0003
     Unimplemented(Unimpl),
 
+    // E0004
+    /// `ensures` の中の、`old(..)` / `final(..)` の下にない `&mut` 引数（#10）。`written` は書いた形
+    /// （`self`、`x`、`p@`、`*p`）。`perm` は `uses &mut p@` の権限なら `Some(p)`。
+    BareMutInEnsures {
+        written: String,
+        perm: Option<String>,
+    },
+    /// 事後条件の、中を読まないマクロの引数の中の裸の `&mut` 引数。
+    BareMutInMacro {
+        written: String,
+    },
+    /// 契約の、中を読まないマクロの引数の中の `final(..)`（Verus が受け付けない）。
+    FinalInMacro,
+    /// `old(e)` / `final(e)` の `e` が、`&mut` の引数、`uses &mut p@` の `p@` / `*p`、それらの
+    /// 消去フィールドのどれでもない。
+    OldFinalArg,
+
     // E0001
     /// `take` / `put` / `borrow` の後の `x[..]` の `x` が領域でない。
     NotARegion {
@@ -411,6 +428,12 @@ pub enum CheckMsg {
     ShadowHeld {
         name: String,
     },
+    /// 契約の式で、権限を持つ名前 `name` を量化子・クロージャ・パターンで束縛し直した中の
+    /// `p@` / `*p`（`written`）。書き下しは外側の引数の権限を指す（#10 のレビュー）。
+    PermOfRebound {
+        written: String,
+        name: String,
+    },
 
     // E0508
     WriteShared {
@@ -486,6 +509,9 @@ impl CheckMsg {
             | VerusPinMismatch { .. }
             | ReadFailed { .. } => Code::E0002,
             Unimplemented(_) => Code::E0003,
+            BareMutInEnsures { .. } | BareMutInMacro { .. } | FinalInMacro | OldFinalArg => {
+                Code::E0004
+            }
             NotARegion { .. } | InvariantImplShape | ViewImplShape | EbyknTraitSpelling { .. } => {
                 Code::E0001
             }
@@ -500,7 +526,7 @@ impl CheckMsg {
             PermNotOwned { .. } | UsesArgNotVar { .. } => Code::E0504,
             PermLeft { .. } | PermDiscarded => Code::E0505,
             AssignHeld { .. } => Code::E0506,
-            ShadowHeld { .. } => Code::E0507,
+            ShadowHeld { .. } | PermOfRebound { .. } => Code::E0507,
             WriteShared { .. } => Code::E0508,
             ConsumeBorrowed { .. } => Code::E0509,
             BranchMismatch { .. } => Code::E0510,
@@ -742,6 +768,12 @@ impl CheckMsg {
             (ShadowHeld { name }, Ja) => format!(
                 "権限 `{name}@` を持っている間は、`{name}` を束縛し直せません"
             ),
+            (PermOfRebound { written, name }, En) => format!(
+                "`{written}` refers to the permission of the parameter `{name}`, but `{name}` is bound again around it (by a quantifier, closure, pattern or `let`); give the bound variable another name"
+            ),
+            (PermOfRebound { written, name }, Ja) => format!(
+                "`{written}` は引数 `{name}` の権限を指しますが、その外側で `{name}` を束縛し直しています（量化子、クロージャ、パターン、`let`）。束縛する変数の名前を変えます"
+            ),
 
             (WriteShared { name }, En) => format!(
                 "cannot write through `{name}` because the permission `{name}@` is only borrowed (shared)"
@@ -847,6 +879,46 @@ impl CheckMsg {
             (AssignOwnsField { field }, Ja) => format!(
                 "`owns` フィールド `{field}` には代入できません。領域は `take`・`put`・`borrow` で変えます"
             ),
+
+            (BareMutInEnsures { written, perm }, En) => {
+                let what = match perm {
+                    Some(p) => format!(
+                        "`{written}` refers to the permission borrowed with `uses &mut {p}@`"
+                    ),
+                    None => format!("`{written}` is a `&mut` argument"),
+                };
+                format!(
+                    "{what}, so a postcondition (`ensures` / `returns`) must say which value it means: write `final({written})` for the value after the call or `old({written})` for the value at entry"
+                )
+            }
+            (BareMutInEnsures { written, perm }, Ja) => {
+                let what = match perm {
+                    Some(p) => format!("`{written}` は `uses &mut {p}@` で借りた権限を指すので"),
+                    None => format!("`{written}` は `&mut` の引数なので"),
+                };
+                format!(
+                    "{what}、事後条件（`ensures` / `returns`）ではどちらの値かを書きます。呼び出しの後の値なら `final({written})`、入口の値なら `old({written})` と書きます"
+                )
+            }
+
+            (BareMutInMacro { written }, En) => format!(
+                "`{written}` is a `&mut` argument, so a postcondition (`ensures` / `returns`) must say which value it means; inside the arguments of this macro write `old({written})` for the value at entry, but `final(..)` cannot be written there, so for the value after the call write the condition outside the macro with `final({written})` (for example `*final({written}) == 3` instead of `matches!(*{written}, 3)`)"
+            ),
+            (BareMutInMacro { written }, Ja) => format!(
+                "`{written}` は `&mut` の引数なので、事後条件（`ensures` / `returns`）ではどちらの値かを書きます。このマクロの引数の中では、入口の値なら `old({written})` と書けますが、`final(..)` は書けません。呼び出しの後の値なら、条件をマクロの外で `final({written})` を使って書きます（例：`matches!(*{written}, 3)` ではなく `*final({written}) == 3`）"
+            ),
+            (FinalInMacro, En) => {
+                "`final(..)` cannot be written inside the arguments of this macro (Verus does not accept it there); write the condition outside the macro (for example `*final(x) == 3` instead of `matches!(*final(x), 3)`)".into()
+            }
+            (FinalInMacro, Ja) => {
+                "このマクロの引数の中には `final(..)` を書けません（Verus が受け付けません）。条件はマクロの外で書きます（例：`matches!(*final(x), 3)` ではなく `*final(x) == 3`）".into()
+            }
+            (OldFinalArg, En) => {
+                "`old(..)` / `final(..)` can only be applied to a `&mut` argument (`self`, `x`), the permission of `uses &mut p@` (`p@`, `*p`), or an erased field of these (`self@f`); apply it to the argument and access the field outside (for example `old(self).len` instead of `old(self.len)`)".into()
+            }
+            (OldFinalArg, Ja) => {
+                "`old(..)` / `final(..)` を付けられるのは、`&mut` の引数（`self`、`x`）、`uses &mut p@` の権限（`p@`、`*p`）、それらの消去フィールド（`self@f`）だけです。引数に付けて、フィールドは外で読みます（例：`old(self.len)` ではなく `old(self).len`）".into()
+            }
 
             (RefinementNested { ty }, En) => format!(
                 "the invariant of `{ty}` is not added to contracts at this position; only `T`, `&T`, `&mut T`, `Option<T>` and `Result<T, E>` are expanded"

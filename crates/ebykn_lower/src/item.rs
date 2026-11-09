@@ -1,6 +1,6 @@
 //! 項目の書き下し（仕様 §7.2、§7.3 の構造体と署名、§6.4 の展開）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use ebykn_check::facts::SpanKey;
 use ebykn_check::index::{ImplTrait, ptr_or_cell};
@@ -346,39 +346,14 @@ fn struct_text(cx: &Cx, a: &str, v: &str, s: &ast::Struct) -> String {
 
 // ---- 関数 ----
 
-/// 関数の文脈を作る：引数の権限、`ensures` で `final` で包む名前、`gives`。
+/// 関数の文脈を作る：引数の権限と `gives`。`ensures` の `&mut` 引数は、利用者が `old` / `final` を
+/// 書く（#10 の決定。裸のものは検査が E0004 にする）。
 fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<'a> {
     let mut c = cx.clone();
     c.perms = BTreeMap::new();
-    c.mut_params = BTreeSet::new();
     c.rename = BTreeMap::new();
     c.gives = None;
-    for p in &sig.params {
-        match p {
-            Param::Receiver {
-                reference: Some(_),
-                mutable: true,
-                ..
-            } => {
-                c.mut_params.insert("self".into());
-            }
-            Param::Typed { pat, ty, .. } => {
-                if let (Some(i), TypeKind::Ref { mutable: true, .. }) =
-                    (ebykn_check::index::pat_ident(pat), &ty.kind)
-                {
-                    c.mut_params.insert(i.name.clone());
-                }
-            }
-            _ => {}
-        }
-    }
     for u in contract.uses() {
-        // `uses r: &mut Region<..>` の `r` も `ensures` で `final(r)` にする（#10 の既定）。
-        if let UsesItem::Named { ident: i, ty, .. } = u
-            && matches!(ty.kind, TypeKind::Ref { mutable: true, .. })
-        {
-            c.mut_params.insert(i.name.clone());
-        }
         if let UsesItem::Perm { mode, ident: i, .. } = u {
             let k = match mode {
                 PermMode::Move => PermKind::Owned,
@@ -386,9 +361,6 @@ fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<
                 PermMode::Mut => PermKind::MutRef,
             };
             c.perms.insert(i.name.clone(), k);
-            if *mode == PermMode::Mut {
-                c.mut_params.insert(perm_var(&i.name));
-            }
         }
     }
     if let Some(g) = contract.gives().next()

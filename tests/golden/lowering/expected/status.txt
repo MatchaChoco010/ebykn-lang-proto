@@ -11,8 +11,11 @@ verified lowering::Pool::add
 verified lowering::Pool::bump
 verified lowering::Pool::peek
 verified lowering::with_region
+verified lowering::bump
+verified lowering::same
+verified lowering::set3
 verified lowering::total
 verified lowering::quant
 verified lowering::all_pos
 verified lowering::some_pos
-results 14 verified, 0 errors
+results 16 verified, 0 errors

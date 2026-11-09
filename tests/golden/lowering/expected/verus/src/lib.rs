@@ -11,7 +11,7 @@ pub struct Node { pub val: u64, pub next: Option < Ptr < Node >>, }
 
 pub fn set_val(p: Ptr < Node >, v: u64, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Node >>)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
-ensures (final(__eyk_perm_p).value()).val == v, final(__eyk_perm_p).is_init(), final(__eyk_perm_p).pptr() == p, {
+ensures final(__eyk_perm_p).value().val == v, final(__eyk_perm_p).is_init(), final(__eyk_perm_p).pptr() == p, {
     p.borrow_mut(Tracked(&mut *__eyk_perm_p)).val = v;
 }
 
@@ -60,7 +60,7 @@ impl Pool {
     }
 
     fn add(&mut self, v: u64) -> (p: Ptr < Node >)
-    ensures final(self).nodes@.contains(p), {
+    ensures final(self).nodes@.contains(p), final(self).nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), final(self).order@.len() == old(self).order@.len() + 1, {
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
             self.nodes.borrow_mut().insert(__eyk_perm_p);
@@ -96,11 +96,28 @@ impl Pool {
 }
 
 pub fn with_region(p: Ptr < Node >, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
-requires old(r).contains(p), {
+requires old(r).contains(p),
+ensures final(r).contains(p), final(r).index(p) == old(r).index(p), {
     let tracked __eyk_perm_p = r.remove(p);
     proof {
         r.insert(__eyk_perm_p);
     }
+}
+
+pub fn bump(x: &mut u64) -> u64
+requires *old(x) < 100,
+returns *old(x), {
+    let y = *x;
+    *x = y + 1;
+    y
+}
+
+pub open spec fn same(y: u64) -> u64 { y }
+
+pub fn set3(x: &mut u64)
+requires *x <= 9,
+ensures *final(x) == 3, same(*final(x)) == 3, matches!(*old(x), 0..= 9), {
+    *x = 3;
 }
 
 pub fn total(v: Vec < u64 >) -> u64 {
