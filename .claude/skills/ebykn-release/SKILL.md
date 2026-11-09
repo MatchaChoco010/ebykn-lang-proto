@@ -1,6 +1,6 @@
 ---
 name: ebykn-release
-description: ebykn-lang-proto でリリースを切る手順。develop の先頭が緑か確かめ、範囲の PR と Issue を集めて報告スライドの PDF を作り、タグ report/YYYY-MM-DD.N と Release を出してから release を早送りし、release → main の PR を更新して作者に報告する。リリースを切るとき（基本 1 日 1 回、作者が見つけた問題を直したあと）、途中で止まったリリースを再開するとき、作者が main にマージしたあとに使う。
+description: ebykn-lang-proto でリリースを切る手順。develop の先頭が緑か確かめ、範囲の PR と Issue を集めて報告スライドの PDF を作り、タグ report/YYYY-MM-DD.N と Release を出してから release を早送りし、作者の確認用の release のワークスペースを進め、release → main の PR を更新して作者に報告する。リリースを切るとき（基本 1 日 1 回、作者が見つけた問題を直したあと）、途中で止まったリリースを再開するとき、作者が main にマージしたあとに使う。
 ---
 
 # リリースを切る
@@ -9,7 +9,7 @@ description: ebykn-lang-proto でリリースを切る手順。develop の先頭
 
 - 取り消せない操作（タグの push、Release、`release` の早送り）は、確認と PDF が済んでから手順 4〜6 でまとめて行う。手順 1〜3 で止まっても、リモートには何も残らない。
 - `release` は早送りだけで進める。force push しない。直接コミットしない。`release` の先頭は、いつも Release のある報告済みのタグにする。
-- 押したタグと Release は消さない。途中で止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。
+- 押したタグと Release は消さない。手順 6 までのどこかで止まったら、手順 1 からやり直す。手順 1 が、止まったリリースを見つけて同じ識別子で再開する。手順 7 以降で止まったら、その手順からやり直す（`release` はもうタグまで進んでいるので、手順 1 は新しいリリースとみなす）。
 - コマンドのブロックは、どれも `bash -euo pipefail <<'EOF'` … `EOF` で包んで打つ。Bash ツールのシェルは zsh のことがあり、zsh では `"$sha:refs/..."` の `:r` が修飾子として展開されるため。ブロックの中でも、`:` の前の変数は `${sha}` のように括る。
 - シェルの変数はブロックをまたいで残らないので、手順 1 で作る `vars` を各ブロックの最初に読み込む。`<scratchpad>` と `<id>` は実際の値に置き換える。
 
@@ -152,6 +152,12 @@ EOF
 
 PDF の作り方はそのスキルが受け持つ。スライドはリリースごとに 1 つ作り、前のものを上書きしない。PDF ができなければ、ここで止まって報告する（まだ何も押していない）。
 
+範囲の PR を動かして実例を作る途中で問題が見つかったら、AGENTS.md の「見つけた問題」のとおり扱う。
+
+- `ebykn-issue` スキルで Issue にし、本文に `report/$id` のスライドを作る途中で見つかったと書く。番号を `$dir/found.txt` に 1 行に 1 つ書く。手順 9 の報告に含める。
+- リリースは止めない。範囲は手順 1 で決めた `$sha` のまま進める。直す PR は `develop` に積み、次のリリースに入る。
+- 見つかった問題のせいで PDF が作れないときだけ、ここで止まって報告する。
+
 ## 4. タグを付ける
 
 `mode=resume-release` なら飛ばす。注釈付きのタグにし、メッセージに前回のコミットを 40 桁で残す（手順 1 の再開が読む）。
@@ -229,7 +235,129 @@ EOF
 - `release` が今回のコミットの祖先でなければ、誰かが `release` に直接書いた。push せず止まって報告する。
 - `--force` は付けない。早送りでない push はサーバーが拒否する。
 
-## 7. release → main の PR
+## 7. release のワークスペースを進める
+
+作者が `release` ブランチで動作を確かめるための orca のワークスペースを、今回のコミットまで進める。初めてリリースを切るときに作り、2 回目からは早送りする。ワークスペースの名前は `release`、表示名は `release（作者の確認用）` にする。
+
+この手順のコマンドは、まだ実際には動かしていない。`release` ブランチがまだないため。初回のリリースで動かしたら、下の「確かめていないこと」を確かめ、違っていたらこの手順を直す PR を出す。
+
+まず、ワークスペースがあるかを調べる。
+
+```bash
+bash -euo pipefail <<'EOF'
+. <scratchpad>/release-<id>/vars
+orca=${ORCA_CLI_COMMAND:-orca}
+display='release（作者の確認用）'
+git fetch origin release
+[ "$(git rev-parse origin/release)" = "$sha" ] || { echo "止まる：origin/release が ${sha} ではない"; exit 1; }
+repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")   # 元のリポジトリ
+
+# orca のワークスペースのうち、release を取り出しているもの・表示名が同じもの・名前が release のもの
+"$orca" worktree list --repo "path:$repo" --limit 10000 --json > "$dir/worktrees.json"
+[ "$(jq -r '.ok' "$dir/worktrees.json")" = true ] || { echo "止まる：orca worktree list が失敗した"; cat "$dir/worktrees.json"; exit 1; }
+[ "$(jq -r '.result.truncated' "$dir/worktrees.json")" = false ] || { echo "止まる：orca worktree list の一覧が切れている"; exit 1; }
+jq -c --arg d "$display" '[.result.worktrees[]
+  | select(.branch == "refs/heads/release" or .displayName == $d or (.path | endswith("/release")))
+  | {path, branch, displayName}]' "$dir/worktrees.json" > "$dir/release-ws.json"
+cat "$dir/release-ws.json"
+
+# git の側で release を取り出しているワークツリー（orca の外のものも含む）
+git worktree list --porcelain \
+  | awk '/^worktree /{p=substr($0,10)} $0=="branch refs/heads/release"{print p}' > "$dir/release-git.txt"
+cat "$dir/release-git.txt"
+EOF
+```
+
+| `release-ws.json` | `release-git.txt` | すること |
+| --- | --- | --- |
+| 空（`[]`） | 空 | 初回。下の「作る」へ |
+| 1 件で、`branch` が `refs/heads/release` | その 1 件のパスだけ | 2 回目以降。下の「早送りする」へ |
+| 1 件で、`branch` が `refs/heads/release` でない | — | 止まる。作者がワークスペースで別のブランチに切り替えたのかもしれない。触らずに報告する |
+| 2 件以上 | — | 止まる。どれを使うかを決めずに報告する |
+| 空 | 空でない | 止まる。orca の外で `release` を取り出しているワークツリーがある。触らずに報告する |
+
+### 作る（初回）
+
+```bash
+bash -euo pipefail <<'EOF'
+. <scratchpad>/release-<id>/vars
+orca=${ORCA_CLI_COMMAND:-orca}
+display='release（作者の確認用）'
+repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+# ローカルの release がないこと（あると orca は名前に番号を付ける）
+! git show-ref --verify --quiet refs/heads/release || { echo "止まる：ローカルに release ブランチがすでにある"; exit 1; }
+
+"$orca" worktree create --repo "path:$repo" --name release \
+  --base-branch origin/release --branch release \
+  --no-parent --setup skip \
+  --comment "作者の確認用。リリースのたびに origin/release まで早送りする" \
+  --json > "$dir/release-create.json"
+[ "$(jq -r '.ok' "$dir/release-create.json")" = true ] || { echo "止まる：orca worktree create が失敗した"; cat "$dir/release-create.json"; exit 1; }
+ws=$(jq -r '.result.worktree.path' "$dir/release-create.json")
+[ -d "$ws" ] || { echo "止まる：作ったワークスペースのパスが読めない：$ws"; exit 1; }
+
+# 取り出したブランチが release でなければ（orca が番号を付けた）、release を取り出し直す
+b=$(git -C "$ws" symbolic-ref --short HEAD)
+if [ "$b" != release ]; then
+  git -C "$ws" switch -c release --track origin/release
+  git -C "$ws" branch -d "$b"
+fi
+git -C "$ws" branch --set-upstream-to=origin/release release
+[ "$(git -C "$ws" rev-parse HEAD)" = "$sha" ] || { echo "止まる：$ws の HEAD が ${sha} ではない"; exit 1; }
+
+"$orca" worktree set --worktree "path:$ws" --display-name "$display" --json > /dev/null
+printf 'ws=%s\nws_display=%s\nws_state=作った\n' "$ws" "$display" > "$dir/release-ws.txt"
+cat "$dir/release-ws.txt"
+EOF
+```
+
+- `--branch release` で、orca の付ける接頭辞（`MatchaChoco010/`）なしの `release` というブランチにする。`--base-branch origin/release` で、その出発点を `origin/release` にする。orca の `--branch` は既存のブランチを取り出すのではなく、新しいブランチを作る。名前が使われていれば番号を付ける。そのため、ローカルの `release` がないことを先に確かめ、番号が付いたら取り出し直す。
+- `--no-parent`：コーディネーターのワークスペースの子にしない。作者が使う、独立したワークスペースにする。
+- `--setup skip`：リポジトリの setup のフックを走らせない。
+- `--agent` を付けない。orca は最初のターミナル（シェル）だけを開く。作者はそこで試す。
+- 表示名は `worktree create` では付けられないので、`worktree set --display-name` で付ける。
+
+### 早送りする（2 回目以降）
+
+`ws` には、`release-ws.json` の 1 件の `path` を入れる。
+
+```bash
+bash -euo pipefail <<'EOF'
+. <scratchpad>/release-<id>/vars
+display='release（作者の確認用）'
+ws=<release-ws.json の path>
+printf 'ws=%s\nws_display=%s\n' "$ws" "$display" > "$dir/release-ws.txt"
+
+[ "$(git -C "$ws" symbolic-ref --short HEAD)" = release ] || { echo "止まる：$ws が release を取り出していない"; exit 1; }
+if [ -n "$(git -C "$ws" status --porcelain --untracked-files=all)" ]; then
+  echo "止まる：$ws の作業ツリーに変更がある"
+  git -C "$ws" status --short --untracked-files=all
+  exit 1
+fi
+git -C "$ws" merge-base --is-ancestor HEAD origin/release \
+  || { echo "止まる：$ws の release に origin/release にないコミットがある"; git -C "$ws" log --oneline origin/release..HEAD; exit 1; }
+
+git -C "$ws" merge --ff-only origin/release
+[ "$(git -C "$ws" rev-parse HEAD)" = "$sha" ] || { echo "止まる：$ws の HEAD が ${sha} ではない"; exit 1; }
+echo 'ws_state=早送りした' >> "$dir/release-ws.txt"
+cat "$dir/release-ws.txt"
+EOF
+```
+
+- 作業ツリーに変更（追跡していないファイルを含む）があれば、捨てずに止まる。作者が試しに書いたものかもしれないため。`git stash`・`git checkout -- .`・`git clean` はしない。
+- 作者がワークスペースでコミットしていたら（`release` に `origin/release` にないコミットがある）、同じく止まる。
+- ここで止まっても、タグ・Release・`release` の早送りは済んでいる。ワークスペースは進めずに手順 8 に進み、手順 9 の報告に、止まった理由と `status` か `log` の出力を書く。作者が片づけたら、この手順だけをやり直す（何度やり直してもよい）。
+
+### 確かめていないこと
+
+`release` ブランチがまだないので、次は orca のヘルプ（`orca worktree create --help` など）から読んだだけで、動かして確かめていない。`worktree list --repo "path:<元のリポジトリ>" --json` が `.ok` と `.result.truncated`（切れていなければ `false`）を返すことと、`git worktree list --porcelain` を読む `awk` は、手元で確かめた。
+
+- `--branch release --base-branch origin/release` で、ローカルの `release` が `origin/release` の位置に作られるか。リモートに `release` があるだけで、orca が名前を「使われている」とみなして番号を付けるか。付けたときは、上の取り出し直しで直る想定。
+- 作ったブランチに上流が設定されるか。されなくても、`branch --set-upstream-to` で設定する。
+- `worktree create --json` の結果で、パスが `.result.worktree.path` にあるか（`worktree show --json` と `worktree current --json` の形から推した）。
+- 番号付きのブランチを取り出し直したあとで、orca がワークスペースのブランチを正しく表示するか。
+
+## 8. release → main の PR
 
 開いたリリースの PR と、確認待ちのリリースを調べる（前回の PR がマージコミットで入ったかは、手順 1 で確かめてある）。
 
@@ -314,7 +442,7 @@ EOF
 
 `release` を進めると、この PR の CI が走る。`ci-required` が緑になるのを見届けてから報告する。
 
-## 8. 作者に報告する
+## 9. 作者に報告する
 
 次の形で報告する。
 
@@ -326,10 +454,16 @@ EOF
 - マージするとき：gh pr merge <PR 番号> --merge --match-head-commit <sha>
 - 判断待ちの Issue：#<番号> <題>, …（なければ「なし」）
 - PR のないコミット・題と PR の食い違い：<direct.txt と mismatch.txt の中身>（なければ「なし」）
-- 確かめ方：スライドの最後のページ。`release` ブランチで動きます。
+- スライドを作る途中で見つかった Issue：#<番号> <題>, …（found.txt。なければ「なし」）
+- release のワークスペース：<表示名>（<パス>）。<作った / 早送りした / 進めていない：理由>
+- 確かめ方：スライドの最後のページ。release のワークスペースでターミナルを開くと、今回のコミットで動きます。
 ```
 
+- ワークスペースの行は、手順 7 の `release-ws.txt` から書く。手順 7 で止まったときは「進めていない」とし、止まった理由と `status` か `log` の出力を添える。作者に片づけてもらう。
+
 ## 作者が問題を見つけたとき
+
+AGENTS.md の「見つけた問題」のとおり扱う。
 
 1. 問題を Issue にする（`ebykn-issue` スキル）。どのリリースで見つかったかを本文に書く。
 2. 直す PR を `develop` に積む。ワーカーに作らせ、AGENTS.md の「マージ」のとおりマージする。過去の履歴は直さない。
@@ -337,6 +471,6 @@ EOF
 
 ## 作者が main にマージしたあと
 
-- リリースの PR は閉じる。次のリリースの手順 7 では開いた PR がないので、新しく作る。
+- リリースの PR は閉じる。次のリリースの手順 8 では開いた PR がないので、新しく作る。
 - 新しい PR の「確認待ちのリリース」には、`main` に入っていないタグだけが載る。
 - 次のリリースの手順 1 で、前回の PR がマージコミットで入ったことを確かめる。
