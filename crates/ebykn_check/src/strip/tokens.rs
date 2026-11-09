@@ -205,7 +205,10 @@ impl Cx<'_> {
             if let TokenTree::Punct(_) = t {
                 let mut j = i;
                 while let Some(TokenTree::Punct(p)) = trees.get(j) {
-                    if self.cut(range(&trees[j]).0, range(&trees[j]).1).is_some() {
+                    // 属性の `#` の前で切る（`#` を含む複数文字の演算子はない）。
+                    if self.cut(range(&trees[j]).0, range(&trees[j]).1).is_some()
+                        || (j > i && p.as_char() == '#')
+                    {
                         break;
                     }
                     j += 1;
@@ -307,8 +310,10 @@ fn puncts(run: &[TokenTree]) -> Vec<Tok> {
     out
 }
 
-/// `i` のグループが、呼び出しか引数の並びの丸括弧か：前が名前（`f(..)`、`fn g(..)`、`S(..)`）、
-/// ジェネリクスの閉じ（`f::<T>(..)`）、括弧（`f(a)(..)`）。キーワードの後（`return (a,)`）はタプル。
+/// `i` のグループが、呼び出しか引数の並びの丸括弧か：前が名前（`f(..)`、`fn g(..)`、`S(..)`）か
+/// 丸括弧（`f(a)(..)`）。キーワードの後（`return (a,)`、`pub (u64,)`）はタプル。`>` の後（`-> (u64,)`、
+/// `a > (b,)`、`f::<T>(..)`）と角括弧の後（`#[a] (b,)`、`x[0](..)`）は決められないので、タプルとして
+/// カンマを残す（書いたとおりに比べる側に倒す）。
 fn is_arg_list(trees: &[TokenTree], i: usize) -> bool {
     let Some(TokenTree::Group(g)) = trees.get(i) else {
         return false;
@@ -318,8 +323,7 @@ fn is_arg_list(trees: &[TokenTree], i: usize) -> bool {
     }
     match i.checked_sub(1).and_then(|k| trees.get(k)) {
         Some(TokenTree::Ident(id)) => !is_keyword(&id.to_string()),
-        Some(TokenTree::Punct(p)) => p.as_char() == '>',
-        Some(TokenTree::Group(g)) => g.delimiter() != Delimiter::Brace,
+        Some(TokenTree::Group(g)) => g.delimiter() == Delimiter::Parenthesis,
         _ => false,
     }
 }
@@ -354,6 +358,8 @@ fn is_keyword(s: &str) -> bool {
             | "mut"
             | "ref"
             | "as"
+            | "pub"
+            | "crate"
             | "where"
             | "impl"
             | "dyn"

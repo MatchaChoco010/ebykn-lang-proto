@@ -24,22 +24,11 @@ use crate::project::Project;
 use collect::{LoopSite, Shape};
 use tokens::Tok;
 
-/// `.eykp` だけの項目に付けられない名前のうち、`.eyk` に書かれていなくても使われるもの。§6.4 の展開と
+/// `.eykp` だけの項目に付けられない名前のうち、`.eyk` に書かれていなくても使われるもの：§6.4 の展開と
 /// 書き下しが呼ぶ Ebykn のトレイトのメソッド（`impl T` に同じ名前の `spec fn` があると、トレイトの
-/// メソッドより先に選ばれる）と、書き下しが glob で取り込む `ebykn_prelude` の名前。
-const IMPLICIT_NAMES: &[&str] = &[
-    "invariant",
-    "view",
-    "Cell",
-    "CellId",
-    "CellPointsTo",
-    "PointsTo",
-    "Ptr",
-    "Loc",
-    "Region",
-    "SeqExt",
-    "View",
-];
+/// メソッドより先に選ばれる）。ほかに、書き下しが glob で取り込む `ebykn_prelude` の名前
+/// （[`crate::index::PRELUDE_TYPES`]）も使えない。
+const IMPLICIT_METHODS: &[&str] = &["invariant", "view"];
 
 /// プロジェクトのすべての証明ファイルを検査する。
 pub fn check(project: &Project, diags: &mut Diags) {
@@ -49,7 +38,12 @@ pub fn check(project: &Project, diags: &mut Diags) {
     for m in &project.modules {
         tokens::idents(&project.file(m.file).text, &mut taken);
     }
-    taken.extend(IMPLICIT_NAMES.iter().map(|s| s.to_string()));
+    taken.extend(
+        IMPLICIT_METHODS
+            .iter()
+            .chain(crate::index::PRELUDE_TYPES)
+            .map(|s| s.to_string()),
+    );
     for pf in &project.proofs {
         let ok = |f: ebykn_syntax::span::FileId| project.parsed_ok[f.0 as usize];
         if !ok(pf.file) || !ok(pf.src) {

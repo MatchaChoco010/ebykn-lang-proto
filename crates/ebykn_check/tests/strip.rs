@@ -513,3 +513,74 @@ fn attribute_order_is_ignored_only_among_builtin_attributes() {
     );
     assert!(d.iter().any(|l| l.contains("E0304")), "{d:?}");
 }
+
+/// 1 要素のタプルのカンマは、`>`・`]`・`pub` の後でも残す（#136 の再確認の blocker）。
+#[test]
+fn one_element_tuples_keep_their_comma_after_any_token() {
+    for (src, proof) in [
+        (
+            "pub fn g(x: u64) -> (u64,) { match x { _ => (x,) } }\n",
+            "pub fn g(x: u64) -> (u64) { match x { _ => (x) } }\n",
+        ),
+        (
+            "fn g(x: u64) -> (u64,) { (x,) }\n",
+            "fn g(x: u64) -> (u64) { (x,) }\n",
+        ),
+        (
+            "fn h<F: Fn() -> (u64,)>(f: F) {}\n",
+            "fn h<F: Fn() -> (u64)>(f: F) {}\n",
+        ),
+        ("struct S(pub (u64,));\n", "struct S(pub (u64));\n"),
+        (
+            "fn g(a: (u64,), b: (u64,)) -> bool { a > (b.0,) }\n",
+            "fn g(a: (u64,), b: (u64,)) -> bool { a > (b.0) }\n",
+        ),
+        (
+            "fn g(b: u64) -> (u64,) { #[allow(unused_parens)] (b,) }\n",
+            "fn g(b: u64) -> (u64,) { #[allow(unused_parens)] (b) }\n",
+        ),
+    ] {
+        let d = run(src, proof);
+        assert!(d.iter().any(|l| l.contains("E0304")), "{proof}: {d:?}");
+    }
+}
+
+/// 記号の並びは属性の `#` の前で切る（`&&#[trigger] f(x)` を `&& f(x)` と比べる）。
+#[test]
+fn a_symbol_run_stops_before_an_attribute() {
+    matches(
+        "spec fn f(x: int) -> bool = x > 0;\nfn g() ensures forall x: int, x > 0 && f(x) {}\n",
+        "spec fn f(x: int) -> bool = x > 0;\nfn g() ensures forall x: int, x > 0 &&#[trigger] f(x) {}\n",
+    );
+}
+
+/// `ebykn_prelude` が公開する名前は、どれも `.eykp` だけの項目に使えない名前の一覧に入っている
+/// （公開を足して一覧を忘れると、glob の import を覆う項目が通る）。
+#[test]
+fn every_prelude_export_is_a_taken_name() {
+    let lib = include_str!("../../ebykn_prelude/src/lib.rs");
+    let mut leaves = Vec::new();
+    for line in lib.lines().filter(|l| l.starts_with("pub use ")) {
+        let body = line["pub use ".len()..].trim_end_matches(';');
+        match body.split_once('{') {
+            Some((_, rest)) => leaves.extend(
+                rest.trim_end_matches('}')
+                    .split(',')
+                    .map(|s| s.trim().to_string()),
+            ),
+            None => leaves.push(body.rsplit("::").next().unwrap().to_string()),
+        }
+    }
+    assert!(leaves.len() >= 9, "{leaves:?}");
+    for leaf in &leaves {
+        assert!(
+            ebykn_check::index::PRELUDE_TYPES.contains(&leaf.as_str()),
+            "{leaf} が PRELUDE_TYPES にない"
+        );
+        let d = run(
+            "fn f() {}\n",
+            &format!("fn f() {{}}\nspec fn {leaf}() -> int = 1;\n"),
+        );
+        assert!(d.iter().any(|l| l.contains("E0304")), "{leaf}: {d:?}");
+    }
+}
