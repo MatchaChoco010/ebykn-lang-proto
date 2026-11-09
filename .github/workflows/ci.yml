@@ -1,7 +1,7 @@
 name: CI
 
 # develop への push は、リリースを切る前に develop の先頭が緑であることを確かめるため（ebykn-release スキル）。
-# PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない。
+# develop は strict なので PR の CI は develop の先頭との組み合わせを試しているが、マージしたあとの先頭そのものも確かめる。
 # release は develop のコミットそのものなので足さない。
 on:
   pull_request:
