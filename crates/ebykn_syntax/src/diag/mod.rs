@@ -170,6 +170,13 @@ pub enum Message {
     ReservedWord { word: String },
     /// 呼び出しの引数の末尾でない位置の `uses`（#19 の既定 P1）。
     UsesOutsideCall,
+    /// `take` / `put` / `borrow` の領域に、`self` でない値の消去フィールド（`t@nodes`）を書いた
+    /// （仕様 §5.4 の `RegionExpr` は `self@x` か領域変数だけ。#84）。
+    ErasedRegion {
+        kw: &'static str,
+        base: String,
+        field: String,
+    },
     /// E0101。
     ReservedPrefix { ident: String },
     /// E0102。
@@ -440,6 +447,12 @@ impl Message {
             ),
             (Message::ReservedRename { written }, Ja) => format!(
                 "構文エラー: `{written}` は `{src}` に書けません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude` という名前をほかのものに付けることはできません"
+            ),
+            (Message::ErasedRegion { kw, base, field }, En) => format!(
+                "syntax error: the region of `{kw}` cannot be `{base}@{field}`; a region in `take` / `put` / `borrow` is `self@field` or a region variable. If `{base}` is a reference (`&mut` / `&`), write this in a method of its type and use `self@{field}`. If you own `{base}`, take it apart with a pattern that binds every field (`let S {{ @{field}, a, b }} = {base};`), write `{kw} {field}[..]`, and build the value again with `@{field}: {field}` in the struct literal. Only when you make a new value, start from an empty region (`let mut {field}: Region<..> = Region::empty();`) and pass `@{field}: {field}` in its struct literal"
+            ),
+            (Message::ErasedRegion { kw, base, field }, Ja) => format!(
+                "構文エラー: `{kw}` の領域に `{base}@{field}` は書けません。`take` / `put` / `borrow` の領域は `self@フィールド` か領域変数だけです。`{base}` が参照（`&mut` / `&`）なら、その型のメソッドに書き、`self@{field}` を使います。`{base}` を所有しているなら、すべてのフィールドを束縛するパターンで分解し（`let S {{ @{field}, a, b }} = {base};`）、`{kw} {field}[..]` と書いてから、構造体のリテラルに `@{field}: {field}` を書いて作り直します。新しい値を作るときだけ、空の領域から始め（`let mut {field}: Region<..> = Region::empty();`）、構造体のリテラルに `@{field}: {field}` を書いて渡します"
             ),
             (Message::NotAllowedHere { written }, En) => {
                 format!("syntax error: `{written}` cannot be written here")

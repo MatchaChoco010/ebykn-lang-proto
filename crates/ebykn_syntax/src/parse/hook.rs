@@ -35,6 +35,7 @@ pub(super) fn hook(site: EbyknSite, input: ParseStream) -> syn::Result<bool> {
     }
     match site {
         EbyknSite::Stmt => stmt(input),
+        EbyknSite::Atom { .. } if let Some(e) = erased_region(input) => Err(e),
         EbyknSite::Atom { allow_struct } => match peek_atom(input) {
             Some(kind) => parse_atom_in(input, kind, allow_struct).map(|_| true),
             None => Ok(false),
@@ -852,6 +853,56 @@ fn stmt_extent(input: ParseStream) -> (usize, usize) {
         }
     }
     (lo, hi)
+}
+
+/// `take` / `put` / `borrow` / `borrow mut` の領域に、`self` でない値の消去フィールドを書いた形
+/// （`put t@nodes[r]`、`borrow a.b@nodes[r] { .. }`）。領域添字として読めないので、そのままでは
+/// `put` が識別子になり「`;` が必要」としか言えない（#84）。どの形でも Rust の式ではない。
+fn erased_region(input: ParseStream) -> Option<syn::Error> {
+    let t = peek_tts(input, 16);
+    let kw = ["take", "put", "borrow"]
+        .into_iter()
+        .find(|k| is_ident(t.first(), k))?;
+    let mut i = 1;
+    if kw == "borrow" && is_ident(t.get(1), "mut") {
+        i = 2;
+    }
+    // 受け手：`x` か `x.y.z`（`self` だけなら仕様どおりの領域）。
+    let start = i;
+    let mut base = Vec::new();
+    loop {
+        let Some(TokenTree::Ident(x)) = t.get(i) else {
+            return None;
+        };
+        base.push(x.to_string());
+        i += 1;
+        if is_punct(t.get(i), '.') {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if base == ["self"] || !is_punct(t.get(i), '@') {
+        return None;
+    }
+    let Some(TokenTree::Ident(field)) = t.get(i + 1) else {
+        return None;
+    };
+    if !is_group(t.get(i + 2), Delimiter::Bracket) {
+        return None;
+    }
+    let span = t
+        .get(start)
+        .map(|x| x.span())
+        .unwrap_or_else(|| input.span());
+    Some(err(
+        span,
+        Message::ErasedRegion {
+            kw,
+            base: base.join("."),
+            field: field.to_string(),
+        },
+    ))
 }
 
 /// 文の先頭の証明構文（仕様 §5.7）と、Ebykn にない Verus の文。
