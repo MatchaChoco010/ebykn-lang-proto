@@ -208,6 +208,11 @@ impl Walker<'_> {
         }
         let mut segs: Vec<String> = Vec::new();
         if let Some(q) = qself {
+            // `<T as Tr>::f`：トレイトの後ろが一つの名前なら、トレイトのメソッド（契約を持てないので権限を
+            // 受け渡さない。`S5::new()` やトレイトの `Self::f` と同じ）。2 つ以上なら関連型を通るので止める。
+            if q.position > 0 && path.segments.len() == q.position + 1 {
+                return false;
+            }
             match &q.ty.kind {
                 ast::TypeKind::Path {
                     qself: None,
@@ -253,20 +258,15 @@ impl Walker<'_> {
             {
                 return false;
             }
-            // 本体の中の項目を根に持つパス（[`Walker::local_items`]）。
-            if self.local_items.contains(first) {
+            // 本体の中の `use` 以外の項目（`fn`・型など）を根に持つパス。権限に行き着く本体の中の項目は、
+            // 本体の中の項目の検査が拒む。
+            if self.local.items.contains(first) {
                 return false;
             }
-            // 本体の中のクレートの glob（`use crate::Color::*;`）の行き先に続けて解決できる名前（`Red`）。
-            if self.local_globs.iter().any(|g| {
-                let mut p = g.clone();
-                p.extend(segs.iter().cloned());
-                self.cx
-                    .index
-                    .resolve(self.cx.module, false, &p, self.cx.self_ty)
-                    != crate::index::Resolved::Unknown
-            }) {
-                return false;
+            // 本体の中の `use` の別名と、本体の中のクレートの glob から来る名前は、行き先のパスに置き換えて
+            // 同じ検査をかける（別名を根拠に通さない）。
+            if let Some(sub) = self.local_substitute(segs) {
+                return self.blocked_path(&sub, strict);
             }
         }
         self.cx.index.unresolvable_path(
@@ -276,8 +276,55 @@ impl Walker<'_> {
             self.cx.self_ty,
             &self.cx.type_params,
             strict,
-            self.local_glob,
+            self.local.ext_glob,
         )
+    }
+
+    /// 本体の中の `use` の別名（`mm` → `crate::m`）か、本体の中のクレートの glob（`use crate::m::*;`）から
+    /// 来る根の名前を、行き先のパスに置き換える。
+    fn local_substitute(&self, segs: &[String]) -> Option<Vec<String>> {
+        let first = segs.first()?;
+        if let Some(p) = self.local.aliases.get(first) {
+            let mut sub = p.clone();
+            sub.extend(segs[1..].iter().cloned());
+            return Some(sub);
+        }
+        self.local.globs.iter().find_map(|g| {
+            let mut head = g.clone();
+            head.push(first.clone());
+            (self
+                .cx
+                .index
+                .resolve_exact(self.cx.module, false, &head, self.cx.self_ty)
+                != Resolved::Unknown)
+                .then(|| {
+                    let mut sub = g.clone();
+                    sub.extend(segs.iter().cloned());
+                    sub
+                })
+        })
+    }
+
+    /// 置き換えた先のパスを止めるか：関連型などを通る、権限を受け渡す関数を指す（本体の中の別名を通した
+    /// 呼び出しは §6.2 の検査が引けない）、解決できず外とも言えない、のどれか。
+    fn blocked_path(&self, sub: &[String], strict: bool) -> bool {
+        self.type_relative_segs(false, sub)
+            || perm_resolved(
+                self.cx.index,
+                &self
+                    .cx
+                    .index
+                    .resolve(self.cx.module, false, sub, self.cx.self_ty),
+            )
+            || self.cx.index.unresolvable_path(
+                self.cx.module,
+                false,
+                sub,
+                self.cx.self_ty,
+                &self.cx.type_params,
+                strict,
+                false,
+            )
     }
 
     /// 本体の中の項目の名前を集める（ブロックに入るときに呼ぶ。項目はブロックのどこからでも見える）。
@@ -298,16 +345,16 @@ impl Walker<'_> {
             K::Use(t) => {
                 for u in crate::index::parse_use(&t.tokens) {
                     match u {
-                        crate::index::Import::Name { alias, .. } => {
-                            self.local_items.insert(alias);
+                        crate::index::Import::Name { alias, path } => {
+                            self.local.aliases.insert(alias, path);
                         }
                         // 行き先が外と分かる glob だけ（`use std::collections::*;`）。クレートの中の glob
                         // （`use crate::Color::*;`）は、そこから来る名前を索引で引ける。
                         crate::index::Import::Glob { path } => {
                             if self.cx.index.is_external_path(self.cx.module, &path) {
-                                self.local_glob = true;
+                                self.local.ext_glob = true;
                             } else {
-                                self.local_globs.push(path);
+                                self.local.globs.push(path);
                             }
                         }
                     }
@@ -317,7 +364,7 @@ impl Walker<'_> {
             _ => None,
         };
         if let Some(n) = name {
-            self.local_items.insert(n.name.clone());
+            self.local.items.insert(n.name.clone());
         }
     }
 
@@ -327,13 +374,17 @@ impl Walker<'_> {
     /// 止めると `Vec::new` まで止まるので、この 3 つを通るものに限る。
     pub(super) fn type_relative(&self, path: &ast::Path) -> bool {
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+        self.type_relative_segs(path.leading_colon, &segs)
+    }
+
+    fn type_relative_segs(&self, leading_colon: bool, segs: &[String]) -> bool {
         if segs.len() >= 3 && (segs[0] == "Self" || self.cx.type_params.contains(&segs[0])) {
             return true;
         }
         (1..segs.len()).any(|k| {
             match self.cx.index.resolve_exact(
                 self.cx.module,
-                path.leading_colon,
+                leading_colon,
                 &segs[..k],
                 self.cx.self_ty,
             ) {

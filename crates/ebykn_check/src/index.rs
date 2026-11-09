@@ -258,13 +258,26 @@ pub struct Index {
     /// [`Index::find_ext`] が一つの問い合わせの中でたどった glob の（モジュール、名前、根か）。glob が
     /// 互いに取り込み合っても、同じところを二度たどらない。
     ext_seen: RefCell<BTreeSet<(ItemPath, String, bool)>>,
-    /// 検査している本体の中の項目を囲む本体の、項目の名前・外の glob があるか・クレートの中の glob の行き先
-    /// （[`crate::body::Walker`] の `local_items` など）。入れ子の本体ごとに積む。
+    /// 検査している本体の中の項目を囲む本体の項目（[`LocalScope`]）。入れ子の本体ごとに積む。
     pub nested_scopes: NestedScopes,
 }
 
 /// [`Index::nested_scopes`] の型。
-pub type NestedScopes = RefCell<Vec<(BTreeSet<String>, bool, Vec<Vec<String>>)>>;
+pub type NestedScopes = RefCell<Vec<LocalScope>>;
+
+/// 関数の本体の中の項目（索引に入らない）。ブロックに入るときに集め、ブロックの終わりで戻し、入れ子の項目の
+/// 本体に引き継ぐ（[`crate::body::Walker`]）。
+#[derive(Debug, Clone, Default)]
+pub struct LocalScope {
+    /// `use` 以外の項目の名前（`fn`・型・定数など）。
+    pub items: BTreeSet<String>,
+    /// 行き先が外と分かる glob の `use`（`use std::collections::*;`）があるか。
+    pub ext_glob: bool,
+    /// クレートの中の glob の `use` の行き先（`use crate::Color::*;` の `[crate, Color]`）。
+    pub globs: Vec<Vec<String>>,
+    /// `use` の別名と、その行き先のパス（`use crate::m as mm;` の `mm` → `[crate, m]`）。
+    pub aliases: BTreeMap<String, Vec<String>>,
+}
 
 /// 外のクレートと std とみなす根の名前（[`Index::is_external_root`]）。std の prelude の名前と、`.eyk` が
 /// 裸の名前で書く vstd の名前（§3.1）、組み込みの型。
@@ -847,19 +860,35 @@ impl Index {
             }
         }
         for imp in &scope.imports {
-            if let Import::Glob { path } = imp
-                && let Ext::Module(g) = self.find_ext(m, path, true, depth + 1)
-                // 一つの問い合わせの中で、同じ glob の先を二度たどらない（互いに取り込む glob で
-                // 指数的に増えないように）。
-                && self
-                    .ext_seen
-                    .borrow_mut()
-                    .insert((g.clone(), first.clone(), false))
+            let Import::Glob { path } = imp else {
+                continue;
+            };
+            // 同じ glob のパスを引いている途中なら飛ばす（glob のパスの根を引くと、同じ glob にまた来る循環）。
+            // 引き終えたら印を外す。
+            let key = (m.to_vec(), format!("glob {}", path.join("::")), true);
+            if !self.ext_seen.borrow_mut().insert(key.clone()) {
+                continue;
+            }
+            let found = self.find_ext(m, path, true, depth + 1);
+            self.ext_seen.borrow_mut().remove(&key);
+            // glob のパス自身を引いた結果も、打ち切り（`Cut`）は捨てずにそのまま返す（分からない）。
+            let g = match found {
+                Ext::Module(g) => g,
+                Ext::Cut => return Ext::Cut,
+                _ => continue,
+            };
+            // 一つの問い合わせの中で、同じ glob の先を二度たどらない（互いに取り込む glob で指数的に
+            // 増えないように）。
+            if !self
+                .ext_seen
+                .borrow_mut()
+                .insert((g.clone(), first.clone(), false))
             {
-                match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
-                    Ext::NotFound => {}
-                    r => return into(r),
-                }
+                continue;
+            }
+            match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
+                Ext::NotFound => {}
+                r => return into(r),
             }
         }
         if root && PRELUDE_TYPES.contains(&first.as_str()) {

@@ -880,6 +880,109 @@ fn allow_list_exceptions_need_positive_facts() {
     );
 }
 
+/// 6 回目の再確認：肯定の事実の一覧のそれぞれが穴にならない。
+#[test]
+fn positive_facts_do_not_leak() {
+    const MK: &str =
+        "pub fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\n";
+    const VALUE: &str = "can only be called directly";
+    const CALL: &str = "a path that cannot be resolved";
+    let rejects_any = |src: String, needles: &[&str]| {
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && needles.iter().any(|n| l.contains(n))),
+            "{src}\n{}",
+            lines.join("\n")
+        );
+    };
+    // blocker 1：名前付きの戻り値は契約の中だけのローカル変数（本体の `mk` はモジュールの関数）。
+    rejects_any(
+        format!("{PRELUDE}{MK}pub fn f() -> (mk: u64) {{ let g = mk; let q = g(1); 0 }}\n"),
+        &[VALUE],
+    );
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let c = |v: u64| -> (mk: u64) {{ let g = mk; let q = g(v); 0 }}; c(1) }}\n"
+        ),
+        &[VALUE],
+    );
+    // blocker 2：`if let` の束縛は then のブロックの中だけ。
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let o = Some(1u64); if let Some(mk) = o {{ }} let g = mk; let q = g(1); 0 }}\n"
+        ),
+        &[VALUE],
+    );
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let o = Some(1u64); if let Some(mk) = o {{ }} else {{ let g = mk; let q = g(1); }} 0 }}\n"
+        ),
+        &[VALUE],
+    );
+    // blocker 3：glob のパスを引く探索を深さで打ち切ったら、外の glob があっても止める。
+    let mut chain = String::new();
+    for k in 0..40 {
+        chain.push_str(&format!(
+            "pub mod g{k} {{ pub use super::g{}::*; }}\n",
+            k + 1
+        ));
+        chain.push_str(&format!(
+            "pub mod h{k} {{ pub use super::h{}::*; }}\n",
+            k + 1
+        ));
+    }
+    chain.push_str("pub mod g40 { use super::Node; pub fn mk40(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } }\n");
+    chain.push_str("pub mod h40 { pub mod tgt { use crate::Node; pub fn mk3(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } } }\n");
+    for (uses, body) in [
+        (
+            "use g0::*;\nuse std::collections::*;\n",
+            "let q = mk40(1); 0",
+        ),
+        (
+            "use h0::tgt::*;\nuse std::collections::*;\n",
+            "let q = mk3(1); 0",
+        ),
+        (
+            "use h0::tgt::*;\n",
+            "use std::collections::*; let q = mk3(1); 0",
+        ),
+    ] {
+        let (_, lines) = run(&format!(
+            "{PRELUDE}{chain}{uses}pub fn f() -> u64 {{ {body} }}\n"
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") || l.contains("E0505")),
+            "{uses} {body}\n{}",
+            lines.join("\n")
+        );
+    }
+    // 本体の中の `use` の別名とクレートの glob は、行き先のパスに置き換えて検査する（行き先を引けない別名）。
+    const M: &str = "pub trait Tr { type Out; }\nimpl Tr for Node { type Out = Ptr<Node>; }\npub mod m { pub type PX<T> = T; pub type X = <crate::Node as crate::Tr>::Out; pub fn id(v: u64) -> u64 { v } }\n";
+    for body in [
+        "use crate::m as mm; let q = mm::X::new(Node { val: 1 }); 0",
+        "use crate::m as mm; let q = mm::PX::<Ptr<Node>>::new(Node { val: 1 }); 0",
+        "use crate::m::*; use std::collections::*; let q = X::new(Node { val: 1 }); 0",
+        "use crate::m::*; use std::collections::*; let q = PX::<Ptr<Node>>::new(Node { val: 1 }); 0",
+    ] {
+        rejects_any(
+            format!("{PRELUDE}{M}pub fn f() -> u64 {{ {body} }}\n"),
+            &[CALL],
+        );
+    }
+    // 権限に行き着かない別名と glob は今のまま。
+    accepts(&format!(
+        "{PRELUDE}{M}pub fn f() -> u64 {{ use crate::m as mm; use crate::m::*; mm::id(1) + id(2) }}\n"
+    ));
+    // should-fix：`<Node as Mk2>::make()`（トレイトの後ろが一つの名前）はトレイトのメソッドなので通す。
+    accepts(&format!(
+        "{PRELUDE}pub trait Mk2 {{ fn make() -> Self; }}\nimpl Mk2 for Node {{ fn make() -> Self {{ Node {{ val: 1 }} }} }}\npub fn f() -> u64 {{ let _n = <Node as Mk2>::make(); 0 }}\n"
+    ));
+}
+
 /// 戻り値の型の名前が `Option` でも、クレートで定義した型なら `?` を展開できない（E0003）。
 #[test]
 fn s4_try_with_a_crate_type_named_option_is_e0003() {

@@ -62,9 +62,7 @@ struct Scope {
     var_types: BTreeMap<String, ast::Type>,
     locals: BTreeSet<String>,
     known: BTreeSet<String>,
-    local_items: BTreeSet<String>,
-    local_glob: bool,
-    local_globs: Vec<Vec<String>>,
+    local: crate::index::LocalScope,
 }
 
 /// ループ・ラベル付きブロックの枠。
@@ -126,14 +124,13 @@ pub struct Walker<'a> {
     try_known: bool,
     /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
     bound_source: Option<SpanKey>,
-    /// 本体の中で定義した項目の名前（`fn`・型・`use` の別名など）と、本体の中に行き先が外の glob の `use`
-    /// （`use std::collections::*;`）があるか。ブロックの終わりで戻す。索引に入らないので、これを根に持つ
-    /// パスは解決できないが、権限に行き着く項目は [`crate::check_nested_items`] が拒むので、安全側の規則
-    /// （[`Self::unresolvable_path`]）では通す。`local_globs` はクレートの中の glob の行き先で、そこに続けて
-    /// 解決できる名前だけを通す。
-    local_items: BTreeSet<String>,
-    local_glob: bool,
-    local_globs: Vec<Vec<String>>,
+    /// 名前付きの戻り値の名前（契約の中だけのローカル変数。[`Self::contract`]）。
+    ret_name: Option<String>,
+    /// 本体の中の項目（[`crate::index::LocalScope`]）。ブロックの終わりで戻す。索引に入らないので、安全側の
+    /// 規則（[`Self::unresolvable_path`]）は、`use` 以外の項目を根に持つパスを通し（権限に行き着く項目は
+    /// [`crate::check_nested_items`] が拒む）、`use` の別名とクレートの中の glob から来る名前は行き先のパスに
+    /// 置き換えて検査する。
+    local: crate::index::LocalScope,
 }
 
 impl<'a> Walker<'a> {
@@ -164,20 +161,21 @@ impl<'a> Walker<'a> {
             borrows: Vec::new(),
             try_known: false,
             bound_source: None,
+            ret_name: None,
             attr_ok: false,
             attr_lead: None,
-            local_items: outer.0,
-            local_glob: outer.1,
-            local_globs: outer.2,
+            local: outer,
         }
     }
 
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
-        // 名前付きの戻り値（`-> (r: u64)`）は契約の中のローカル変数。
-        if let Some(n) = sig.ret.as_ref().and_then(|r| r.name.as_ref()) {
-            self.locals.insert(n.name.clone());
-        }
+        // 名前付きの戻り値（`-> (r: u64)`）は契約の中だけのローカル変数（本体の `r` はモジュールの名前を指す）。
+        self.ret_name = sig
+            .ret
+            .as_ref()
+            .and_then(|r| r.name.as_ref())
+            .map(|n| n.name.clone());
         // 名前が `Option` / `Result` でも、クレートで定義した型なら std の型ではない（展開の形が合わない）。
         self.try_known = sig.ret.as_ref().is_some_and(|r| {
             try_type(&r.ty)
@@ -235,6 +233,16 @@ impl<'a> Walker<'a> {
 
     /// 契約の式（論理文脈）。
     pub fn contract(&mut self, contract: &ast::Contract) {
+        // 名前付きの戻り値は、契約を見ている間だけローカル変数にする。
+        let outer_locals = self.locals.clone();
+        if let Some(r) = &self.ret_name {
+            self.locals.insert(r.clone());
+        }
+        self.contract_clauses(contract);
+        self.locals = outer_locals;
+    }
+
+    fn contract_clauses(&mut self, contract: &ast::Contract) {
         let prev = std::mem::replace(&mut self.logic, true);
         for c in &contract.clauses {
             match &c.kind {
@@ -560,9 +568,7 @@ impl<'a> Walker<'a> {
             var_types: self.var_types.clone(),
             locals: self.locals.clone(),
             known: self.known.clone(),
-            local_items: self.local_items.clone(),
-            local_glob: self.local_glob,
-            local_globs: self.local_globs.clone(),
+            local: self.local.clone(),
         }
     }
 
@@ -574,9 +580,7 @@ impl<'a> Walker<'a> {
         self.var_types = s.var_types;
         self.locals = s.locals;
         self.known.extend(s.known);
-        self.local_items = s.local_items;
-        self.local_glob = s.local_glob;
-        self.local_globs = s.local_globs;
+        self.local = s.local;
     }
 
     /// パターンが束縛する名前をローカルに足す。
@@ -643,11 +647,11 @@ impl<'a> Walker<'a> {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
                 // 本体の中の項目の本体からも、同じ本体の項目（`struct L; impl L { .. L .. }`）が見える。
-                self.cx.index.nested_scopes.borrow_mut().push((
-                    self.local_items.clone(),
-                    self.local_glob,
-                    self.local_globs.clone(),
-                ));
+                self.cx
+                    .index
+                    .nested_scopes
+                    .borrow_mut()
+                    .push(self.local.clone());
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -1546,10 +1550,6 @@ impl<'a> Walker<'a> {
         for p in &c.params {
             self.bind(p);
         }
-        // 名前付きの戻り値（`-> (b: u64)`）は契約の中のローカル変数。
-        if let Some(n) = c.ret.as_ref().and_then(|r| r.name.as_ref()) {
-            self.locals.insert(n.name.clone());
-        }
         self.regions = saved_regions_all;
         let saved_env = std::mem::take(&mut self.env);
         let saved_regions = std::mem::take(&mut self.regions);
@@ -1557,7 +1557,16 @@ impl<'a> Walker<'a> {
         let saved_borrows = std::mem::take(&mut self.borrows);
         self.closure_outer = Some(outer);
         let prev = std::mem::replace(&mut self.logic, true);
+        // 名前付きの戻り値（`-> (b: u64)`）は、クロージャの契約の中だけのローカル変数。
+        let outer_ret = std::mem::replace(
+            &mut self.ret_name,
+            c.ret
+                .as_ref()
+                .and_then(|r| r.name.as_ref())
+                .map(|n| n.name.clone()),
+        );
         self.contract(&c.contract);
+        self.ret_name = outer_ret;
         self.logic = prev;
         self.expr(&c.body);
         self.env = saved_env;
@@ -1598,9 +1607,12 @@ impl<'a> Walker<'a> {
     }
 
     fn if_expr(&mut self, e: &Expr, cond: &Expr, then: &Block, else_: Option<&Expr>) -> bool {
+        // 条件の `if let` / let チェーンの束縛は、then のブロックの中だけで見える。
+        let outer_locals = self.locals.clone();
         self.expr(cond);
         let start = self.env.clone();
         let d1 = self.block(then);
+        self.locals = outer_locals;
         let env1 = std::mem::replace(&mut self.env, start.clone());
         let (env2, d2) = match else_ {
             Some(x) => {
