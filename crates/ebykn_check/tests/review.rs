@@ -987,6 +987,39 @@ fn extern_prelude_aliases_are_resolved_everywhere() {
     ));
 }
 
+/// glob の解決の結果は、検査の順番によらない（#127 の 5 回目の再確認の blocker 3）。これまでは、ほかの関数を
+/// 引く途中の循環で見つからなかった結果を覚えてしまい、`z::k(1)` を引けずに verified になっていた。
+#[test]
+fn glob_resolution_does_not_depend_on_the_order() {
+    const PRE: &str = "pub use b::*;\npub use c::*;\npub mod b { pub use super::*; }\npub mod c { use super::Node; pub fn mkc(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } }\npub mod a { pub use super::b::mkc as k; }\n";
+    const P: &str = "pub fn p() -> u64 { let q = crate::mkc(1); leak q@; 0 }\n";
+    for f in [
+        "pub fn f() -> u64 { use crate::a as z; let q = z::k(1); 0 }\n",
+        "pub fn f() -> u64 { let q = a::k(1); 0 }\n",
+        "pub fn f() -> u64 { let q = b::mkc(1); 0 }\n",
+    ] {
+        for src in [
+            format!("{PRELUDE}{PRE}{P}{f}"),
+            format!("{PRELUDE}{PRE}{f}{P}"),
+            format!("{PRELUDE}{PRE}{f}"),
+        ] {
+            let (_, lines) = run(&src);
+            assert!(
+                !lines.is_empty() && lines.iter().all(|l| !l.contains("E0504")),
+                "{src}\n{}",
+                lines.join("\n")
+            );
+        }
+    }
+    // 正しく書いた形は、どの順番でも通る。
+    for src in [
+        format!("{PRELUDE}{PRE}{P}pub fn g() -> u64 {{ let q = b::mkc(1); leak q@; 0 }}\n"),
+        format!("{PRELUDE}{PRE}pub fn g() -> u64 {{ let q = b::mkc(1); leak q@; 0 }}\n{P}"),
+    ] {
+        accepts(&src);
+    }
+}
+
 /// glob をたどる名前の解決は、互いに取り込む glob があっても、同じところを二度たどらない（#127 の 4 回目の
 /// 再確認の 1。これまでは子が 3 つで 212 秒かかった）。
 #[test]

@@ -313,10 +313,14 @@ pub struct Index {
     /// クレートのルートの `extern crate X as Y;`（extern prelude。別名 → 行き先のパス）。どのモジュールから
     /// も `Y::..` と `::Y::..` で引ける。行き先は `crate`（`extern crate self as Y;`）か、クレートの名前。
     pub extern_prelude: BTreeMap<String, Vec<String>>,
-    /// [`Index::lookup_scoped`] の結果（モジュール、名前、prelude を引くか）。`None` は引いている途中で、
-    /// glob の循環ではそこで `Unknown` を返す。glob をたどる解決が指数的に増えないように覚える。索引に
-    /// 項目を足すたびに消す。
-    lookup_cache: RefCell<BTreeMap<(ItemPath, String, bool), Option<Resolved>>>,
+    /// [`Index::lookup_scoped`] が見つけた結果（モジュール、名前、prelude を引くか）。見つかった結果だけを
+    /// 覚える（見つからなかった・深さで打ち切った・循環の途中だった結果は、問い合わせの順番で変わるので
+    /// 覚えない）。索引に項目を足すたびに消す。
+    lookup_cache: RefCell<BTreeMap<(ItemPath, String, bool), Resolved>>,
+    /// 一つの問い合わせ（いちばん外の [`Index::lookup_scoped`]）の中でたどった（モジュール、名前、prelude）。
+    /// glob が互いに取り込み合っても、同じところを二度たどらない（[`Index::find_ext`] の `ext_seen` と同じ）。
+    lookup_seen: RefCell<BTreeSet<(ItemPath, String, bool)>>,
+    lookup_active: std::cell::Cell<usize>,
 }
 
 /// [`Index::nested_scopes`] の型。
@@ -1365,12 +1369,22 @@ impl Index {
         }
         let key = (module.to_vec(), name.to_string(), prelude);
         if let Some(r) = self.lookup_cache.borrow().get(&key) {
-            // 引いている途中（glob の循環）なら、そこでは見つからないとする。
-            return r.clone().unwrap_or(Resolved::Unknown);
+            return r.clone();
         }
-        self.lookup_cache.borrow_mut().insert(key.clone(), None);
+        if self.lookup_active.get() == 0 {
+            self.lookup_seen.borrow_mut().clear();
+        }
+        // この問い合わせの中ですでにたどった（glob の循環か、同じところへの別の道）。いちばん外の問い合わせ
+        // が、たどれるところを一度ずつたどるので、ここで見つからないとしても答えは変わらない。
+        if !self.lookup_seen.borrow_mut().insert(key.clone()) {
+            return Resolved::Unknown;
+        }
+        self.lookup_active.set(self.lookup_active.get() + 1);
         let r = self.lookup_scoped_uncached(module, name, depth, prelude);
-        self.lookup_cache.borrow_mut().insert(key, Some(r.clone()));
+        self.lookup_active.set(self.lookup_active.get() - 1);
+        if r != Resolved::Unknown {
+            self.lookup_cache.borrow_mut().insert(key, r.clone());
+        }
         r
     }
 
