@@ -417,6 +417,8 @@ pub struct ItemFacts {
     pub checked: bool,
     /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）。
     pub stray_errors: bool,
+    /// Verus が検証の前に止まった（[`Summary::Stopped`]）。`func-details` に関数があっても、検証はしていない。
+    pub stopped: bool,
 }
 
 /// 項目の状態を決める（PR #26 のレビューの方針）。`verified` と表示してよいのは、Verus が見た関数
@@ -424,8 +426,8 @@ pub struct ItemFacts {
 ///
 /// - `admit` / `unchecked` / `external`：証明なしの前提。`verify` は必ず一覧に出す。
 /// - `failed`：その項目にエラーがある。
-/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、割り当てられないエラーがある。
-///   `verify` を成功にしない。
+/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、割り当てられないエラーがあるか、
+///   Verus が検証の前に止まった（コンパイルエラーなど。#43）。`verify` を成功にしない。
 pub fn decide(f: ItemFacts) -> &'static str {
     if f.admitted {
         "admit"
@@ -435,7 +437,7 @@ pub fn decide(f: ItemFacts) -> &'static str {
         "external"
     } else if f.error {
         "failed"
-    } else if !f.checked || f.stray_errors {
+    } else if !f.checked || f.stray_errors || f.stopped {
         "unknown"
     } else {
         "verified"
@@ -443,15 +445,19 @@ pub fn decide(f: ItemFacts) -> &'static str {
 }
 
 /// 全項目の状態を決める。`checked` は Verus の `func-details` の鍵（`None` なら一覧がない）。
-/// `error_count` は Verus が数えたエラーの数で、読み取ったエラーの見出しの数と違えば、エラーを
-/// 項目に割り当てられていないとみなす。
+/// `summary` が [`Summary::Ran`] なら、Verus が数えたエラーの数が読み取ったエラーの見出しの数と違えば、
+/// エラーを項目に割り当てられていないとみなす。[`Summary::Stopped`] なら何も検証していない。
 pub fn statuses(
     files: &[OutFile],
     output: &Output,
     errors: &[Option<(String, usize)>],
     checked: Option<&std::collections::BTreeSet<String>>,
-    error_count: Option<u64>,
+    summary: Summary,
 ) -> Vec<ItemStatus> {
+    let (error_count, stopped) = match summary {
+        Summary::Ran { errors, .. } => (Some(errors), false),
+        Summary::Stopped { .. } => (None, true),
+    };
     // 項目の Verus の名前。パスで決まらない項目（クレートの外の型への impl のメソッド）は、形に当たる
     // 鍵がちょうど一つのときだけ決まる。
     let verus_of = |item: &str| -> Option<String> {
@@ -509,6 +515,7 @@ pub fn statuses(
                     !shared(&n) && n.is_some_and(|n| checked.is_some_and(|c| c.contains(&n)))
                 },
                 stray_errors: stray,
+                stopped,
             };
             out.push(ItemStatus {
                 item: item.clone(),
@@ -611,6 +618,15 @@ mod tests {
             error: false,
             checked: true,
             stray_errors: false,
+            stopped: false,
+        }
+    }
+
+    /// 検証まで進んだ実行の要約（検証のエラーが `errors` 件）。
+    fn ran(errors: u64) -> Summary {
+        Summary::Ran {
+            verified: 0,
+            errors,
         }
     }
 
@@ -653,9 +669,25 @@ mod tests {
             }),
             "unknown"
         );
+        // Verus が検証の前に止まった（#43）。func-details にあっても verified にしない。
+        assert_eq!(
+            decide(ItemFacts {
+                stopped: true,
+                ..facts()
+            }),
+            "unknown"
+        );
         assert_eq!(
             decide(ItemFacts {
                 error: true,
+                ..facts()
+            }),
+            "failed"
+        );
+        assert_eq!(
+            decide(ItemFacts {
+                error: true,
+                stopped: true,
                 ..facts()
             }),
             "failed"
@@ -711,7 +743,10 @@ mod tests {
             &output,
             &[Some(("src/lib.rs".into(), 7))],
             Some(&checked),
-            Some(1),
+            Summary::Ran {
+                verified: 1,
+                errors: 1,
+            },
         );
         assert_eq!(
             status_text(
@@ -724,14 +759,33 @@ mod tests {
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
         // 項目に入らないエラーがあれば、失敗していない項目は unknown。
-        let st = statuses(&files, &output, &[None], Some(&checked), Some(1));
+        let st = statuses(&files, &output, &[None], Some(&checked), ran(1));
         assert_eq!(st[0].status, "unknown");
         // func-details がなければ unknown。
-        let st = statuses(&files, &output, &[], None, Some(0));
+        let st = statuses(&files, &output, &[], None, ran(0));
         assert_eq!(st[0].status, "unknown");
         // Verus の数えたエラーと、読み取ったエラーの見出しの数が違えば unknown（nit 4）。
-        let st = statuses(&files, &output, &[], Some(&checked), Some(1));
+        let st = statuses(&files, &output, &[], Some(&checked), ran(1));
         assert_eq!(st[0].status, "unknown");
+        // Verus が検証の前に止まれば、func-details にあっても verified にしない（#43）。テキストと
+        // JSON は同じ状態を出す。証明なしの前提は前提のまま出す。
+        let stopped = Summary::Stopped { errors: 1 };
+        let st = statuses(
+            &files,
+            &output,
+            &[Some(("src/lib.rs".into(), 7))],
+            Some(&checked),
+            stopped,
+        );
+        assert_eq!(
+            status_text(&st, stopped),
+            "unknown k::f\nfailed k::g\nadmit k::l\nresults not verified: Verus stopped before verification (1 errors)\n"
+        );
+        let json = status_json(&st, stopped, false);
+        assert!(
+            json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
+            "{json}"
+        );
     }
 
     #[test]
@@ -754,7 +808,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let st = statuses(&files, &output, &[], Some(&checked), Some(0));
+        let st = statuses(&files, &output, &[], Some(&checked), ran(0));
         let got: Vec<&str> = st.iter().map(|s| s.status).collect();
         assert_eq!(got, ["unknown", "unknown", "verified"]);
     }
@@ -779,7 +833,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&one), Some(0))[0].status,
+            statuses(&files, &output, &[], Some(&one), ran(0))[0].status,
             "verified"
         );
         // 当たる鍵が二つ（同じ名前のメソッドを持つ別の impl）なら決められない。
@@ -788,7 +842,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&two), Some(0))[0].status,
+            statuses(&files, &output, &[], Some(&two), ran(0))[0].status,
             "unknown"
         );
     }

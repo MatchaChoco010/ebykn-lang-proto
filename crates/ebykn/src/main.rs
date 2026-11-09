@@ -203,10 +203,7 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         &output,
         &r.errors,
         r.checked.as_ref(),
-        match summary {
-            ebykn::verus::Summary::Ran { errors, .. } => Some(errors),
-            ebykn::verus::Summary::Stopped { .. } => None,
-        },
+        summary,
     );
     let Some(shown) = ebykn::verus::select(&all, items) else {
         say(
