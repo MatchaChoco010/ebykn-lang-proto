@@ -66,6 +66,35 @@ pub struct Project {
 }
 
 impl Project {
+    /// 依存クレートがコードで使われる名前（`-` は `_`）。改名（`package = ..`）があれば鍵の名前、
+    /// なければそのクレートの `[lib] name`（なければ `[package] name`）。`[lib] name` は path の依存の
+    /// `Cargo.toml` を読んで決める。決められないもの（registry と git の依存、読めない `Cargo.toml`）が
+    /// あれば `None` を返す（呼ぶ側は、名前が分からないとして扱う。#49）。鍵の名前は、どの場合も
+    /// 返す名前に入れる。
+    pub fn dependency_crate_names(&self) -> (Vec<String>, bool) {
+        let mut names = Vec::new();
+        let mut known = true;
+        for (key, v) in &self.manifest.dependencies {
+            names.push(key.replace('-', "_"));
+            let TomlValue::Table(kvs) = v else {
+                known = false;
+                continue;
+            };
+            if kvs.iter().any(|(k, _)| k == "package") {
+                continue;
+            }
+            let path = kvs.iter().find_map(|(k, x)| match (k.as_str(), x) {
+                ("path", TomlValue::Str(p)) => Some(p.clone()),
+                _ => None,
+            });
+            match path.and_then(|p| lib_name(&self.root.join(p).join("Cargo.toml"))) {
+                Some(n) => names.push(n.replace('-', "_")),
+                None => known = false,
+            }
+        }
+        (names, known)
+    }
+
     pub fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.0 as usize]
     }
@@ -465,8 +494,17 @@ fn read_manifest(file: &SourceFile, text: &str, diags: &mut Vec<Diagnostic>) -> 
     m.verus_commit = verus[1].clone();
     if let Some(t) = section(diags, "dependencies") {
         for (k, v) in t.iter() {
-            m.dependencies
-                .push((k.get_ref().to_string(), value(v.get_ref())));
+            let name = k.get_ref().to_string();
+            // std などの名前の依存クレートは、`::core::..` や `use core::..` を依存クレートに向ける
+            // （#49。`.eyk` の改名の拒否（#16 の既定）と同じ名前）。
+            if RESERVED_DEPENDENCY_NAMES.contains(&name.replace('-', "_").as_str()) {
+                push(
+                    diags,
+                    at(k.span()),
+                    CheckMsg::ReservedDependency { name: name.clone() },
+                );
+            }
+            m.dependencies.push((name, value(v.get_ref())));
         }
     }
     for (name, what) in [
@@ -479,6 +517,24 @@ fn read_manifest(file: &SourceFile, text: &str, diags: &mut Vec<Diagnostic>) -> 
     }
     m
 }
+
+/// `Cargo.toml` の `[lib] name`（なければ `[package] name`）。読めなければ `None`。
+fn lib_name(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let table = DeTable::parse(&text).ok()?.into_inner();
+    let get = |sec: &str| match table.get(sec).map(|v| v.get_ref()) {
+        Some(DeValue::Table(t)) => match t.get("name").map(|v| v.get_ref()) {
+            Some(DeValue::String(s)) => Some(s.to_string()),
+            _ => None,
+        },
+        _ => None,
+    };
+    get("lib").or_else(|| get("package"))
+}
+
+/// 依存クレートに付けられない名前（`.eyk` の改名の拒否と同じ。`crates/ebykn_syntax/src/parse/item.rs` の
+/// `RESERVED_NAMES`）。
+const RESERVED_DEPENDENCY_NAMES: &[&str] = &["std", "core", "alloc", "vstd", "ebykn_prelude"];
 
 fn value(v: &DeValue<'_>) -> TomlValue {
     match v {

@@ -235,6 +235,39 @@ impl Run {
     }
 }
 
+/// 生成クレートの依存クレートが、コードで使われる名前（改名と `[lib] name` を反映した名前）。
+/// `cargo metadata --offline`（Verus の実行で依存は取ってある）の `resolve` から読む。読めなければ
+/// `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
+pub fn extern_crate_names(verus: &Verus, build: &Path) -> Option<Vec<String>> {
+    let out = Command::new("cargo")
+        .current_dir(build)
+        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+        .args(["metadata", "--format-version", "1", "--offline"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_extern_crate_names(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `cargo metadata` の JSON から、根のパッケージの依存の名前（`resolve.nodes[根].deps[].name`）を読む。
+pub fn parse_extern_crate_names(json: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let resolve = v.get("resolve")?;
+    let root = resolve.get("root")?.as_str()?;
+    let node = resolve
+        .get("nodes")?
+        .as_array()?
+        .iter()
+        .find(|n| n.get("id").and_then(|i| i.as_str()) == Some(root))?;
+    node.get("deps")?
+        .as_array()?
+        .iter()
+        .map(|d| d.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .collect()
+}
+
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let path = std::env::join_paths(std::iter::once(verus.dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -975,6 +1008,29 @@ mod tests {
         assert!(
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
+        );
+    }
+
+    /// `cargo metadata` の `resolve` から、根のパッケージの依存がコードで使われる名前を読む（#49）。
+    #[test]
+    fn reads_extern_crate_names_from_cargo_metadata() {
+        let json = r#"{"packages":[],"resolve":{"root":"path+file:///b#k@0.1.0","nodes":[
+            {"id":"path+file:///i#innocent@0.1.0","deps":[]},
+            {"id":"path+file:///b#k@0.1.0","deps":[
+                {"name":"clippy","pkg":"path+file:///i#innocent@0.1.0"},
+                {"name":"vstd","pkg":"registry+x#vstd@0.0.0"}]}]}}"#;
+        assert_eq!(
+            parse_extern_crate_names(json),
+            Some(vec!["clippy".to_string(), "vstd".to_string()])
+        );
+        // 根がない・読めないときは名前を決めない。
+        assert_eq!(parse_extern_crate_names(r#"{"resolve":null}"#), None);
+        assert_eq!(parse_extern_crate_names("not json"), None);
+        assert_eq!(
+            parse_extern_crate_names(
+                r#"{"resolve":{"root":"a","nodes":[{"id":"a","deps":[{"pkg":"x"}]}]}}"#
+            ),
+            None
         );
     }
 

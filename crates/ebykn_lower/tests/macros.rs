@@ -164,3 +164,96 @@ fn each_macro_is_recorded_once() {
         assert_eq!(macros(src).len(), 1, "{:?}\n---\n{src}", macros(src));
     }
 }
+
+/// `extern` ブロックの中の宣言に付いたマクロも記録する（PR #57 のレビューの N1）。
+#[test]
+fn macros_on_foreign_items_are_recorded() {
+    records(
+        "unsafe extern \"C\" {\n    #[a::b]\n    pub safe fn abs(x: i32) -> i32;\n}",
+        A,
+        "a::b",
+        "safe fn abs (x : i32) -> i32 in single",
+    );
+    assert!(
+        macros("unsafe extern \"C\" { #[link_name = \"abs\"] pub safe fn abs(x: i32) -> i32; }")
+            .is_empty()
+    );
+}
+
+/// `Ebykn.toml` の依存クレートの名前が判定に届く（PR #57 のレビューの S2、B3）。`clippy` という名前の
+/// 依存クレートがあれば、`#[clippy::x]` はそのクレートのマクロになる。
+#[test]
+fn dependency_names_reach_the_classification() {
+    use ebykn_check::project::TomlValue;
+    let src = "#[clippy::zero]\npub fn one() -> u32 { 1 }\n#[derive(::core::clone::Clone)]\npub struct S {}\n";
+    let lower_with = |deps: Vec<(String, TomlValue)>, crates: Option<&[String]>| {
+        let (mut p, d) = project::single(src);
+        assert!(d.is_empty(), "{d:?}");
+        p.manifest.dependencies = deps;
+        let c = ebykn_check::check(&p);
+        ebykn_lower::lower_with_crates(&p, &c, crates)
+            .unwrap()
+            .macros
+            .into_iter()
+            .map(|m| m.path)
+            .collect::<Vec<_>>()
+    };
+    // 依存がなければ、どちらもツールの属性と std の derive。
+    assert!(lower_with(vec![], None).is_empty());
+    // 改名で `clippy` という名前にした依存。
+    let renamed = vec![(
+        "clippy".to_string(),
+        TomlValue::Table(vec![
+            ("path".into(), TomlValue::Str("x".into())),
+            ("package".into(), TomlValue::Str("x".into())),
+        ]),
+    )];
+    assert_eq!(lower_with(renamed, None), ["clippy::zero"]);
+    // registry の依存（`[lib] name` が分からない）なら、どちらも前提として出す。
+    let registry = vec![("serde".to_string(), TomlValue::Str("1".into()))];
+    assert_eq!(
+        lower_with(registry.clone(), None),
+        ["clippy::zero", "::core::clone::Clone"]
+    );
+    // `verify` が `cargo metadata` で名前を確定したら、その名前で決め直す。
+    assert!(lower_with(registry.clone(), Some(&["serde".to_string()])).is_empty());
+    assert_eq!(
+        lower_with(registry, Some(&["serde".to_string(), "core".to_string()])),
+        ["::core::clone::Clone"]
+    );
+}
+
+/// path の依存の `[lib] name` を読む（`innocent` の `[lib] name = "clippy"`）。
+#[test]
+fn path_dependencies_are_used_by_their_lib_name() {
+    let dir = std::env::temp_dir().join(format!("ebykn-libname-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("innocent")).unwrap();
+    let pin = ebykn_check::project::single("").0.manifest;
+    std::fs::write(
+        dir.join("Ebykn.toml"),
+        format!(
+            "[package]\nname = \"k\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[verus]\nrelease = \"{}\"\ncommit = \"{}\"\n\n[dependencies]\ninnocent = {{ path = \"innocent\" }}\n",
+            pin.verus_release, pin.verus_commit
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("innocent/Cargo.toml"),
+        "[package]\nname = \"innocent\"\nversion = \"0.1.0\"\n\n[lib]\nname = \"clippy\"\nproc-macro = true\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/lib.eyk"),
+        "#[clippy::zero]\npub fn one() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    let (p, d) = project::load(&dir);
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(d.is_empty(), "{d:?}");
+    let paths: Vec<String> = out.unwrap().macros.into_iter().map(|m| m.path).collect();
+    assert_eq!(paths, ["clippy::zero"]);
+}

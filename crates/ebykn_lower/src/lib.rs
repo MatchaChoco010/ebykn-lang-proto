@@ -162,22 +162,10 @@ impl<'a> Cx<'a> {
         self.record_macros(found, item);
     }
 
-    /// トークン列のまま持つ項目（`use`、`union`、`extern crate` など）の版。属性はトークン列の先頭に
-    /// あるか、AST の属性に入っている。トークン列の先頭に属性があればそちらだけを見る（同じ属性を
-    /// 二度数えない）。
-    pub(crate) fn note_rust_item_macros(
-        &self,
-        attrs: &[ast::Attr],
-        ts: &TokenStream,
-        item: impl FnOnce() -> String,
-    ) {
-        let leading = matches!(ts.clone().into_iter().next(), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '#');
-        if leading {
-            let found = ebykn_syntax::macros::external_macros_in_tokens(ts, self.bindings);
-            self.record_macros(found, item);
-        } else {
-            self.note_macros(attrs, item);
-        }
+    /// トークン列の先頭に属性が並ぶ宣言（`extern` ブロックの中の宣言。AST を持たない）の版。
+    pub(crate) fn note_macros_in_tokens(&self, ts: &TokenStream, item: impl FnOnce() -> String) {
+        let found = ebykn_syntax::macros::external_macros_in_tokens(ts, self.bindings);
+        self.record_macros(found, item);
     }
 
     fn record_macros(
@@ -234,17 +222,32 @@ pub(crate) enum Piece {
 
 /// プロジェクトを書き下す。検査が通っていること（エラーがないこと）が前提。
 pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
+    lower_with_crates(project, checked, None)
+}
+
+/// [`lower`] の、依存クレートがコードで使われる名前を外から与える版（`verify` が `cargo metadata`
+/// で取った名前。#49）。`None` なら `Ebykn.toml` と path の依存の `Cargo.toml` から決め、決められない
+/// ものがあれば、名前が分からないとして扱う（std のパスとツールの属性を前提として出す側に倒す）。
+pub fn lower_with_crates(
+    project: &Project,
+    checked: &Checked,
+    crates: Option<&[String]>,
+) -> Result<Output, String> {
     let report = RefCell::new(Report::default());
     let mut out = Output::default();
     // 名前を覆い隠す書き方（`use evil::Clone;`、同じ名前の依存クレート）を見分ける（#49）。
     let mut bindings = ebykn_syntax::macros::Bindings::default();
-    for (k, _) in &project.manifest.dependencies {
-        bindings.add_crate(k);
+    let (names, known) = project.dependency_crate_names();
+    for n in names.iter().chain(crates.into_iter().flatten()) {
+        bindings.add_crate(n);
+    }
+    if !known && crates.is_none() {
+        bindings.crate_names_unknown();
     }
     for m in &project.modules {
-        if let Ok(ts) = TokenStream::from_str(&project.file(m.file).text) {
-            bindings.scan(&ts);
-        }
+        let ts = TokenStream::from_str(&project.file(m.file).text)
+            .map_err(|e| format!("{}: トークンに分けられません（{e}）", m.rel))?;
+        bindings.scan(&ts);
     }
     for m in &project.modules {
         let Some(ast) = project.ast(m.file) else {

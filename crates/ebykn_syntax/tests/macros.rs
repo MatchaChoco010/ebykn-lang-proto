@@ -7,16 +7,21 @@
 use std::str::FromStr as _;
 
 use ebykn_syntax::macros::{
-    BUILTIN_ATTRS, Bindings, EBYKN_ATTRS, ExternalMacro, MacroKind, PRELUDE_ATTR_MACROS,
-    STD_DERIVES, TOOL_NAMESPACES, external_macros_in_tokens,
+    BUILTIN_ATTRS, Bindings, ExternalMacro, MacroKind, PRELUDE_ATTR_MACROS, STD_DERIVES,
+    TOOL_NAMESPACES, external_macros_in_tokens,
 };
 use proc_macro2::TokenStream;
 
-/// `src` 全体から束縛を集め（`deps` は依存クレート）、`attrs`（項目の前に並ぶ属性）を判定する。
+/// `src` 全体から束縛を集め（`deps` は依存クレートがコードで使われる名前。`*` は「すべては分からない」）、
+/// `attrs`（項目の前に並ぶ属性）を判定する。
 fn found(src: &str, attrs: &str, deps: &[&str]) -> Vec<ExternalMacro> {
     let mut b = Bindings::default();
     for d in deps {
-        b.add_crate(d);
+        if *d == "*" {
+            b.crate_names_unknown();
+        } else {
+            b.add_crate(d);
+        }
     }
     b.scan(&TokenStream::from_str(src).unwrap_or_else(|e| panic!("{e}: {src}")));
     let ts = TokenStream::from_str(&format!("{attrs} pub struct S {{}}")).unwrap();
@@ -57,8 +62,6 @@ const STD_DERIVE_OK: &[(&str, &str)] = &[
     ("use std::m::NAME;", "#[derive(NAME)]"),
     ("use core::{m::NAME};", "#[derive(NAME)]"),
     ("use foo::NAME as Other;", "#[derive(NAME)]"),
-    // `mod core` があっても、先頭の `::` はクレートの名前に決まる。
-    ("mod core {}", "#[derive(::core::m::NAME)]"),
 ];
 
 /// 前提として出す綴り（パスは `PATH`）。
@@ -81,6 +84,48 @@ const STD_DERIVE_LISTED: &[(&str, &str, &str)] = &[
         "core::NAME",
     ),
     ("mod m { mod std {} }", "#[derive(std::NAME)]", "std::NAME"),
+    // 先頭の `::` でも、同じ名前を束縛していれば std を指すと言えない（PR #57 のレビューの B3）。
+    (
+        "mod core {}",
+        "#[derive(::core::m::NAME)]",
+        "::core::m::NAME",
+    ),
+];
+
+/// 依存クレートの名前で std の derive と数えなくなる綴り（`deps`、`src`、属性、パス）。`*` は名前が
+/// 分からない。
+type ByCrate = (
+    &'static [&'static str],
+    &'static str,
+    &'static str,
+    &'static str,
+);
+const STD_DERIVE_BY_CRATE: &[ByCrate] = &[
+    // `core` という名前の依存クレート（`[lib] name = "core"` など）。
+    (
+        &["core"],
+        "",
+        "#[derive(::core::clone::NAME)]",
+        "::core::clone::NAME",
+    ),
+    (&["core"], "", "#[derive(core::NAME)]", "core::NAME"),
+    (
+        &["core"],
+        "use core::clone::NAME;",
+        "#[derive(NAME)]",
+        "NAME",
+    ),
+    (
+        &["core"],
+        "use core::{clone::NAME};",
+        "#[derive(NAME)]",
+        "NAME",
+    ),
+    (&["std"], "use std::m::NAME;", "#[derive(NAME)]", "NAME"),
+    // 名前が分からなければ、std のパスも std から取り込んだ名前も数えない。
+    (&["*"], "", "#[derive(::core::m::NAME)]", "::core::m::NAME"),
+    (&["*"], "", "#[derive(std::NAME)]", "std::NAME"),
+    (&["*"], "use std::m::NAME;", "#[derive(NAME)]", "NAME"),
 ];
 
 #[test]
@@ -102,8 +147,20 @@ fn every_std_derive_is_classified_in_every_spelling() {
             );
             tried += 1;
         }
+        for (deps, src, attrs, path) in STD_DERIVE_BY_CRATE {
+            listed(
+                &fill(src),
+                &fill(attrs),
+                deps,
+                MacroKind::Derive,
+                &fill(path),
+            );
+            tried += 1;
+        }
+        // 裸の名前の derive は、依存クレートの名前では覆い隠せない（名前空間が違う）。
+        none("", &fill("#[derive(NAME)]"), &["*", "core"]);
     }
-    assert!(tried >= 9 * 26, "{tried}");
+    assert!(tried >= 9 * 33, "{tried}");
 }
 
 #[test]
@@ -134,12 +191,8 @@ fn other_derives_are_listed() {
 }
 
 #[test]
-fn builtin_and_ebykn_attributes_are_not_listed() {
-    for name in BUILTIN_ATTRS
-        .iter()
-        .chain(EBYKN_ATTRS)
-        .chain(PRELUDE_ATTR_MACROS)
-    {
+fn builtin_attributes_are_not_listed() {
+    for name in BUILTIN_ATTRS.iter().chain(PRELUDE_ATTR_MACROS) {
         none("", &format!("#[{name}]"), &[]);
         // `derive` の引数は derive のパス（std の derive を入れる）。
         let arg = if *name == "derive" { "Clone" } else { "x" };
@@ -152,6 +205,25 @@ fn builtin_and_ebykn_attributes_are_not_listed() {
         none("", &format!("#[{ns}::skip]"), &[]);
         none("", &format!("#[{ns}::a::b(c)]"), &[]);
     }
+    // std のパスの derive も derive（PR #57 のレビューの N2）。
+    none("", "#[core::prelude::v1::derive(Clone)]", &[]);
+    listed(
+        "",
+        "#[core::prelude::v1::derive(evil::X)]",
+        &[],
+        MacroKind::Derive,
+        "evil::X",
+    );
+}
+
+/// `#[r#override]` は利用者が束縛した名前（素の `#[override]` は構文解析が読めない）。
+/// `#[feature]` は組み込みとして数えない（PR #57 のレビューの B2、B1）。
+#[test]
+fn override_and_feature_are_listed() {
+    for src in ["use evil::zero as r#override;", ""] {
+        listed(src, "#[r#override]", &[], MacroKind::Attribute, "override");
+    }
+    listed("", "#[feature(x)]", &[], MacroKind::Attribute, "feature");
 }
 
 /// 名前を覆い隠せる組み込み（std の prelude のマクロ）を、覆い隠す綴り。
@@ -229,6 +301,8 @@ fn tool_namespaces_shadowed_by_a_crate_name_are_listed() {
             MacroKind::Attribute,
             &path,
         );
+        // 依存クレートの名前が分からなければ、ツールの属性として数えない。
+        listed("", &attrs, &["*"], MacroKind::Attribute, &path);
         // 先頭の `::` はクレートの名前。
         listed(
             "",

@@ -228,3 +228,94 @@ fn file_level_cfg_gates_the_module() {
     assert_eq!(d.len(), 1, "{d:?}");
     assert!(d[0].contains("`m::requires(..)` is Verus syntax"), "{d:?}");
 }
+
+/// std などの名前の依存クレートは書けない（#49。`::core::..` や `use core::..` が依存クレートを指す）。
+#[test]
+fn rejects_dependencies_named_like_std() {
+    for name in [
+        "std",
+        "core",
+        "alloc",
+        "vstd",
+        "ebykn_prelude",
+        "ebykn-prelude",
+    ] {
+        let t = project(
+            &format!("dep-{name}"),
+            &[
+                (
+                    "Ebykn.toml",
+                    &format!(
+                        "{MANIFEST}\n[dependencies]\n{name} = {{ path = \"../x\", package = \"x\" }}\n"
+                    ),
+                ),
+                ("src/lib.eyk", ""),
+            ],
+        );
+        let d = diags(&t.0);
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert!(
+            d[0].contains("E0002") && d[0].contains(&format!("dependency `{name}`")),
+            "{d:?}"
+        );
+    }
+}
+
+/// 依存クレートがコードで使われる名前：改名は鍵、path の依存は `[lib] name`（なければ
+/// `[package] name`）。registry の依存と読めない `Cargo.toml` があれば、すべては分からない（#49）。
+#[test]
+fn reads_the_names_dependencies_are_used_by() {
+    let t = project(
+        "names",
+        &[
+            (
+                "Ebykn.toml",
+                &format!(
+                    "{MANIFEST}\n[dependencies]\ninnocent = {{ path = \"innocent\" }}\nplain = {{ path = \"plain\" }}\nren = {{ path = \"innocent\", package = \"innocent\" }}\n"
+                ),
+            ),
+            ("src/lib.eyk", ""),
+            (
+                "innocent/Cargo.toml",
+                "[package]\nname = \"innocent\"\nversion = \"0.1.0\"\n\n[lib]\nname = \"clippy\"\nproc-macro = true\n",
+            ),
+            (
+                "plain/Cargo.toml",
+                "[package]\nname = \"plain-crate\"\nversion = \"0.1.0\"\n",
+            ),
+        ],
+    );
+    let (p, d) = load(&t.0);
+    assert!(d.is_empty(), "{d:?}");
+    let (names, known) = p.dependency_crate_names();
+    assert!(known);
+    for want in ["innocent", "clippy", "plain", "plain_crate", "ren"] {
+        assert!(names.iter().any(|n| n == want), "{want}: {names:?}");
+    }
+    // registry の依存の `[lib] name` は分からない。
+    let t = project(
+        "names-registry",
+        &[
+            (
+                "Ebykn.toml",
+                &format!("{MANIFEST}\n[dependencies]\nserde = \"1\"\n"),
+            ),
+            ("src/lib.eyk", ""),
+        ],
+    );
+    let (p, _) = load(&t.0);
+    assert!(!p.dependency_crate_names().1);
+    // 読めない `Cargo.toml` も。
+    let t = project(
+        "names-missing",
+        &[
+            (
+                "Ebykn.toml",
+                &format!("{MANIFEST}\n[dependencies]\ngone = {{ path = \"gone\" }}\n"),
+            ),
+            ("src/lib.eyk", ""),
+        ],
+    );
+    let (p, _) = load(&t.0);
+    assert!(!p.dependency_crate_names().1);
+}

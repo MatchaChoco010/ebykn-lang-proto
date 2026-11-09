@@ -9,7 +9,13 @@
 //! 判定は綴りによらない。パス付き（`::core::clone::Clone`）、`cfg_attr` の中、`unsafe(..)` の中を
 //! 見る。名前を覆い隠す書き方（`use evil::Clone;` の後の `#[derive(Clone)]`、`use evil::x as derive;`、
 //! 同じ名前の依存クレートがある `#[clippy::x]`）は、クレートのどこかでその名前を束縛していれば、
-//! std やツールの属性として数えない（[`Bindings`]）。
+//! std やツールの属性として数えない（[`Bindings`]）。依存クレートの名前（`[lib] name` を含む）が
+//! 分からないときも、std のパスとツールの属性を数えない（前提として出す側に倒す）。
+//!
+//! 項目の外側の属性のほかの位置（`#![..]`、文・式の属性）は、組み込みの属性だけを書ける
+//! （[`non_builtin`]。構文解析と検査が拒否する）。安定版の Rust はこれらの位置に属性マクロを
+//! 許さないが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と
+//! `RUSTC_BOOTSTRAP=1` で動くので、`verify` ではこれらの位置の属性マクロも効く（PR #57 のレビュー）。
 //!
 //! 名前で判定する属性を足すときは、この表に足す。綴りの総当たりのテスト
 //! （`crates/ebykn_syntax/tests/macros.rs`）が、表のすべての名前に自動で効く。書き下しが
@@ -21,7 +27,10 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use crate::ast;
 
-/// std の derive。Verus は `verus!` の中の std の derive が作る impl を検証する（#16 の調査）。
+/// std の derive。前提として出さない。固定した Verus は derive した `Clone` の impl だけを検証し
+/// （`func-details` に出る）、ほかの impl は検証しないが、どれにも仕様がないので、verified なコードは
+/// その振る舞いに頼れない（`a == b` の結果も `S::default()` の値も分からない。
+/// `tests/verus-probes/std_derive_no_spec.rs`）。std の derive が作るのは、std が書いた impl だけ。
 /// 裸の名前か、`std::` / `core::` から始まるパスで書いたものだけを std の derive として数える。
 pub const STD_DERIVES: &[&str] = &[
     "Clone",
@@ -94,8 +103,7 @@ pub const BUILTIN_ATTRS: &[&str] = &[
     // Runtime（`global_allocator` は [`PRELUDE_ATTR_MACROS`]）
     "panic_handler",
     "windows_subsystem",
-    // Features
-    "feature",
+    // Features（`feature` は入れない。`#![feature]` は `.eyk` に書けない）
     // Type system
     "non_exhaustive",
     // Debugger
@@ -113,9 +121,9 @@ pub const PRELUDE_ATTR_MACROS: &[&str] = &["derive", "test", "global_allocator"]
 /// クレートで同じ名前を束縛していないときだけツールの属性として数える。
 pub const TOOL_NAMESPACES: &[&str] = &["clippy", "rustfmt", "diagnostic", "miri", "rust_analyzer"];
 
-/// Ebykn が認識する属性で、Rust の組み込みでないもの（仕様 §4。`#[test]` は上の表、証明の属性は
-/// 構文解析が `.eyk` で拒否する）。
-pub const EBYKN_ATTRS: &[&str] = &["override"];
+// Ebykn が認識する属性のうち、`#[test]` は上の表にある。証明の属性は構文解析が `.eyk` で拒否する。
+// `#[override]` は `override` が予約語なので構文解析が読めず（E0001）、rustc に届く `#[r#override]` は
+// 利用者が束縛した名前（`use evil::x as r#override;`）なので、外のマクロとして数える。
 
 /// 手続きマクロの種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -140,17 +148,37 @@ pub struct ExternalMacro {
 #[derive(Debug, Clone, Default)]
 pub struct Bindings {
     names: BTreeSet<String>,
+    /// `std` / `core` / `alloc` から始まる `use` の、改名しない葉（根の名前、葉の名前）。根の名前を
+    /// 束縛していれば（`core` という名前の依存クレートなど）、葉も束縛として数える。
+    std_leaves: Vec<(String, String)>,
+    /// 依存クレートの名前が分からない（[`Bindings::crate_names_unknown`]）。
+    unknown_crates: bool,
 }
 
 impl Bindings {
     /// 束縛している名前か。
     pub fn binds(&self, name: &str) -> bool {
         self.names.contains(name)
+            || self
+                .std_leaves
+                .iter()
+                .any(|(root, leaf)| leaf == name && self.root_shadowed(root))
     }
 
-    /// 依存クレートの名前（`Ebykn.toml` の `[dependencies]` の鍵。`-` は `_`）を足す。
+    /// `std` / `core` / `alloc` の名前が、std のクレートを指すと言えないか。
+    fn root_shadowed(&self, root: &str) -> bool {
+        self.unknown_crates || self.names.contains(root)
+    }
+
+    /// 依存クレートがコードで使われる名前（`-` は `_`）を足す。
     pub fn add_crate(&mut self, name: &str) {
         self.names.insert(name.replace('-', "_"));
+    }
+
+    /// 依存クレートがコードで使われる名前を、すべては決められなかった（`[lib] name` を読めない
+    /// など）。std のパスとツールの属性を、std やツールのものとして数えなくなる。
+    pub fn crate_names_unknown(&mut self) {
+        self.unknown_crates = true;
     }
 
     /// `.eyk` のトークン列（ファイル全体）から、束縛する名前を集める。
@@ -173,8 +201,8 @@ impl Bindings {
                         k += 1;
                     }
                     let root = ident(tts.get(k));
-                    let std_root = matches!(root.as_deref(), Some("std" | "core" | "alloc"));
-                    self.use_tree(&tts[i + 1..end], std_root, None);
+                    let std_root = root.filter(|r| matches!(r.as_str(), "std" | "core" | "alloc"));
+                    self.use_tree(&tts[i + 1..end], std_root.as_deref(), None);
                     i = end;
                 }
                 TokenTree::Ident(id) if id == "mod" => {
@@ -201,7 +229,8 @@ impl Bindings {
 
     /// `use` の木（`use` と `;` の間）の葉の名前を集める。`parent` は `{ }` のグループの直前の名前
     /// （`use a::b::{self}` の `b`）。
-    fn use_tree(&mut self, tts: &[TokenTree], std_root: bool, parent: Option<String>) {
+    fn use_tree(&mut self, tts: &[TokenTree], std_root: Option<&str>, parent: Option<String>) {
+        let std_root = std_root.map(str::to_string);
         let prev_ident = |i: usize| i.checked_sub(1).and_then(|j| ident(tts.get(j)));
         for (i, tt) in tts.iter().enumerate() {
             match tt {
@@ -216,7 +245,12 @@ impl Bindings {
                     }
                     // 葉（木の終わりか `,` の前）。`as` の前は元の名前で、束縛しない。
                     let leaf = tts.get(i + 1).is_none() || punct(tts.get(i + 1), ',');
-                    if !leaf || std_root {
+                    if !leaf {
+                        continue;
+                    }
+                    if let Some(root) = &std_root {
+                        // 根が std を指すなら std の項目そのもの。根を束縛していれば数える（`binds`）。
+                        self.std_leaves.push((root.clone(), n));
                         continue;
                     }
                     if n == "self" {
@@ -228,7 +262,7 @@ impl Bindings {
                 }
                 TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
                     let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                    self.use_tree(&inner, std_root, prev_ident(i.saturating_sub(2)));
+                    self.use_tree(&inner, std_root.as_deref(), prev_ident(i.saturating_sub(2)));
                 }
                 _ => {}
             }
@@ -333,8 +367,8 @@ pub fn external_macros(a: &ast::Attr, b: &Bindings) -> Vec<ExternalMacro> {
     out
 }
 
-/// トークン列の先頭に並ぶ外側の属性（`#[..]`）が持ち込む手続きマクロ。AST が属性を
-/// トークン列のまま持つ項目（`use`、`union`、`extern crate` など）に使う。
+/// トークン列の先頭に並ぶ外側の属性（`#[..]`）が持ち込む手続きマクロ。AST を持たない宣言
+/// （`extern` ブロックの中の宣言）に使う。
 pub fn external_macros_in_tokens(ts: &TokenStream, b: &Bindings) -> Vec<ExternalMacro> {
     let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
     let mut out = Vec::new();
@@ -381,7 +415,9 @@ fn classify(m: &Meta, b: &Bindings, out: &mut Vec<ExternalMacro>) {
         }
         return;
     }
-    if single && first == "derive" && !b.binds("derive") {
+    // `std::..::derive` / `core::..::derive` も derive（`core::prelude::v1::derive`）。
+    let derive_path = !single && m.segments.last().is_some_and(|l| l == "derive") && std_path(m, b);
+    if single && first == "derive" && !b.binds("derive") || derive_path {
         let Some(inner) = paren_inner(&m.args) else {
             return;
         };
@@ -401,11 +437,9 @@ fn classify(m: &Meta, b: &Bindings, out: &mut Vec<ExternalMacro>) {
         return;
     }
     let builtin = if single {
-        BUILTIN_ATTRS.contains(&first)
-            || EBYKN_ATTRS.contains(&first)
-            || PRELUDE_ATTR_MACROS.contains(&first) && !b.binds(first)
+        BUILTIN_ATTRS.contains(&first) || PRELUDE_ATTR_MACROS.contains(&first) && !b.binds(first)
     } else {
-        !m.leading_colon && TOOL_NAMESPACES.contains(&first) && !b.binds(first)
+        !m.leading_colon && TOOL_NAMESPACES.contains(&first) && !b.binds(first) && !b.unknown_crates
     };
     if !builtin {
         out.push(ExternalMacro {
@@ -415,9 +449,8 @@ fn classify(m: &Meta, b: &Bindings, out: &mut Vec<ExternalMacro>) {
     }
 }
 
-/// std の derive か。裸の名前は、クレートで同じ名前を束縛していないとき。パスは `std` / `core` から
-/// 始まり（先頭の `::` があれば外のクレートの名前に決まる。なければ同じ名前の `mod` を束縛して
-/// いないとき）、最後の名前が [`STD_DERIVES`] にあるとき。
+/// std の derive か。裸の名前は、クレートで同じ名前を束縛していないとき。パスは [`std_path`] で、
+/// 最後の名前が [`STD_DERIVES`] にあるとき。
 fn std_derive(d: &Meta, b: &Bindings) -> bool {
     let last = d.segments.last().expect("空でない").as_str();
     if !STD_DERIVES.contains(&last) {
@@ -426,6 +459,55 @@ fn std_derive(d: &Meta, b: &Bindings) -> bool {
     if d.segments.len() == 1 && !d.leading_colon {
         return !b.binds(last);
     }
+    std_path(d, b)
+}
+
+/// `std::..` / `core::..`（先頭の `::` を含む）のパスで、その名前が std のクレートを指すと言えるか。
+/// 先頭の `::` があっても、同じ名前の依存クレート（`[lib] name = "core"` など）を指しうるので、
+/// クレートで束縛しておらず、依存クレートの名前がすべて分かっているときだけ。
+fn std_path(d: &Meta, b: &Bindings) -> bool {
     let first = d.segments[0].as_str();
-    d.segments.len() > 1 && matches!(first, "std" | "core") && (d.leading_colon || !b.binds(first))
+    d.segments.len() > 1 && matches!(first, "std" | "core") && !b.root_shadowed(first)
+}
+
+/// 項目の外側の属性のほかの位置（`#![..]`、文・式・`let`・match の腕）に書いた属性のうち、
+/// Rust の組み込みの属性（[`BUILTIN_ATTRS`]）でないものの書き方。`cfg_attr(..)` と `unsafe(..)` の
+/// 中も見る。なければ `None`。安定版の Rust はこれらの位置に属性マクロと `#![feature]` を許さない
+/// （内側の属性マクロも安定版では使えない）。ツールの属性（`#![rustfmt::skip]`）と std の prelude の
+/// マクロ（`test`、`derive`）は、同じ名前の依存クレートや `use` で覆い隠せるので、ここでは組み込みと
+/// して数えない。
+pub fn non_builtin(a: &ast::Attr) -> Option<String> {
+    let m = Meta {
+        leading_colon: a.path.leading_colon,
+        segments: a
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.name.clone())
+            .collect(),
+        args: a.args.clone(),
+    };
+    non_builtin_meta(&m)
+}
+
+/// [`non_builtin`] の、属性の中身（`#[..]` の括弧の中）のトークン列の版。読めなければその全体。
+pub fn non_builtin_in_tokens(body: &[TokenTree]) -> Option<String> {
+    match read_meta(body) {
+        Some(m) => non_builtin_meta(&m),
+        None => Some(body.iter().cloned().collect::<TokenStream>().to_string()),
+    }
+}
+
+fn non_builtin_meta(m: &Meta) -> Option<String> {
+    let first = m.segments[0].as_str();
+    let single = m.segments.len() == 1 && !m.leading_colon;
+    if single && (first == "cfg_attr" || first == "unsafe") {
+        let inner = paren_inner(&m.args)?;
+        let skip = usize::from(first == "cfg_attr");
+        return split_commas(&inner)
+            .iter()
+            .skip(skip)
+            .find_map(|p| non_builtin_in_tokens(p));
+    }
+    (!(single && BUILTIN_ATTRS.contains(&first))).then(|| m.written())
 }

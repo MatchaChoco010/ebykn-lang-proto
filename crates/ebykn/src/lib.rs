@@ -116,6 +116,23 @@ pub fn lower_report(report: &CheckReport) -> Option<Result<ebykn_lower::Output, 
     Some(ebykn_lower::lower(&report.project, checked))
 }
 
+/// [`lower_report`] の、依存クレートがコードで使われる名前を与える版（`verify` が `cargo metadata`
+/// で取った名前で、手続きマクロの前提の一覧を確定し直す。#49）。
+pub fn lower_report_with_crates(
+    report: &CheckReport,
+    crates: &[String],
+) -> Option<Result<ebykn_lower::Output, String>> {
+    if report.has_errors() {
+        return None;
+    }
+    let checked = report.checked.as_ref()?;
+    Some(ebykn_lower::lower_with_crates(
+        &report.project,
+        checked,
+        Some(crates),
+    ))
+}
+
 /// 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）。`init` が `Ebykn.toml` に書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerusPin {

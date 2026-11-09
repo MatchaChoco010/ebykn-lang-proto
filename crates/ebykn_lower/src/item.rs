@@ -221,15 +221,46 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
         ItemKind::Subset(t) => &t.ident,
         ItemKind::Const(c) => &c.ident,
         ItemKind::Static(s) => &s.ident,
-        // トークン列が属性を含むときと、AST の属性に入っているときがある。トークン列に先頭の属性が
-        // あればそちらだけを見る（同じ属性を二度数えない）。
+        // 属性は AST にもトークン列の先頭にもある。AST の属性を見る。`extern` ブロックの中の宣言は
+        // AST を持たないので、トークン列から宣言ごとの属性を見る（PR #57 のレビューの N1）。
         ItemKind::Use(tk) | ItemKind::Rust(tk) => {
-            cx.note_rust_item_macros(&item.attrs, &tk.tokens, || rust_item_name(cx, &tk.tokens));
+            cx.note_macros(&item.attrs, || rust_item_name(cx, &tk.tokens));
+            for decl in foreign_items(&tk.tokens) {
+                cx.note_macros_in_tokens(&decl, || rust_item_name(cx, &decl));
+            }
             return;
         }
         ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) => return,
     };
     cx.note_macros(&item.attrs, || cx.item_path(&name.name));
+}
+
+/// `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）なら、中の宣言ごとのトークン列。
+fn foreign_items(ts: &proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let is_extern = tts
+        .iter()
+        .any(|t| matches!(t, TokenTree::Ident(i) if i == "extern"))
+        && !tts
+            .iter()
+            .any(|t| matches!(t, TokenTree::Ident(i) if i == "crate"));
+    let Some(TokenTree::Group(g)) = tts.last() else {
+        return Vec::new();
+    };
+    if !is_extern || g.delimiter() != Delimiter::Brace {
+        return Vec::new();
+    }
+    let mut out = vec![proc_macro2::TokenStream::new()];
+    for t in g.stream() {
+        let end = matches!(&t, TokenTree::Punct(p) if p.as_char() == ';');
+        out.last_mut().expect("空でない").extend([t]);
+        if end {
+            out.push(proc_macro2::TokenStream::new());
+        }
+    }
+    out.retain(|d| !d.is_empty());
+    out
 }
 
 /// トークン列のまま持つ項目の表示：属性と可視性を除いた先頭（`union U`、`use a::b`）。
@@ -850,9 +881,7 @@ fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &
             TraitItemKind::LemmaFn(f) => {
                 c.note_macros(&ti.attrs, || c.item_path(&f.sig.ident.name))
             }
-            TraitItemKind::Rust(tk) => {
-                c.note_rust_item_macros(&ti.attrs, &tk.tokens, || rust_item_name(&c, &tk.tokens))
-            }
+            TraitItemKind::Rust(tk) => c.note_macros(&ti.attrs, || rust_item_name(&c, &tk.tokens)),
         }
         match &ti.kind {
             TraitItemKind::Fn(f) => {
