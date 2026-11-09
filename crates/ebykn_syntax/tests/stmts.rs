@@ -37,6 +37,46 @@ fn borrow_blocks() {
     rejects("fn f() { borrow r[p]; }", "E0001");
 }
 
+/// `take` / `put` / `borrow` の領域に `self` でない値の消去フィールドを書くと、領域は `self@x` か
+/// 領域変数だけと案内する（#84。「`;` が必要」では書き方が分からない）。
+#[test]
+fn region_statements_reject_erased_fields_of_other_values() {
+    let want = "1:14: E0001: syntax error: the region of `put` cannot be `t@nodes`; a region in `take` / `put` / `borrow` is `self@field` or a region variable. Bind the region to a variable first (`let mut nodes: Region<..> = Region::empty();`, or `let S { @nodes, .. } = t;`), write `put nodes[..]`, and pass it back in the struct literal `S { .., @nodes: nodes }`";
+    assert_eq!(
+        diags("fn f() { put t@nodes[r]; }"),
+        [format!("src/lib.eyk:{want}")]
+    );
+    rejects(
+        "fn f() { take t@nodes[r]; }",
+        "the region of `take` cannot be `t@nodes`",
+    );
+    rejects(
+        "fn f() { borrow t@nodes[r] { } }",
+        "the region of `borrow` cannot be `t@nodes`",
+    );
+    rejects(
+        "fn f() { borrow mut a.b@nodes[r] { } }",
+        "1:21: E0001: syntax error: the region of `borrow` cannot be `a.b@nodes`",
+    );
+    rejects(
+        "fn f() { let x = borrow t@nodes[r] { 1 }; }",
+        "the region of `borrow` cannot be `t@nodes`",
+    );
+    rejects(
+        "fn f() { take self.inner@nodes[r]; }",
+        "cannot be `self.inner@nodes`",
+    );
+    let ja = diags_in("fn f() { put t@nodes[r]; }", ebykn_syntax::diag::Lang::Ja);
+    assert!(
+        ja[0].contains("`put` の領域に `t@nodes` は書けません"),
+        "{ja:?}"
+    );
+    // 仕様どおりの領域と、同じ名前の識別子・消去フィールドの読みはそのまま。
+    assert_eq!(e("put self@nodes[r];"), "(put self@nodes[r])");
+    assert_eq!(e("put nodes[r];"), "(put nodes[r])");
+    assert!(diags("fn f() { let put = 1; let y = put; let z = t@nodes; }").is_empty());
+}
+
 #[test]
 fn spec_field_assignment() {
     assert_eq!(
