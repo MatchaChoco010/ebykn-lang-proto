@@ -1,0 +1,27 @@
+// 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（#49）。Ebykn は拒否せず、
+// verify の前提の一覧に `macro` の行を必ず出す。std の derive（Clone など）は Verus が検証するので出さない。
+
+pub trait One {
+    fn one() -> u32;
+}
+
+// derive が作る `impl One for S` は verus! の外の項目になる。get::<S>() はそれを前提に検証される。
+#[derive(Clone, Copy, ext_macros::One)]
+pub struct S {}
+
+pub fn get<T: One>() -> u32 {
+    T::one()
+}
+
+pub fn s_one() -> u32 {
+    get::<S>()
+}
+
+// 属性マクロは verus! が書き換えた後の関数を受け取る。Verus のときは 1 を返す関数を検証させ、
+// Verus なしのビルドでは 0 を返す関数に差し替える。verified と出るが、前提の一覧に `macro` の行が出る。
+#[ext_macros::zero]
+pub fn one() -> (r: u32)
+    ensures r == 1,
+{
+    1
+}

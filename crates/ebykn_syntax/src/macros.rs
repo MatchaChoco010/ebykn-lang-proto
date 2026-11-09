@@ -1,0 +1,431 @@
+//! 項目に付いた属性のうち、Verus が検証しない項目を作る手続きマクロを見分ける表（#49）。
+//!
+//! 依存クレートの derive や属性マクロは、`verus!` が書き換えた後のトークンを受け取り、Verus の印の
+//! ない項目（trait の impl、`fn`）を作ることがある。Verus はそうした項目を検証しないので、それを
+//! 前提に呼び出し側が verified になる（`tests/verus-probes/external_impl_of_spec_trait.rs`）。
+//! そこで、どの項目にどのマクロが付いているかを字句的に見て、`ebykn verify` の前提の一覧に出す
+//! （拒否はしない。Rust のクレートの資産を使えるようにするため）。
+//!
+//! 判定は綴りによらない。パス付き（`::core::clone::Clone`）、`cfg_attr` の中、`unsafe(..)` の中を
+//! 見る。名前を覆い隠す書き方（`use evil::Clone;` の後の `#[derive(Clone)]`、`use evil::x as derive;`、
+//! 同じ名前の依存クレートがある `#[clippy::x]`）は、クレートのどこかでその名前を束縛していれば、
+//! std やツールの属性として数えない（[`Bindings`]）。
+//!
+//! 名前で判定する属性を足すときは、この表に足す。綴りの総当たりのテスト
+//! （`crates/ebykn_syntax/tests/macros.rs`）が、表のすべての名前に自動で効く。書き下しが
+//! どの項目でも記録することは `crates/ebykn_lower/tests/macros.rs` が確かめる。
+
+use std::collections::BTreeSet;
+
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
+use crate::ast;
+
+/// std の derive。Verus は `verus!` の中の std の derive が作る impl を検証する（#16 の調査）。
+/// 裸の名前か、`std::` / `core::` から始まるパスで書いたものだけを std の derive として数える。
+pub const STD_DERIVES: &[&str] = &[
+    "Clone",
+    "Copy",
+    "Debug",
+    "PartialEq",
+    "Eq",
+    "Hash",
+    "Default",
+    "PartialOrd",
+    "Ord",
+];
+
+/// Rust の組み込みの属性（Rust リファレンスの Built-in attributes index）のうち、名前を覆い隠せない
+/// もの。`use` で同じ名前を取り込むと、rustc が曖昧さのエラー（E0659）にする（手元で確かめた）。
+pub const BUILTIN_ATTRS: &[&str] = &[
+    // Conditional compilation
+    "cfg",
+    "cfg_attr",
+    // Testing（`test` は [`PRELUDE_ATTR_MACROS`]）
+    "ignore",
+    "should_panic",
+    // Derive（`derive` は [`PRELUDE_ATTR_MACROS`]）
+    "automatically_derived",
+    // Macros
+    "macro_export",
+    "macro_use",
+    "proc_macro",
+    "proc_macro_derive",
+    "proc_macro_attribute",
+    // Diagnostics
+    "allow",
+    "expect",
+    "warn",
+    "deny",
+    "forbid",
+    "deprecated",
+    "must_use",
+    // ABI, linking, symbols, and FFI
+    "link",
+    "link_name",
+    "link_ordinal",
+    "no_link",
+    "repr",
+    "crate_type",
+    "no_main",
+    "export_name",
+    "link_section",
+    "no_mangle",
+    "used",
+    "crate_name",
+    // Code generation
+    "inline",
+    "cold",
+    "naked",
+    "no_builtins",
+    "target_feature",
+    "track_caller",
+    "instruction_set",
+    // Documentation
+    "doc",
+    // Preludes
+    "no_std",
+    "no_implicit_prelude",
+    // Modules
+    "path",
+    // Limits
+    "recursion_limit",
+    "type_length_limit",
+    // Runtime（`global_allocator` は [`PRELUDE_ATTR_MACROS`]）
+    "panic_handler",
+    "windows_subsystem",
+    // Features
+    "feature",
+    // Type system
+    "non_exhaustive",
+    // Debugger
+    "debugger_visualizer",
+    "collapse_debuginfo",
+];
+
+/// Rust の組み込みの属性のうち、std の prelude のマクロで、`use` で名前を覆い隠せるもの
+/// （`use evil::x as derive;` の後の `#[derive(..)]` は evil の属性マクロになる。手元で確かめた）。
+/// クレートで同じ名前を束縛していなければ組み込みとして数える。
+pub const PRELUDE_ATTR_MACROS: &[&str] = &["derive", "test", "global_allocator"];
+
+/// rustc が認識するツールの属性の名前空間（Rust リファレンスの Tool attributes）。同じ名前の
+/// 依存クレートがあると、`#[clippy::x]` はそのクレートのマクロになる（手元で確かめた）ので、
+/// クレートで同じ名前を束縛していないときだけツールの属性として数える。
+pub const TOOL_NAMESPACES: &[&str] = &["clippy", "rustfmt", "diagnostic", "miri", "rust_analyzer"];
+
+/// Ebykn が認識する属性で、Rust の組み込みでないもの（仕様 §4。`#[test]` は上の表、証明の属性は
+/// 構文解析が `.eyk` で拒否する）。
+pub const EBYKN_ATTRS: &[&str] = &["override"];
+
+/// 手続きマクロの種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MacroKind {
+    /// `#[derive(path)]` の `path`。
+    Derive,
+    /// 属性マクロ `#[path]`。
+    Attribute,
+}
+
+/// 項目に付いた、std でも組み込みでもない手続きマクロ。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExternalMacro {
+    pub kind: MacroKind,
+    /// 書かれたとおりのパス（`serde::Serialize`、`::tokio::main`）。
+    pub path: String,
+}
+
+/// クレートのどこかで束縛している名前（`use` の葉と改名、`mod`、`extern crate`、依存クレート）。
+/// 名前を覆い隠す書き方を見分けるために使う。字句的に集めるので、どのモジュールかは区別しない
+/// （区別しないぶん、前提として出す側に倒れる）。
+#[derive(Debug, Clone, Default)]
+pub struct Bindings {
+    names: BTreeSet<String>,
+}
+
+impl Bindings {
+    /// 束縛している名前か。
+    pub fn binds(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    /// 依存クレートの名前（`Ebykn.toml` の `[dependencies]` の鍵。`-` は `_`）を足す。
+    pub fn add_crate(&mut self, name: &str) {
+        self.names.insert(name.replace('-', "_"));
+    }
+
+    /// `.eyk` のトークン列（ファイル全体）から、束縛する名前を集める。
+    ///
+    /// - `use` の葉と改名の名前。ただし `std` / `core` / `alloc` から始まる `use` で、改名しない葉は
+    ///   std の項目そのものなので数えない。glob（`*`）は数えない（std の prelude の名前とぶつかると
+    ///   rustc が曖昧さのエラーにする。手元で確かめた）。
+    /// - `mod` の名前、`extern crate` の名前（改名があれば改名した名前）。
+    pub fn scan(&mut self, ts: &TokenStream) {
+        let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+        let mut i = 0;
+        while i < tts.len() {
+            match &tts[i] {
+                TokenTree::Ident(id) if id == "use" => {
+                    let end = (i + 1..tts.len())
+                        .find(|&j| punct(tts.get(j), ';'))
+                        .unwrap_or(tts.len());
+                    let mut k = i + 1;
+                    while punct(tts.get(k), ':') {
+                        k += 1;
+                    }
+                    let root = ident(tts.get(k));
+                    let std_root = matches!(root.as_deref(), Some("std" | "core" | "alloc"));
+                    self.use_tree(&tts[i + 1..end], std_root, None);
+                    i = end;
+                }
+                TokenTree::Ident(id) if id == "mod" => {
+                    if let Some(n) = ident(tts.get(i + 1)) {
+                        self.names.insert(n);
+                    }
+                }
+                TokenTree::Ident(id)
+                    if id == "crate" && ident_is(tts.get(i.wrapping_sub(1)), "extern") =>
+                {
+                    let renamed = ident_is(tts.get(i + 2), "as")
+                        .then(|| ident(tts.get(i + 3)))
+                        .flatten();
+                    if let Some(n) = renamed.or_else(|| ident(tts.get(i + 1))) {
+                        self.names.insert(n);
+                    }
+                }
+                TokenTree::Group(g) => self.scan(&g.stream()),
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// `use` の木（`use` と `;` の間）の葉の名前を集める。`parent` は `{ }` のグループの直前の名前
+    /// （`use a::b::{self}` の `b`）。
+    fn use_tree(&mut self, tts: &[TokenTree], std_root: bool, parent: Option<String>) {
+        let prev_ident = |i: usize| i.checked_sub(1).and_then(|j| ident(tts.get(j)));
+        for (i, tt) in tts.iter().enumerate() {
+            match tt {
+                TokenTree::Ident(_) => {
+                    let Some(n) = ident(Some(tt)) else { continue };
+                    if prev_ident(i).as_deref() == Some("as") {
+                        // 改名した名前（`use x as Clone`）。std から始まっても数える。
+                        if n != "_" {
+                            self.names.insert(n);
+                        }
+                        continue;
+                    }
+                    // 葉（木の終わりか `,` の前）。`as` の前は元の名前で、束縛しない。
+                    let leaf = tts.get(i + 1).is_none() || punct(tts.get(i + 1), ',');
+                    if !leaf || std_root {
+                        continue;
+                    }
+                    if n == "self" {
+                        // `use a::b::{self}` は `b` を束縛する。
+                        self.names.extend(parent.clone());
+                    } else {
+                        self.names.insert(n);
+                    }
+                }
+                TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+                    let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                    self.use_tree(&inner, std_root, prev_ident(i.saturating_sub(2)));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn ident(tt: Option<&TokenTree>) -> Option<String> {
+    match tt {
+        Some(TokenTree::Ident(i)) => {
+            let s = i.to_string();
+            Some(s.strip_prefix("r#").unwrap_or(&s).to_string())
+        }
+        _ => None,
+    }
+}
+
+fn ident_is(tt: Option<&TokenTree>, k: &str) -> bool {
+    ident(tt).as_deref() == Some(k)
+}
+
+fn punct(tt: Option<&TokenTree>, c: char) -> bool {
+    matches!(tt, Some(TokenTree::Punct(p)) if p.as_char() == c)
+}
+
+/// 属性のパスと残り（`(..)` や `= ..`）。
+struct Meta {
+    leading_colon: bool,
+    segments: Vec<String>,
+    args: TokenStream,
+}
+
+impl Meta {
+    fn written(&self) -> String {
+        format!(
+            "{}{}",
+            if self.leading_colon { "::" } else { "" },
+            self.segments.join("::")
+        )
+    }
+}
+
+/// トークン列 `path args` を読む。パスが読めなければ `None`。
+fn read_meta(tts: &[TokenTree]) -> Option<Meta> {
+    let mut k = 0;
+    let leading_colon = punct(tts.first(), ':') && punct(tts.get(1), ':');
+    if leading_colon {
+        k = 2;
+    }
+    let mut segments = vec![ident(tts.get(k))?];
+    k += 1;
+    while punct(tts.get(k), ':') && punct(tts.get(k + 1), ':') {
+        segments.push(ident(tts.get(k + 2))?);
+        k += 3;
+    }
+    Some(Meta {
+        leading_colon,
+        segments,
+        args: tts[k..].iter().cloned().collect(),
+    })
+}
+
+/// 最上位の `,` で分ける。
+fn split_commas(ts: &TokenStream) -> Vec<Vec<TokenTree>> {
+    let mut out = vec![Vec::new()];
+    for tt in ts.clone() {
+        if punct(Some(&tt), ',') {
+            out.push(Vec::new());
+        } else {
+            out.last_mut().expect("空でない").push(tt);
+        }
+    }
+    out.retain(|x| !x.is_empty());
+    out
+}
+
+/// 括弧のグループの中身（`(..)` でなければ `None`）。
+fn paren_inner(ts: &TokenStream) -> Option<TokenStream> {
+    let mut it = ts.clone().into_iter();
+    match (it.next(), it.next()) {
+        (Some(TokenTree::Group(g)), None) if g.delimiter() == Delimiter::Parenthesis => {
+            Some(g.stream())
+        }
+        _ => None,
+    }
+}
+
+/// 項目に付いた属性（AST）が持ち込む、std でも組み込みでもない手続きマクロ。
+pub fn external_macros(a: &ast::Attr, b: &Bindings) -> Vec<ExternalMacro> {
+    let m = Meta {
+        leading_colon: a.path.leading_colon,
+        segments: a
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.name.clone())
+            .collect(),
+        args: a.args.clone(),
+    };
+    let mut out = Vec::new();
+    classify(&m, b, &mut out);
+    out
+}
+
+/// トークン列の先頭に並ぶ外側の属性（`#[..]`）が持ち込む手続きマクロ。AST が属性を
+/// トークン列のまま持つ項目（`use`、`union`、`extern crate` など）に使う。
+pub fn external_macros_in_tokens(ts: &TokenStream, b: &Bindings) -> Vec<ExternalMacro> {
+    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while punct(tts.get(i), '#') {
+        let Some(TokenTree::Group(g)) = tts.get(i + 1) else {
+            break;
+        };
+        if g.delimiter() != Delimiter::Bracket {
+            break;
+        }
+        let body: Vec<TokenTree> = g.stream().into_iter().collect();
+        match read_meta(&body) {
+            Some(m) => classify(&m, b, &mut out),
+            None => out.push(ExternalMacro {
+                kind: MacroKind::Attribute,
+                path: g.stream().to_string(),
+            }),
+        }
+        i += 2;
+    }
+    out
+}
+
+fn classify(m: &Meta, b: &Bindings, out: &mut Vec<ExternalMacro>) {
+    let first = m.segments[0].as_str();
+    let single = m.segments.len() == 1 && !m.leading_colon;
+    // 中の属性を読む組み込み（rustc は中の属性を展開する）。
+    if single && (first == "cfg_attr" || first == "unsafe") {
+        let Some(inner) = paren_inner(&m.args) else {
+            return;
+        };
+        let parts = split_commas(&inner);
+        // `cfg_attr` の最初の引数は条件。
+        let skip = usize::from(first == "cfg_attr");
+        for p in parts.iter().skip(skip) {
+            match read_meta(p) {
+                Some(im) => classify(&im, b, out),
+                None => out.push(ExternalMacro {
+                    kind: MacroKind::Attribute,
+                    path: p.iter().cloned().collect::<TokenStream>().to_string(),
+                }),
+            }
+        }
+        return;
+    }
+    if single && first == "derive" && !b.binds("derive") {
+        let Some(inner) = paren_inner(&m.args) else {
+            return;
+        };
+        for p in split_commas(&inner) {
+            match read_meta(&p) {
+                Some(d) if std_derive(&d, b) => {}
+                Some(d) => out.push(ExternalMacro {
+                    kind: MacroKind::Derive,
+                    path: d.written(),
+                }),
+                None => out.push(ExternalMacro {
+                    kind: MacroKind::Derive,
+                    path: p.iter().cloned().collect::<TokenStream>().to_string(),
+                }),
+            }
+        }
+        return;
+    }
+    let builtin = if single {
+        BUILTIN_ATTRS.contains(&first)
+            || EBYKN_ATTRS.contains(&first)
+            || PRELUDE_ATTR_MACROS.contains(&first) && !b.binds(first)
+    } else {
+        !m.leading_colon && TOOL_NAMESPACES.contains(&first) && !b.binds(first)
+    };
+    if !builtin {
+        out.push(ExternalMacro {
+            kind: MacroKind::Attribute,
+            path: m.written(),
+        });
+    }
+}
+
+/// std の derive か。裸の名前は、クレートで同じ名前を束縛していないとき。パスは `std` / `core` から
+/// 始まり（先頭の `::` があれば外のクレートの名前に決まる。なければ同じ名前の `mod` を束縛して
+/// いないとき）、最後の名前が [`STD_DERIVES`] にあるとき。
+fn std_derive(d: &Meta, b: &Bindings) -> bool {
+    let last = d.segments.last().expect("空でない").as_str();
+    if !STD_DERIVES.contains(&last) {
+        return false;
+    }
+    if d.segments.len() == 1 && !d.leading_colon {
+        return !b.binds(last);
+    }
+    let first = d.segments[0].as_str();
+    d.segments.len() > 1 && matches!(first, "std" | "core") && (d.leading_colon || !b.binds(first))
+}

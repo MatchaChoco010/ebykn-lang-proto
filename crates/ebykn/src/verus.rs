@@ -476,8 +476,25 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStatus {
     pub item: String,
-    /// [`decide`] の結果。
+    /// [`decide`] の結果。手続きマクロが付いた項目は `macro`（[`ItemStatus::via`]）。
     pub status: &'static str,
+    /// `status` が `macro` のとき、付いているマクロ（#49）。
+    pub via: Option<(ebykn_syntax::macros::MacroKind, String)>,
+}
+
+impl ItemStatus {
+    /// 一覧の 1 行の本体（`verified k::f`、`macro serde::Serialize derive on k::Foo`）。
+    pub fn line(&self) -> String {
+        match &self.via {
+            Some((ebykn_syntax::macros::MacroKind::Derive, p)) => {
+                format!("{} {p} derive on {}", self.status, self.item)
+            }
+            Some((ebykn_syntax::macros::MacroKind::Attribute, p)) => {
+                format!("{} {p} on {}", self.status, self.item)
+            }
+            None => format!("{} {}", self.status, self.item),
+        }
+    }
 }
 
 /// 一つの項目の事実。
@@ -606,6 +623,16 @@ pub fn statuses(
             out.push(ItemStatus {
                 item: item.clone(),
                 status: decide(facts),
+                via: None,
+            });
+        }
+        // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（`verus!` の外の項目に
+        // なる）。証明なしの前提として、同じ一覧に必ず出す（#49）。
+        for m in output.macros.iter().filter(|m| m.rel == f.rel) {
+            out.push(ItemStatus {
+                item: m.item.clone(),
+                status: "macro",
+                via: Some((m.kind, m.path.clone())),
             });
         }
     }
@@ -620,9 +647,9 @@ pub fn verus_name(item: &str) -> String {
     }
 }
 
-/// 証明なしの前提（`admit` / `unchecked` / `external`）か。
+/// 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）か。
 pub fn assumed(s: &ItemStatus) -> bool {
-    matches!(s.status, "admit" | "unchecked" | "external")
+    matches!(s.status, "admit" | "unchecked" | "external" | "macro")
 }
 
 /// `verify item..` で出す項目：指定した項目（パスかその末尾）と、証明なしの前提の全部（絞り込みに
@@ -654,7 +681,18 @@ pub fn status_json(
 ) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
-        .map(|i| serde_json::json!({"item": i.item, "status": i.status}))
+        .map(|i| match &i.via {
+            Some((kind, path)) => serde_json::json!({
+                "item": i.item,
+                "status": i.status,
+                "macro": path,
+                "kind": match kind {
+                    ebykn_syntax::macros::MacroKind::Derive => "derive",
+                    ebykn_syntax::macros::MacroKind::Attribute => "attribute",
+                },
+            }),
+            None => serde_json::json!({"item": i.item, "status": i.status}),
+        })
         .collect();
     let results = match summary {
         Summary::Ran { verified, errors } => {
@@ -697,7 +735,8 @@ pub fn status_json(
 pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) -> String {
     let mut s = String::new();
     for i in items {
-        s.push_str(&format!("{} {}\n", i.status, i.item));
+        s.push_str(&i.line());
+        s.push('\n');
     }
     match cheating {
         Cheating::Smuggled(v) => {
@@ -762,6 +801,7 @@ mod tests {
         let st = |item: &str, status: &'static str| ItemStatus {
             item: item.into(),
             status,
+            via: None,
         };
         let all = vec![
             st("g1::liar", "unchecked"),
@@ -868,6 +908,7 @@ mod tests {
             unchecked: vec![],
             external: vec![],
             verus_patterns: Default::default(),
+            macros: vec![],
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()
@@ -935,6 +976,76 @@ mod tests {
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
         );
+    }
+
+    /// 依存クレートの derive と属性マクロが付いた項目は、`macro` の前提として必ず出る（#49）。
+    #[test]
+    fn macro_uses_are_listed_as_assumptions() {
+        use ebykn_syntax::macros::MacroKind;
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![(1, 2, "k5::f".into()), (3, 4, "k5::one".into())],
+        }];
+        let mac = |item: &str, kind, path: &str| ebykn_lower::MacroUse {
+            item: item.into(),
+            kind,
+            path: path.into(),
+            rel: "src/lib.rs".into(),
+        };
+        let output = Output {
+            files: files.clone(),
+            macros: vec![
+                mac("k5::Foo", MacroKind::Derive, "serde::Serialize"),
+                mac("k5::one", MacroKind::Attribute, "tokio::main"),
+            ],
+            ..Default::default()
+        };
+        let checked: std::collections::BTreeSet<String> =
+            ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
+        let st = statuses(&files, &output, &[], Some(&checked), Some(0));
+        assert_eq!(
+            status_text(
+                &st,
+                Summary::Ran {
+                    verified: 2,
+                    errors: 0
+                }
+            ),
+            "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
+        );
+        // 前提なので、項目を絞っても出る。
+        let shown = select(&st, &["f"]).unwrap();
+        let lines: Vec<String> = shown.iter().map(ItemStatus::line).collect();
+        assert_eq!(
+            lines,
+            [
+                "verified k5::f",
+                "macro serde::Serialize derive on k5::Foo",
+                "macro tokio::main on k5::one"
+            ]
+        );
+        let json = status_json(
+            &shown,
+            Summary::Ran {
+                verified: 2,
+                errors: 0,
+            },
+            true,
+        );
+        assert!(
+            json.contains(
+                r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
+            ),
+            "{json}"
+        );
+        // 記録がなければ出ない（壊す操作が当たったことを確かめる）。
+        let none = Output {
+            macros: vec![],
+            ..output.clone()
+        };
+        let st = statuses(&files, &none, &[], Some(&checked), Some(0));
+        assert!(st.iter().all(|s| s.status != "macro"));
     }
 
     #[test]

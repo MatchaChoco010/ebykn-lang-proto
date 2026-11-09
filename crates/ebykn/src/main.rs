@@ -294,20 +294,26 @@ fn verify(
         say(
             opts,
             &format!(
-                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): {}",
+                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): {}",
                 unproven.len(),
                 unproven
                     .iter()
-                    .map(|s| format!("{} ({})", s.item, s.status))
+                    .map(|s| match &s.via {
+                        Some((_, p)) => format!("{} ({} {p})", s.item, s.status),
+                        None => format!("{} ({})", s.item, s.status),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             &format!(
-                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]）: {}",
+                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]、macro：依存クレートの derive や属性マクロが作り、Verus が検証しない項目）: {}",
                 unproven.len(),
                 unproven
                     .iter()
-                    .map(|s| format!("{}（{}）", s.item, s.status))
+                    .map(|s| match &s.via {
+                        Some((_, p)) => format!("{}（{} {p}）", s.item, s.status),
+                        None => format!("{}（{}）", s.item, s.status),
+                    })
                     .collect::<Vec<_>>()
                     .join("、")
             ),
