@@ -290,10 +290,11 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `-> (q: Ptr<T>) gives q@` は `-> (__eyk_ret: (Ptr<T>, Tracked<PointsTo<T>>))` にします。`ensures` の `q` を `__eyk_ret.0`、`q@` を `__eyk_ret.1@` に付け替え、`ensures __eyk_ret.1@.pptr() == __eyk_ret.0` を足します。本体の末尾と `return e` は `(e, Tracked(__eyk_perm_q))` です。§7.3 の `-> (q: Ptr<T>, Tracked<PointsTo<T>>)` は Verus の構文にありません。
 - 権限の変数を渡すときは、権限そのものなら `Tracked(&x)` / `Tracked(&mut x)`、借用（`uses &p@`、`uses &mut p@`、`borrow`）なら `Tracked(&*x)` / `Tracked(&mut *x)` です。
 - 型を書いた `let`（`let p: Ptr<u8> = Ptr::new(..)`。`Ptr::empty`、`Cell::new`、`gives` の呼び出しも同じ）は、`let (p, Tracked(__eyk_perm_p)): (Ptr<u8>, Tracked<_>) = ..` にして型注釈を残します。型注釈を落とすと値の型が変わります。
+- 値で受けた領域 `uses r: Region<L>` は、引数を `Tracked(r): Tracked<Region<L>>` のまま、本体の先頭で `#[allow(unused_mut)] let tracked mut r = r;` と束縛し直します。`take` / `put` / `borrow mut` で変更できるようにするためです。Verus は引数のパターン `Tracked(mut r)` を受け付けません（「ill-formed `unwrap_parameter` header」）。`#[allow(unused_mut)]` は、変更しない関数で警告を出さないためです。
 
-* 元の仕様：§7.3 の表（`put` は `<r>.insert(..);`、論理の `<r>` は `self.r.borrow()`、`gives` は `-> (q: Ptr<T>, Tracked<PointsTo<T>>)`）。
-* 根拠：#6（PR #13、プローブ `tracked_field_forms.rs`、`tracked_field_a3_literal.rs`）、#17（PR #26）。
-* 状態：`put` と論理の `<r>` は実測で決めた。ほかは基準で決めた。
+* 元の仕様：§7.3 の表（`put` は `<r>.insert(..);`、論理の `<r>` は `self.r.borrow()`、`gives` は `-> (q: Ptr<T>, Tracked<PointsTo<T>>)`、`uses r: Region<L>` は `Tracked(r): Tracked<Region<L>>` だけ）。
+* 根拠：#6（PR #13、プローブ `tracked_field_forms.rs`、`tracked_field_a3_literal.rs`）、#17（PR #26）、#90（`tests/golden/lowering` の `Bag`）。
+* 状態：`put`、論理の `<r>`、値で受けた領域の束縛し直しは実測で決めた。ほかは基準で決めた。
 
 ### §7.4 式の書き下し
 

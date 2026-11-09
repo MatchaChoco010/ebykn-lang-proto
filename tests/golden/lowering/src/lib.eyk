@@ -118,3 +118,20 @@ pub fn total(v: Vec<u64>) -> u64 {
 pub fn quant(s: Seq<u64>) -> bool = true;
 pub spec fn all_pos(s: Seq<int>) -> bool = forall i in 0..s.len(), s[i] > 0;
 pub spec fn some_pos(s: Seq<int>) -> bool = exists x in s, or { x == 1, x == 2 };
+
+// 値で受けた領域は持っているので変更できる（#90）。本体の先頭で `mut` に束縛し直す。
+pub struct Bag { } owns { items: Region<Ptr<Node>> }
+
+impl Bag {
+    fn with_node(v: u64) -> (b: Bag) uses r: Region<Ptr<Node>>
+        ensures forall q in r, b@items.contains(q),
+    {
+        let p = Ptr::new(Node { val: v, next: None });
+        put r[p];
+        Bag { @items: r }
+    }
+}
+
+pub fn wrap(n: u64) -> Bag uses items: Region<Ptr<Node>> {
+    Bag { @items: items }
+}
