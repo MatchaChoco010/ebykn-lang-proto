@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ebykn::sync::{Outcome, sync};
+use ebykn::sync::{Outcome, Reason, merge_conflicts, sync, write_atomic};
 
 const MANIFEST: &str = "[package]\nname = \"s\"\nversion = \"0.1.0\"\n";
 
@@ -112,11 +112,30 @@ fn conflicts_are_left_in_the_file_and_the_base_moves_on() {
     assert!(text.contains(">>>>>>> src/lib.eyk"), "{text}");
     // 証明の追加は残る。
     assert!(text.contains("lemma fn l()"), "{text}");
-    // 基準は今の src に進む（次の sync で同じ変更を二度当てない）。
+    // 基準は今の src に進む（手で解いた hunk が次の sync でまた衝突しないように）。
     assert_eq!(p.read(".ebykn/sync/lib.eyk"), new);
+    // 印が残っている間は、src が変わっていなくても失敗にし、何も変えない（#93 のレビュー）。
     assert_eq!(
         p.outcomes(),
-        [("proof/lib.eykp".to_string(), Outcome::Unchanged)]
+        [("proof/lib.eykp".to_string(), Outcome::UnresolvedMarkers)]
+    );
+    p.write("src/lib.eyk", &new.replace("{ 1 }", "{ 100 }"));
+    assert_eq!(
+        p.outcomes(),
+        [("proof/lib.eykp".to_string(), Outcome::UnresolvedMarkers)]
+    );
+    assert_eq!(p.read("proof/lib.eykp"), text);
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), new);
+    // 印を解けば、続きを取り込む。
+    let resolved = PROOF.replace("{ 2 }", "{ 20 }");
+    p.write("proof/lib.eykp", &resolved);
+    assert_eq!(
+        p.outcomes(),
+        [("proof/lib.eykp".to_string(), Outcome::Merged)]
+    );
+    assert_eq!(
+        p.read("proof/lib.eykp"),
+        resolved.replace("{ 1 }", "{ 100 }")
     );
 }
 
@@ -171,7 +190,7 @@ fn json_lists_every_file_and_the_result() {
         "{\"$message_type\":\"ebykn-sync\",\"success\":false,\"files\":[\
          {\"proof\":\"proof/gone.eykp\",\"source\":\"src/gone.eyk\",\"base\":\".ebykn/sync/gone.eyk\",\"state\":\"missing-source\"},\
          {\"proof\":\"proof/lib.eykp\",\"source\":\"src/lib.eyk\",\"base\":\".ebykn/sync/lib.eyk\",\"state\":\"base-created\"}],\
-         \"errors\":[]}"
+         \"orphan_bases\":[],\"errors\":[]}"
     );
 }
 
@@ -227,4 +246,97 @@ fn without_git_the_proof_and_base_are_left_alone() {
     assert!(err.contains("cannot run `git merge-file`"), "{err}");
     assert_eq!(p.read("proof/lib.eykp"), PROOF);
     assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+}
+
+/// 中身が二進（NUL を含む）の `.eykp` では `git merge-file` が 255 で終わる。衝突の数として読まず、
+/// `.eykp` と基準をバイト単位で前のまま残す（#93 のレビュー）。
+#[test]
+fn binary_proof_fails_and_leaves_both_files_byte_for_byte() {
+    let p = Proj::new("binary");
+    p.write("src/lib.eyk", SRC);
+    let proof = format!("{PROOF}\0\n");
+    p.write("proof/lib.eykp", &proof);
+    p.outcomes();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    let r = sync(&p.0);
+    assert!(!r.success());
+    assert!(
+        matches!(&r.files[0].outcome, Outcome::Failed(Reason::Git { .. })),
+        "{:?}",
+        r.files[0].outcome
+    );
+    assert_eq!(
+        std::fs::read(p.0.join("proof/lib.eykp")).unwrap(),
+        proof.as_bytes()
+    );
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+}
+
+#[test]
+fn merge_exit_codes() {
+    assert_eq!(merge_conflicts(Some(0)), Some(0));
+    assert_eq!(merge_conflicts(Some(3)), Some(3));
+    assert_eq!(merge_conflicts(Some(127)), Some(127));
+    assert_eq!(merge_conflicts(Some(255)), None);
+    assert_eq!(merge_conflicts(Some(-1)), None);
+    assert_eq!(merge_conflicts(None), None);
+}
+
+/// 書き込みは一時ファイルに書いてから名前を変える。一時ファイルを作れなければ、元のファイルは
+/// 前のまま残る（#93 のレビュー：`std::fs::write` は先にファイルを空にする）。
+#[test]
+fn atomic_write_keeps_the_old_content_on_failure() {
+    let p = Proj::new("atomic");
+    p.write("proof/lib.eykp", PROOF);
+    let target = p.0.join("proof/lib.eykp");
+    write_atomic(&target, b"new").unwrap();
+    assert_eq!(p.read("proof/lib.eykp"), "new");
+    assert!(!p.exists("proof/.lib.eykp.ebykn-sync-tmp"));
+    // 一時ファイルの名前にディレクトリを置いて、書き込みを失敗させる。
+    std::fs::create_dir(p.0.join("proof/.lib.eykp.ebykn-sync-tmp")).unwrap();
+    assert!(write_atomic(&target, b"newer").is_err());
+    assert_eq!(p.read("proof/lib.eykp"), "new");
+}
+
+/// 対応する `.eykp` のない基準は失敗として報告し、基準のない `.eykp` に今の src を基準として書かない
+/// （名前を変えたモジュールの変更を落とさない。#93 のレビュー）。
+#[test]
+fn orphan_bases_are_reported_and_hold_new_bases() {
+    let p = Proj::new("orphan");
+    p.write("src/foo.eyk", SRC);
+    p.write("proof/foo.eykp", PROOF);
+    p.outcomes();
+    // `git mv src/foo.eyk src/bar.eyk`、`git mv proof/foo.eykp proof/bar.eykp` をして編集した。
+    std::fs::remove_file(p.0.join("src/foo.eyk")).unwrap();
+    std::fs::remove_file(p.0.join("proof/foo.eykp")).unwrap();
+    p.write("src/bar.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    p.write("proof/bar.eykp", PROOF);
+    let r = sync(&p.0);
+    assert!(!r.success());
+    assert_eq!(r.orphan_bases, [".ebykn/sync/foo.eyk"]);
+    assert_eq!(r.files[0].outcome, Outcome::BaseHeld);
+    assert!(!p.exists(".ebykn/sync/bar.eyk"));
+    // 古い基準を新しい名前に移せば、名前を変えたあとの変更を取り込む。
+    std::fs::rename(
+        p.0.join(".ebykn/sync/foo.eyk"),
+        p.0.join(".ebykn/sync/bar.eyk"),
+    )
+    .unwrap();
+    let r = sync(&p.0);
+    assert!(r.success(), "{:?}", r.lines(ebykn_syntax::diag::Lang::En));
+    assert_eq!(r.files[0].outcome, Outcome::Merged);
+    assert_eq!(p.read("proof/bar.eykp"), PROOF.replace("{ 1 }", "{ 10 }"));
+}
+
+/// 失敗の理由も `--lang ja` で日本語にする（#93 のレビュー）。
+#[test]
+fn reasons_are_translated() {
+    let p = Proj::new("ja");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", &format!("{PROOF}\0\n"));
+    p.outcomes();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    let ja = sync(&p.0).lines(ebykn_syntax::diag::Lang::Ja).join("\n");
+    assert!(ja.contains("`git merge-file` が失敗しました"), "{ja}");
+    assert!(ja.contains("は変えていません"), "{ja}");
 }

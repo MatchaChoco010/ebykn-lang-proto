@@ -4,15 +4,59 @@
 //! `src/<p>.eyk` への変更を、`git merge-file` で `.eykp` に当てる。そのあと基準を今の `src/<p>.eyk` で
 //! 置き換える。衝突は印（`<<<<<<<` など）をファイルに残し、終了コードを 1 にする。
 //!
-//! 決めたこと（`docs/current-spec.md` §9「`ebykn sync` の決めごと」）：
-//! - 基準がない `.eykp` は、今の `src/<p>.eyk` を基準として書くだけで、`.eykp` は変えない。
-//! - 衝突しても基準は今の `src/<p>.eyk` に進める（印に `src/` の変更が入っているので、次の `sync` で
-//!   同じ変更を二度当てない）。
-//! - 対応する `src/<p>.eyk` がない `.eykp` は変えず、誤りとして数える。
-//! - `git merge-file -p` の出力を書き戻す。`git` が動かなければ、そのファイルは変えない。
+//! 決めたことは `docs/current-spec.md` §9「`ebykn sync` の決めごと」にある。ファイルは同じ
+//! ディレクトリの一時ファイルに書いてから名前を変えて置き換え（[`write_atomic`]）、途中で失敗しても
+//! `.eykp` と基準が途中までの中身で残らないようにする。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use ebykn_syntax::diag::Lang;
+
+/// 失敗の理由。文言は [`Reason::text`] で言語ごとに作る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reason {
+    Read {
+        path: String,
+        error: String,
+    },
+    Write {
+        path: String,
+        error: String,
+    },
+    GitSpawn {
+        error: String,
+    },
+    /// `git merge-file` が衝突の数でない終了コードで終わった（中身が二進のファイルなど）。
+    Git {
+        stderr: String,
+    },
+}
+
+impl Reason {
+    pub fn text(&self, lang: Lang) -> String {
+        match (self, lang) {
+            (Reason::Read { path, error }, Lang::En) => format!("cannot read `{path}`: {error}"),
+            (Reason::Read { path, error }, Lang::Ja) => format!("`{path}` を読めません（{error}）"),
+            (Reason::Write { path, error }, Lang::En) => {
+                format!("cannot write `{path}`: {error}")
+            }
+            (Reason::Write { path, error }, Lang::Ja) => {
+                format!("`{path}` を書けません（{error}）")
+            }
+            (Reason::GitSpawn { error }, Lang::En) => {
+                format!("cannot run `git merge-file`: {error}")
+            }
+            (Reason::GitSpawn { error }, Lang::Ja) => {
+                format!("`git merge-file` を実行できません（{error}）")
+            }
+            (Reason::Git { stderr }, Lang::En) => format!("`git merge-file` failed: {stderr}"),
+            (Reason::Git { stderr }, Lang::Ja) => {
+                format!("`git merge-file` が失敗しました（{stderr}）")
+            }
+        }
+    }
+}
 
 /// 一つの `.eykp` の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,24 +69,25 @@ pub enum Outcome {
     Conflict(u32),
     /// 基準がなかったので、今の `src/` を基準として書いた（`.eykp` は変えていない）。
     BaseCreated,
+    /// 基準がなく、対応する `.eykp` のない基準があるので、基準を作らなかった（名前を変えた
+    /// モジュールの古い基準かもしれない）。何も変えていない。
+    BaseHeld,
+    /// 前の `sync` の衝突の印が `.eykp` に残っている。何も変えていない。
+    UnresolvedMarkers,
     /// 対応する `src/<p>.eyk` がない（E0301 に当たる）。何も変えていない。
     MissingSource,
-    /// 読み書きか `git merge-file` が失敗した。`.eykp` は変えていない。
-    Failed(String),
-    /// `.eykp` には取り込んだが、基準を書けなかった。基準を直すまで `sync` をもう一度実行すると、
-    /// 同じ変更を二度当てる。
-    BaseNotUpdated(String),
+    /// 読み書きか `git merge-file` が失敗した。`.eykp` も基準も変えていない。
+    Failed(Reason),
+    /// `.eykp` には取り込んだが（`conflicts` はそのときの衝突の数）、基準を書けなかった。
+    BaseNotUpdated { conflicts: u32, reason: Reason },
 }
 
 impl Outcome {
     /// `sync` を失敗（終了コード 1）にするか。
     pub fn is_failure(&self) -> bool {
-        matches!(
+        !matches!(
             self,
-            Outcome::Conflict(_)
-                | Outcome::MissingSource
-                | Outcome::Failed(_)
-                | Outcome::BaseNotUpdated(_)
+            Outcome::Unchanged | Outcome::Merged | Outcome::BaseCreated
         )
     }
 
@@ -52,9 +97,11 @@ impl Outcome {
             Outcome::Merged => "merged",
             Outcome::Conflict(_) => "conflict",
             Outcome::BaseCreated => "base-created",
+            Outcome::BaseHeld => "base-held",
+            Outcome::UnresolvedMarkers => "unresolved-markers",
             Outcome::MissingSource => "missing-source",
             Outcome::Failed(_) => "failed",
-            Outcome::BaseNotUpdated(_) => "base-not-updated",
+            Outcome::BaseNotUpdated { .. } => "base-not-updated",
         }
     }
 }
@@ -72,21 +119,41 @@ pub struct FileSync {
 #[derive(Debug, Clone, Default)]
 pub struct SyncReport {
     pub files: Vec<FileSync>,
+    /// 対応する `.eykp` のない基準（`.ebykn/sync/<p>.eyk`）。名前を変えたか消したモジュールの基準で、
+    /// 残すと、あとで同じ名前のモジュールが古い基準から変更を当てる。
+    pub orphan_bases: Vec<String>,
     /// `proof/` を読めなかったなど、ファイルごとでない誤り。
-    pub errors: Vec<String>,
+    pub errors: Vec<Reason>,
 }
 
 impl SyncReport {
     pub fn success(&self) -> bool {
-        self.errors.is_empty() && !self.files.iter().any(|f| f.outcome.is_failure())
+        self.errors.is_empty()
+            && self.orphan_bases.is_empty()
+            && !self.files.iter().any(|f| f.outcome.is_failure())
     }
 
     /// 1 ファイル 1 行の説明。
-    pub fn lines(&self, lang: ebykn_syntax::diag::Lang) -> Vec<String> {
-        use ebykn_syntax::diag::Lang::{En, Ja};
-        let mut out: Vec<String> = self.errors.iter().map(|e| format!("error: {e}")).collect();
+    pub fn lines(&self, lang: Lang) -> Vec<String> {
+        use Lang::{En, Ja};
+        let mut out: Vec<String> = self
+            .errors
+            .iter()
+            .map(|e| format!("error: {}", e.text(lang)))
+            .collect();
+        for b in &self.orphan_bases {
+            out.push(match lang {
+                En => format!(
+                    "error {b}: no `.eykp` uses this base; if the module was renamed, move it to the new name under `.ebykn/sync/`, otherwise delete it"
+                ),
+                Ja => format!(
+                    "error {b}: この基準を使う `.eykp` がありません。モジュールの名前を変えたなら `.ebykn/sync/` の下の新しい名前に移し、消したなら削除してください"
+                ),
+            });
+        }
         for f in &self.files {
             let (p, s, b) = (&f.proof, &f.source, &f.base);
+            let undo = format!("git checkout -- {p} {b}");
             let line = match (&f.outcome, lang) {
                 (Outcome::Unchanged, En) => format!("unchanged {p}"),
                 (Outcome::Unchanged, Ja) => {
@@ -95,10 +162,10 @@ impl SyncReport {
                 (Outcome::Merged, En) => format!("merged {p} (changes in `{s}`)"),
                 (Outcome::Merged, Ja) => format!("merged {p}（`{s}` の変更を取り込みました）"),
                 (Outcome::Conflict(n), En) => format!(
-                    "conflict {p}: {n} conflict(s) left in the file; resolve them, then run `ebykn check`"
+                    "conflict {p}: {n} conflict(s) left in the file; resolve them, then run `ebykn check` (to undo this sync, run `{undo}`)"
                 ),
                 (Outcome::Conflict(n), Ja) => format!(
-                    "conflict {p}: 衝突 {n} か所をファイルに残しました。直してから `ebykn check` を実行してください"
+                    "conflict {p}: 衝突 {n} か所をファイルに残しました。直してから `ebykn check` を実行してください（この sync を取りやめるには `{undo}`）"
                 ),
                 (Outcome::BaseCreated, En) => format!(
                     "base {p}: no base `{b}` yet; recorded the current `{s}` as the base without changing `{p}`"
@@ -106,27 +173,62 @@ impl SyncReport {
                 (Outcome::BaseCreated, Ja) => format!(
                     "base {p}: 基準 `{b}` がなかったので、今の `{s}` を基準として書きました（`{p}` は変えていません）"
                 ),
+                (Outcome::BaseHeld, En) => format!(
+                    "error {p}: no base `{b}`, and some bases have no `.eykp` (listed above); if this module was renamed, move its old base to `{b}`, then run `ebykn sync` again"
+                ),
+                (Outcome::BaseHeld, Ja) => format!(
+                    "error {p}: 基準 `{b}` がなく、`.eykp` のない基準があります（上に挙げたもの）。このモジュールの名前を変えたなら、古い基準を `{b}` に移してから `ebykn sync` をもう一度実行してください"
+                ),
+                (Outcome::UnresolvedMarkers, En) => format!(
+                    "error {p}: conflict markers from a previous `ebykn sync` remain; resolve them first (or undo that sync with `{undo}`)"
+                ),
+                (Outcome::UnresolvedMarkers, Ja) => format!(
+                    "error {p}: 前の `ebykn sync` の衝突の印が残っています。先に直してください（その sync を取りやめるには `{undo}`）"
+                ),
                 (Outcome::MissingSource, En) => {
                     format!("error {p}: `{s}` does not exist; `{p}` was left unchanged")
                 }
                 (Outcome::MissingSource, Ja) => {
                     format!("error {p}: `{s}` がありません。`{p}` は変えていません")
                 }
-                (Outcome::Failed(e), En) => format!("error {p}: {e}; `{p}` was left unchanged"),
-                (Outcome::Failed(e), Ja) => format!("error {p}: {e}。`{p}` は変えていません"),
-                (Outcome::BaseNotUpdated(e), En) => format!(
-                    "error {p}: merged the changes in `{s}`, but cannot write the base `{b}` ({e}); copy `{s}` to `{b}` before running `ebykn sync` again"
-                ),
-                (Outcome::BaseNotUpdated(e), Ja) => format!(
-                    "error {p}: `{s}` の変更は取り込みましたが、基準 `{b}` を書けません（{e}）。`ebykn sync` をもう一度実行する前に、`{s}` を `{b}` に写してください"
-                ),
+                (Outcome::Failed(r), En) => {
+                    format!(
+                        "error {p}: {}; `{p}` and `{b}` were left unchanged",
+                        r.text(En)
+                    )
+                }
+                (Outcome::Failed(r), Ja) => {
+                    format!("error {p}: {}。`{p}` と `{b}` は変えていません", r.text(Ja))
+                }
+                (Outcome::BaseNotUpdated { conflicts, reason }, En) => {
+                    let c = if *conflicts == 0 {
+                        String::new()
+                    } else {
+                        format!(" with {conflicts} conflict(s) left in the file")
+                    };
+                    format!(
+                        "error {p}: merged the changes in `{s}`{c}, but {}; copy `{s}` to `{b}` before running `ebykn sync` again",
+                        reason.text(En)
+                    )
+                }
+                (Outcome::BaseNotUpdated { conflicts, reason }, Ja) => {
+                    let c = if *conflicts == 0 {
+                        String::new()
+                    } else {
+                        format!("（衝突 {conflicts} か所をファイルに残しました）")
+                    };
+                    format!(
+                        "error {p}: `{s}` の変更は取り込みましたが{c}、{}。`ebykn sync` をもう一度実行する前に、`{s}` を `{b}` に写してください",
+                        reason.text(Ja)
+                    )
+                }
             };
             out.push(line);
         }
         out
     }
 
-    /// `--json` の 1 行。
+    /// `--json` の 1 行。理由は英語の文言。
     pub fn json(&self) -> String {
         let s = |x: &str| {
             let mut o = String::from("\"");
@@ -148,9 +250,11 @@ impl SyncReport {
             .map(|f| {
                 let extra = match &f.outcome {
                     Outcome::Conflict(n) => format!(",\"conflicts\":{n}"),
-                    Outcome::Failed(e) | Outcome::BaseNotUpdated(e) => {
-                        format!(",\"reason\":{}", s(e))
-                    }
+                    Outcome::Failed(r) => format!(",\"reason\":{}", s(&r.text(Lang::En))),
+                    Outcome::BaseNotUpdated { conflicts, reason } => format!(
+                        ",\"conflicts\":{conflicts},\"reason\":{}",
+                        s(&reason.text(Lang::En))
+                    ),
                     _ => String::new(),
                 };
                 format!(
@@ -162,11 +266,13 @@ impl SyncReport {
                 )
             })
             .collect();
-        let errors: Vec<String> = self.errors.iter().map(|e| s(e)).collect();
+        let orphans: Vec<String> = self.orphan_bases.iter().map(|b| s(b)).collect();
+        let errors: Vec<String> = self.errors.iter().map(|e| s(&e.text(Lang::En))).collect();
         format!(
-            "{{\"$message_type\":\"ebykn-sync\",\"success\":{},\"files\":[{}],\"errors\":[{}]}}",
+            "{{\"$message_type\":\"ebykn-sync\",\"success\":{},\"files\":[{}],\"orphan_bases\":[{}],\"errors\":[{}]}}",
             self.success(),
             files.join(","),
+            orphans.join(","),
             errors.join(",")
         )
     }
@@ -178,70 +284,124 @@ pub const BASE_DIR: &str = ".ebykn/sync";
 /// プロジェクト `root` の `proof/` の `.eykp` をすべて追従させる。
 pub fn sync(root: &Path) -> SyncReport {
     let mut report = SyncReport::default();
-    let proof_dir = root.join("proof");
-    let mut proofs = Vec::new();
-    if proof_dir.exists()
-        && let Err(e) = collect(&proof_dir, &mut proofs)
-    {
-        report.errors.push(format!("cannot read `proof/`: {e}"));
+    let Some(proofs) = rel_files(root, "proof", ".eykp", &mut report) else {
         return report;
-    }
-    let mut rels: Vec<String> = proofs
+    };
+    let Some(bases) = rel_files(root, BASE_DIR, ".eyk", &mut report) else {
+        return report;
+    };
+    let stems: Vec<&str> = proofs
         .iter()
-        .filter_map(|p| p.strip_prefix(&proof_dir).ok())
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .map(|r| r.strip_suffix(".eykp").expect(".eykp だけを集めた"))
         .collect();
-    rels.sort();
-    for rel in rels {
+    report.orphan_bases = bases
+        .iter()
+        .filter(|b| !stems.contains(&b.strip_suffix(".eyk").expect(".eyk だけを集めた")))
+        .map(|b| format!("{BASE_DIR}/{b}"))
+        .collect();
+    for stem in stems {
         // `proof/<p>.eykp` ↔ `src/<p>.eyk` ↔ `.ebykn/sync/<p>.eyk`（仕様 §3.1、§9）。
-        let stem = rel.strip_suffix(".eykp").expect(".eykp だけを集めた");
         let f = FileSync {
-            proof: format!("proof/{rel}"),
+            proof: format!("proof/{stem}.eykp"),
             source: format!("src/{stem}.eyk"),
             base: format!("{BASE_DIR}/{stem}.eyk"),
             outcome: Outcome::Unchanged,
         };
-        let outcome = sync_one(root, &f);
+        let outcome = sync_one(root, &f, !report.orphan_bases.is_empty());
         report.files.push(FileSync { outcome, ..f });
     }
     report
 }
 
-/// `dir` の下の `.eykp` を集める。隠しディレクトリは見ない。
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+/// `root/dir` の下の、拡張子 `ext` のファイルの `dir` からの相対パス（並べたもの）。
+fn rel_files(root: &Path, dir: &str, ext: &str, report: &mut SyncReport) -> Option<Vec<String>> {
+    let base = root.join(dir);
+    let mut found = Vec::new();
+    if base.exists()
+        && let Err(e) = collect(&base, ext, &mut found)
+    {
+        report.errors.push(Reason::Read {
+            path: format!("{dir}/"),
+            error: e.to_string(),
+        });
+        return None;
+    }
+    let mut rels: Vec<String> = found
+        .iter()
+        .filter_map(|p| p.strip_prefix(&base).ok())
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .collect();
+    rels.sort();
+    Some(rels)
+}
+
+/// `dir` の下の、拡張子 `ext` のファイルを集める。隠しディレクトリと一時ファイルは見ない。
+fn collect(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for e in std::fs::read_dir(dir)? {
         let e = e?;
         let path = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
         if e.file_type()?.is_dir() {
-            if !name.starts_with('.') {
-                collect(&path, out)?;
-            }
-        } else if name.ends_with(".eykp") {
+            collect(&path, ext, out)?;
+        } else if name.ends_with(ext) {
             out.push(path);
         }
     }
     Ok(())
 }
 
-fn sync_one(root: &Path, f: &FileSync) -> Outcome {
-    let proof = root.join(&f.proof);
-    let source = root.join(&f.source);
-    let base = root.join(&f.base);
-    let src = match std::fs::read(&source) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Outcome::MissingSource,
-        Err(e) => return Outcome::Failed(format!("cannot read `{}`: {e}", f.source)),
+/// `.eykp` に、前の `sync` が残した衝突の印の行があるか。
+fn has_markers(proof: &[u8], f: &FileSync) -> bool {
+    let open = format!("<<<<<<< {}", f.proof);
+    let close = format!(">>>>>>> {}", f.source);
+    proof
+        .split(|b| *b == b'\n')
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        .any(|l| l == open.as_bytes() || l == close.as_bytes())
+}
+
+fn sync_one(root: &Path, f: &FileSync, orphans: bool) -> Outcome {
+    let read = |rel: &str| {
+        std::fs::read(root.join(rel)).map_err(|e| {
+            let missing = e.kind() == std::io::ErrorKind::NotFound;
+            (
+                missing,
+                Reason::Read {
+                    path: rel.to_string(),
+                    error: e.to_string(),
+                },
+            )
+        })
     };
-    let old = match std::fs::read(&base) {
+    let src = match read(&f.source) {
+        Ok(s) => s,
+        Err((true, _)) => return Outcome::MissingSource,
+        Err((false, r)) => return Outcome::Failed(r),
+    };
+    let proof = match read(&f.proof) {
+        Ok(p) => p,
+        Err((_, r)) => return Outcome::Failed(r),
+    };
+    if has_markers(&proof, f) {
+        return Outcome::UnresolvedMarkers;
+    }
+    let base = root.join(&f.base);
+    let old = match read(&f.base) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return match write_base(&base, &src) {
+        Err((true, _)) if orphans => return Outcome::BaseHeld,
+        Err((true, _)) => {
+            return match write_atomic(&base, &src) {
                 Ok(()) => Outcome::BaseCreated,
-                Err(e) => Outcome::Failed(format!("cannot write `{}`: {e}", f.base)),
+                Err(e) => Outcome::Failed(Reason::Write {
+                    path: f.base.clone(),
+                    error: e.to_string(),
+                }),
             };
         }
-        Err(e) => return Outcome::Failed(format!("cannot read `{}`: {e}", f.base)),
+        Err((false, r)) => return Outcome::Failed(r),
     };
     if old == src {
         return Outcome::Unchanged;
@@ -250,30 +410,38 @@ fn sync_one(root: &Path, f: &FileSync) -> Outcome {
         .arg("merge-file")
         .arg("-p")
         .args(["-L", &f.proof, "-L", &f.base, "-L", &f.source])
-        .arg(&proof)
+        .arg(root.join(&f.proof))
         .arg(&base)
-        .arg(&source)
+        .arg(root.join(&f.source))
         .output();
     let out = match out {
         Ok(o) => o,
-        Err(e) => return Outcome::Failed(format!("cannot run `git merge-file`: {e}")),
-    };
-    // 終了コードは衝突の数（0 なら衝突なし）。負の値（シグナルや 255 など）は失敗。
-    let conflicts = match out.status.code() {
-        Some(n) if (0..=127).contains(&n) => n as u32,
-        _ => {
-            return Outcome::Failed(format!(
-                "`git merge-file` failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
+        Err(e) => {
+            return Outcome::Failed(Reason::GitSpawn {
+                error: e.to_string(),
+            });
         }
     };
-    if let Err(e) = std::fs::write(&proof, &out.stdout) {
-        return Outcome::Failed(format!("cannot write `{}`: {e}", f.proof));
+    let Some(conflicts) = merge_conflicts(out.status.code()) else {
+        return Outcome::Failed(Reason::Git {
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    };
+    if let Err(e) = write_atomic(&root.join(&f.proof), &out.stdout) {
+        return Outcome::Failed(Reason::Write {
+            path: f.proof.clone(),
+            error: e.to_string(),
+        });
     }
-    // 衝突しても基準を進める（印に `src/` の変更が入っている）。
-    if let Err(e) = write_base(&base, &src) {
-        return Outcome::BaseNotUpdated(e.to_string());
+    // 衝突しても基準を進める。進めないと、手で解いた hunk が次の `sync` のたびにまた衝突する。
+    if let Err(e) = write_atomic(&base, &src) {
+        return Outcome::BaseNotUpdated {
+            conflicts,
+            reason: Reason::Write {
+                path: f.base.clone(),
+                error: e.to_string(),
+            },
+        };
     }
     if conflicts == 0 {
         Outcome::Merged
@@ -282,9 +450,35 @@ fn sync_one(root: &Path, f: &FileSync) -> Outcome {
     }
 }
 
-fn write_base(base: &Path, src: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = base.parent() {
-        std::fs::create_dir_all(parent)?;
+/// `git merge-file` の終了コードを衝突の数として読む。0〜127 が衝突の数（git は 127 で打ち切る）で、
+/// それ以外（二進のファイルの 255、シグナルで止まったときの `None` など）は失敗。
+pub fn merge_conflicts(code: Option<i32>) -> Option<u32> {
+    match code {
+        Some(n) if (0..=127).contains(&n) => Some(n as u32),
+        _ => None,
     }
-    std::fs::write(base, src)
+}
+
+/// `path` を `bytes` で置き換える。同じディレクトリの一時ファイルに書いてから名前を変えるので、
+/// 途中で失敗しても `path` は前の中身のまま残る。
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.ebykn-sync-tmp"));
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
