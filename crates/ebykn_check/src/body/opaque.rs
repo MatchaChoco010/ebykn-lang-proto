@@ -84,7 +84,13 @@ impl Walker<'_> {
                 || (id(tts.get(j)).as_deref() == Some("self") && pc(tts.get(j + 1), '@'))
         };
         for (i, tt) in tts.iter().enumerate() {
+            // 属性（`#[..]`、`#![..]`）の中のパスは、式のパスではない（属性そのものは別の検査が見る）。
+            let attr = matches!(tt, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)
+                && i >= 1
+                && (pc(tts.get(i - 1), '#')
+                    || (pc(tts.get(i - 1), '!') && i >= 2 && pc(tts.get(i - 2), '#')));
             if let TokenTree::Group(g) = tt
+                && !attr
                 && self.perm_in_tokens(g.stream(), names)
             {
                 return true;
