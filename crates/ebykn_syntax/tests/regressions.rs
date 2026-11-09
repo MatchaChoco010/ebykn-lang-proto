@@ -780,3 +780,12 @@ fn cfg_macro_is_not_allowed() {
     rejects("pub fn f() -> bool { cfg!(test) }", "E0003");
     rejects("pub fn f() -> bool { std::cfg!(test) }", "E0003");
 }
+
+/// #27 の既定：`env!` / `option_env!` / `file!` は `.eyk` で呼べるマクロの一覧にない（Verus の実行と
+/// 素のビルドで値が違いうる）。`unchecked fn` の本体の外では、どこに書いても E0003。
+#[test]
+fn build_dependent_macros_are_not_allowed() {
+    for m in ["env", "option_env", "file"] {
+        assert!(!ebykn_syntax::ALLOWED_MACROS.contains(&m), "{m}");
+    }
+}

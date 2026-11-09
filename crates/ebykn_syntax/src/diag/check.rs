@@ -136,6 +136,10 @@ pub enum Unimpl {
     CfgInBody,
     /// std のマクロの引数の中の属性（トークンのまま持つので検査できない。#28）。
     AttrInMacro,
+    /// `env!` / `option_env!`（`unchecked fn` の本体の外。#27 の既定）。
+    EnvMacro,
+    /// `file!`（`unchecked fn` の本体の外。#27 の既定）。
+    FileMacro,
 }
 
 impl Unimpl {
@@ -210,6 +214,18 @@ impl Unimpl {
             }
             (Unimpl::AttrInMacro, Lang::Ja) => {
                 "このマクロの引数の中の属性（`#[..]`）はまだ扱えません。Ebykn が引数を読まないためです（`#[cfg(..)]` などで、検証するコードとビルドするコードが食い違いうる）。コードをマクロの外に出します"
+            }
+            (Unimpl::EnvMacro, Lang::En) => {
+                "`env!` / `option_env!` outside the body of an `unchecked fn` are not supported yet, because a compile-time environment variable can differ between the Verus run and the plain build; if you need the value, wrap it in an `unchecked fn`"
+            }
+            (Unimpl::EnvMacro, Lang::Ja) => {
+                "`unchecked fn` の本体の外の `env!` / `option_env!` はまだ扱えません。コンパイル時の環境変数は、Verus の実行と素のビルドで値が違いうるためです。値が要るなら `unchecked fn` で包みます"
+            }
+            (Unimpl::FileMacro, Lang::En) => {
+                "`file!` outside the body of an `unchecked fn` is not supported yet, because the path depends on how cargo compiles the crate (relative when Verus verifies it, absolute when another crate depends on it); if you need the value, wrap it in an `unchecked fn`"
+            }
+            (Unimpl::FileMacro, Lang::Ja) => {
+                "`unchecked fn` の本体の外の `file!` はまだ扱えません。パスは cargo のクレートのコンパイルの仕方で変わる（Verus で検証するときは相対、別のクレートから依存されると絶対）ためです。値が要るなら `unchecked fn` で包みます"
             }
             (Unimpl::CfgInBody, Lang::En) => {
                 "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"

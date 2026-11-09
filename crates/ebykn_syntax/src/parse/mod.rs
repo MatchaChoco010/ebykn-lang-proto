@@ -65,6 +65,7 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
             capture: Vec::new(),
             items: std::collections::HashMap::new(),
             pending: Vec::new(),
+            unchecked_body: false,
         })
     });
     tokens::scan(&tokens);
@@ -116,6 +117,17 @@ struct Cx {
     items: std::collections::HashMap<usize, CachedItem>,
     /// [`err`] で作ったエラーの中身。エラーの文言には添字だけを書く。
     pending: Vec<Message>,
+    /// `unchecked fn` の本体を読んでいる間だけ真（`env!` / `option_env!` を許す。#27）。
+    unchecked_body: bool,
+}
+
+/// `unchecked fn` の本体を読んでいる間かを設定し、前の値を返す。
+pub(crate) fn set_unchecked_body(v: bool) -> bool {
+    with_cx(|cx| std::mem::replace(&mut cx.unchecked_body, v))
+}
+
+pub(crate) fn in_unchecked_body() -> bool {
+    with_cx(|cx| cx.unchecked_body)
 }
 
 thread_local! {

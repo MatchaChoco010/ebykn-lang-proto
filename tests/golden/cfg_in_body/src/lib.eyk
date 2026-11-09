@@ -26,3 +26,13 @@ pub fn q(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_gh
 
 // 本体の中で定義した構造体の欄。
 pub fn s() { struct T { #[cfg(test)] a: u32, b: u32 } }
+
+// コンパイル時の環境変数と `file!` は、Verus の実行と素のビルドで値が違いうる（PR #26 の 4 回目の確認、
+// #27 の既定）。`unchecked fn` の本体の外では E0003。
+pub fn h8() -> (r: u32) ensures r == 0, { if option_env!("CARGO_TERM_COLOR").is_some() { 0 } else { 1 } }
+
+pub const TOOLCHAIN: Option<&str> = option_env!("RUSTUP_TOOLCHAIN");
+
+pub fn path_len() -> usize { file!().len() }
+
+unchecked fn color() -> Option<&'static str> { option_env!("CARGO_TERM_COLOR") }

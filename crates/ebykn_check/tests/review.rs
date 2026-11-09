@@ -492,3 +492,40 @@ fn attributes_inside_std_macro_arguments_are_e0003() {
     // 属性でない `#` は今のまま（文字列の中や、`[` の続かない `#`）。
     accepts("pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }");
 }
+
+/// コンパイル時の環境変数と `file!` は、Verus の実行と素のビルドで値が違いうるので、`unchecked fn` の
+/// 本体の外ではどこに書いても E0003（PR #26 の 4 回目の確認、#27 の既定）。
+#[test]
+fn env_and_file_macros_outside_unchecked_fn_are_e0003() {
+    let env = "`env!` / `option_env!` outside the body of an `unchecked fn`";
+    for src in [
+        "pub fn h8() -> (r: u32) ensures r == 0, { if option_env!(\"CARGO_TERM_COLOR\").is_some() { 0 } else { 1 } }",
+        "pub const C: Option<&str> = option_env!(\"X\");",
+        "pub static D: &str = std::env!(\"CARGO_PKG_NAME\");",
+        "#[doc = env!(\"CARGO_PKG_NAME\")]\npub fn a() {}",
+        "pub fn b() -> usize { let v = vec![core::option_env!(\"X\")]; v.len() }",
+        "pub fn c() -> usize { concat!(env!(\"X\")).len() }",
+        "pub struct S { a: u32 }\nimpl S { pub fn m(&self) -> bool { option_env!(\"X\").is_some() } }",
+        "unchecked fn u() { fn inner() -> bool { option_env!(\"X\").is_some() } }",
+    ] {
+        rejects(src, "E0003", env);
+    }
+    rejects(
+        "pub fn n() -> usize { file!().len() }",
+        "E0003",
+        "`file!` outside the body of an `unchecked fn`",
+    );
+    rejects(
+        "pub fn n() -> usize { core::file!().len() }",
+        "E0003",
+        "`file!` outside the body of an `unchecked fn`",
+    );
+    // `unchecked fn` の本体では許す（証明なしの前提として verify が一覧に出す）。
+    accepts("unchecked fn u() -> (r: bool) { option_env!(\"X\").is_some() }");
+    accepts("unchecked fn u() -> usize { let v = vec![env!(\"X\")]; v.len() + file!().len() }");
+    // `env` という名前の変数と `!=` は今のまま。
+    accepts("pub fn e() -> bool { let env = 1u32; env != 2 }");
+    // 素のビルドと Verus で同じ値になるもの（生成コードの位置とモジュールのパス）は今のまま。
+    accepts("pub fn l() -> u32 { line!() + column!() }");
+    accepts("pub fn p() -> usize { module_path!().len() }");
+}
