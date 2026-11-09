@@ -21,8 +21,10 @@ git branch -m feature/<Issue 番号>-<短い名前>
 ## 1. ゲートを通す
 
 ```bash
-cargo xtask ci
+ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtask ci
 ```
+
+重い処理は AGENTS.md の「マシンの資源」のとおり、`ebykn-limited` の下で 1 つずつ走らせる。変えたクレートだけを確かめるとき（`ebykn-limited cargo test -p <クレート>`）も同じ。`cargo xtask ci` は PR の前に 1 回通せば足りる。
 
 落ちたら直す。ゲートを外したり、テストを `#[ignore]` にしたりして通さない。
 
