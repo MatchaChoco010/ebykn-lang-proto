@@ -291,6 +291,16 @@ pub const RAW_KEYWORDS: &[(&str, u32)] = &[
     ("gen", 2024),
 ];
 
+/// Ebykn の予約語（`r#` を付ければ名前に使える）。`uses` は、呼び出しで領域を渡す
+/// `f(x, uses &mut r)` と区別するため（#19 の既定 P1）。
+pub const EBYKN_KEYWORDS: &[&str] = &["uses"];
+
+/// `r#` を外すと名前に書けない語か（Rust の予約語と Ebykn の予約語）。E0104 の案内で、`r#` を外すか
+/// 別の名前にするかを選ぶ（#147）。
+pub fn needs_other_name(name: &str) -> bool {
+    raw_keyword_since(name).is_some() || EBYKN_KEYWORDS.contains(&name)
+}
+
 /// 名前（`r#` を外したもの）が [`RAW_KEYWORDS`] にあれば、予約語になった版。
 pub fn raw_keyword_since(name: &str) -> Option<u32> {
     RAW_KEYWORDS

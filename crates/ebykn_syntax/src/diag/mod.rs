@@ -31,6 +31,9 @@ pub enum Code {
     E0102,
     /// 局所の名前に Rust の予約語の raw の綴り（`r#type`）（仕様 §10.1 にない。#119）。
     E0103,
+    /// const・static・const fn・本体のない trait の関数・列挙子・列挙子のフィールドの名前の raw の綴り
+    /// （仕様 §10.1 にない。#147）。
+    E0104,
     /// 対応する `.eyk` のない `.eykp`。
     E0301,
     /// `.eykp` の置き場所の誤り。
@@ -94,6 +97,7 @@ impl Code {
             Code::E0101 => "E0101",
             Code::E0102 => "E0102",
             Code::E0103 => "E0103",
+            Code::E0104 => "E0104",
             Code::E0301 => "E0301",
             Code::E0302 => "E0302",
             Code::E0303 => "E0303",
@@ -213,6 +217,8 @@ pub enum Message {
     VerifierAttr,
     /// E0103。局所の名前を束縛する位置の、Rust の予約語の raw の綴り（#119）。
     RawKeywordBinding { word: String, form: BindingForm },
+    /// E0104。Verus が raw の綴り（`r#foo`）を扱えない項目の名前（#147）。予約語でない名前も含む。
+    RawItemName { word: String, kind: RawNameKind },
     /// E0401。
     ErasedOnNonNamed {
         section: &'static str,
@@ -241,6 +247,46 @@ pub enum BindingForm {
     Shorthand { by_ref: bool, mutable: bool },
     /// 消去フィールドのパターン（`S { @r#type }`）。別の名前で束縛する書き方がない。
     Erased,
+}
+
+/// [`Message::RawItemName`] の名前の位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawNameKind {
+    /// `const` の項目（モジュール・`impl`・ブロックの中）。
+    Const,
+    /// `static` の項目。
+    Static,
+    /// `const fn`。
+    ConstFn,
+    /// 本体のない trait の関数（`fn f(..);`、`spec fn f(..);`、`lemma fn f(..);`）。
+    TraitFnWithoutBody,
+    /// 列挙子。
+    Variant,
+    /// 列挙子のフィールド（`A { r#foo: u64 }`）。
+    VariantField,
+    /// trait の関連型（`type r#type;`）。ほかと違い、Rust の予約語の raw の綴りだけを拒否する。
+    AssocType,
+}
+
+impl RawNameKind {
+    fn describe(self, lang: Lang) -> &'static str {
+        match (self, lang) {
+            (RawNameKind::Const, Lang::En) => "a `const`",
+            (RawNameKind::Const, Lang::Ja) => "`const`",
+            (RawNameKind::Static, Lang::En) => "a `static`",
+            (RawNameKind::Static, Lang::Ja) => "`static`",
+            (RawNameKind::ConstFn, Lang::En) => "a `const fn`",
+            (RawNameKind::ConstFn, Lang::Ja) => "`const fn`",
+            (RawNameKind::TraitFnWithoutBody, Lang::En) => "a trait function without a body",
+            (RawNameKind::TraitFnWithoutBody, Lang::Ja) => "本体のない trait の関数",
+            (RawNameKind::Variant, Lang::En) => "an enum variant",
+            (RawNameKind::Variant, Lang::Ja) => "列挙子",
+            (RawNameKind::VariantField, Lang::En) => "a field of an enum variant",
+            (RawNameKind::VariantField, Lang::Ja) => "列挙子のフィールド",
+            (RawNameKind::AssocType, Lang::En) => "an associated type of a trait",
+            (RawNameKind::AssocType, Lang::Ja) => "trait の関連型",
+        }
+    }
 }
 
 /// 省略形の束縛に付いていた `ref` / `mut` を、案内の書き方の前に付ける形にする。
@@ -369,6 +415,7 @@ impl Message {
             Message::ReservedPrefix { .. } => Code::E0101,
             Message::VerifierAttr => Code::E0102,
             Message::RawKeywordBinding { .. } => Code::E0103,
+            Message::RawItemName { .. } => Code::E0104,
             Message::ProofSyntax { .. } => Code::E0303,
             Message::ErasedOnNonNamed { .. } => Code::E0401,
             Message::DirectInvariantOrView { .. } => Code::E0403,
@@ -467,10 +514,10 @@ impl Message {
                 "構文エラー: `{word}` は Ebykn の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
             ),
             (Message::EditionKeyword { word, since }, En) => format!(
-                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name of a function, type, module, or field, and another name such as `{word}_` for a local name (variable, parameter, pattern binding)"
+                "syntax error: `{word}` is a reserved keyword in Rust {since} and later (`edition` in `Ebykn.toml`) and cannot be used as a name; write `r#{word}` to use it as a name of a function, type, module, or struct field, and another name such as `{word}_` for a local name (variable, parameter, pattern binding) or the name of a `const`, `static`, `const fn`, trait function without a body, enum variant, or field of an enum variant"
             ),
             (Message::EditionKeyword { word, since }, Ja) => format!(
-                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。関数・型・モジュール・フィールドの名前に使うなら `r#{word}` と書き、局所の名前（変数、引数、パターンの束縛）には `{word}_` などの別の名前を使います"
+                "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。関数・型・モジュール・構造体のフィールドの名前に使うなら `r#{word}` と書き、局所の名前（変数、引数、パターンの束縛）と、`const`・`static`・`const fn`・本体のない trait の関数・列挙子・列挙子のフィールドの名前には `{word}_` などの別の名前を使います"
             ),
             (Message::RawKeywordBinding { word, form }, En) => {
                 let fix = match form {
@@ -500,6 +547,46 @@ impl Message {
                 };
                 format!(
                     "`r#{word}` は局所の名前（変数、引数、パターンの束縛、量化子の変数、戻り値の名前、領域、const generics の引数）には使えません。Verus が検証できないためです。{fix}"
+                )
+            }
+            (
+                Message::RawItemName {
+                    word,
+                    kind: RawNameKind::AssocType,
+                },
+                En,
+            ) => format!(
+                "`r#{word}` cannot be used as the name of an associated type of a trait because Verus cannot verify a trait whose associated type is named with a Rust keyword; use another name such as `{word}_`"
+            ),
+            (
+                Message::RawItemName {
+                    word,
+                    kind: RawNameKind::AssocType,
+                },
+                Ja,
+            ) => format!(
+                "`r#{word}` は trait の関連型の名前には使えません。Verus は、関連型の名前が Rust の予約語の trait を検証できないためです。`{word}_` などの別の名前を使います"
+            ),
+            (Message::RawItemName { word, kind }, En) => {
+                let fix = if crate::reserved::needs_other_name(word) {
+                    format!("use another name such as `{word}_`")
+                } else {
+                    format!("write it without `r#` as `{word}`, which is the same name")
+                };
+                format!(
+                    "`r#{word}` cannot be used as the name of {} because Verus rejects a raw name (`r#`) there; {fix}",
+                    kind.describe(En)
+                )
+            }
+            (Message::RawItemName { word, kind }, Ja) => {
+                let fix = if crate::reserved::needs_other_name(word) {
+                    format!("`{word}_` などの別の名前を使います")
+                } else {
+                    format!("`r#` を外して `{word}` と書きます（同じ名前です）")
+                };
+                format!(
+                    "`r#{word}` は{}の名前には使えません。Verus は、この位置の raw の綴り（`r#`）を拒否するためです。{fix}",
+                    kind.describe(Ja)
                 )
             }
             (Message::UsesOutsideCall, En) => {

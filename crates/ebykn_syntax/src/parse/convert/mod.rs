@@ -14,10 +14,7 @@ use verus_syn::parse::Parser as _;
 
 use super::{push, sp, span_of, span_of_tokens};
 use crate::ast;
-use crate::diag::{BindingForm, Message};
-
-/// 名前に使えない語（`r#` を付ければ使える）。
-pub(super) const RESERVED_WORDS: &[&str] = &["uses"];
+use crate::diag::{BindingForm, Message, RawNameKind};
 
 pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
     let s = i.to_string();
@@ -26,7 +23,7 @@ pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
         None => (s, false),
     };
     // `uses` は予約語（呼び出しで領域を渡す `f(x, uses &mut r)` と区別する。#19 の既定 P1）。
-    if !raw && RESERVED_WORDS.contains(&name.as_str()) {
+    if !raw && crate::reserved::EBYKN_KEYWORDS.contains(&name.as_str()) {
         push(sp(i.span()), Message::ReservedWord { word: name.clone() });
     }
     ast::Ident {
@@ -53,6 +50,25 @@ pub(in crate::parse) fn binding_as(i: &proc_macro2::Ident, form: BindingForm) ->
             Message::RawKeywordBinding {
                 word: id.name.clone(),
                 form,
+            },
+        );
+    }
+    id
+}
+
+/// Verus が raw の綴り（`r#foo`）を扱えない位置の項目の名前（#147。[`RawNameKind`]）。予約語でない
+/// 名前の raw の綴りも E0104。固定した Verus は、`const`・`static`・`const fn`・本体のない trait の
+/// 関数の名前から作る記号（`VERUS_UNERASED_PROXY__r#foo`、`VERUS_SPEC__r#foo`）で proc macro が panic
+/// し、列挙子と列挙子のフィールドは `no variant` / `no field` で拒否する
+/// （`tests/verus-probes/raw_name_*.rs`）。
+pub(in crate::parse) fn raw_checked_name(i: &proc_macro2::Ident, kind: RawNameKind) -> ast::Ident {
+    let id = ident(i);
+    if id.raw {
+        push(
+            id.span,
+            Message::RawItemName {
+                word: id.name.clone(),
+                kind,
             },
         );
     }
@@ -598,6 +614,27 @@ pub(super) fn fields(f: &syn::Fields) -> ast::Fields {
         syn::Fields::Unnamed(u) => ast::Fields::Tuple(u.unnamed.iter().map(field).collect()),
         syn::Fields::Unit => ast::Fields::Unit,
     }
+}
+
+/// 列挙子のフィールド。名前の raw の綴りは E0104（[`raw_checked_name`]）。
+pub(super) fn variant_fields(f: &syn::Fields) -> ast::Fields {
+    let fs = fields(f);
+    if let ast::Fields::Named(named) = &fs {
+        for f in named {
+            if let Some(i) = &f.ident
+                && i.raw
+            {
+                push(
+                    i.span,
+                    Message::RawItemName {
+                        word: i.name.clone(),
+                        kind: RawNameKind::VariantField,
+                    },
+                );
+            }
+        }
+    }
+    fs
 }
 
 /// 関数の引数（`tracked` は Ebykn にない）。
