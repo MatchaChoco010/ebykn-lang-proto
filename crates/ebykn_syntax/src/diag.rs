@@ -76,6 +76,10 @@ pub enum Message {
     /// Ebykn が読まないコードを取り込む書き方（`#[path]`、`#[macro_use]`、Verus のマクロの
     /// 取り込みなど。#16 の既定）。
     Unread { written: String },
+    /// `.eyk` が直接参照しないクレート（vstd など。#16 の既定）。
+    VstdDirect { name: String },
+    /// std / core / alloc / vstd / ebykn_prelude という名前への改名（#16 の既定）。
+    ReservedRename { written: String },
     /// その位置には書けないもの（文法にない組み合わせ）。
     NotAllowedHere { written: String },
     /// E0101。
@@ -244,6 +248,18 @@ impl Message {
             ),
             (Message::Unread { written }, Ja) => format!(
                 "構文エラー: `{written}` は `.eyk` に書けません。Ebykn が読まないコードを取り込むためです"
+            ),
+            (Message::VstdDirect { name }, En) => format!(
+                "syntax error: `.eyk` cannot refer to the crate `{name}` directly; use the names that `ebykn_prelude` re-exports (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, `View`, ..), which every `.eyk` uses implicitly"
+            ),
+            (Message::VstdDirect { name }, Ja) => format!(
+                "構文エラー: `.eyk` はクレート `{name}` を直接参照できません。全 `.eyk` が暗黙に使う `ebykn_prelude` の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!`、`View` など）を使います"
+            ),
+            (Message::ReservedRename { written }, En) => format!(
+                "syntax error: `{written}` cannot be written in `.eyk`; the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to something else"
+            ),
+            (Message::ReservedRename { written }, Ja) => format!(
+                "構文エラー: `{written}` は `.eyk` に書けません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude` という名前をほかのものに付けることはできません"
             ),
             (Message::NotAllowedHere { written }, En) => {
                 format!("syntax error: `{written}` cannot be written here")

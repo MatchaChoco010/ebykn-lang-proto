@@ -57,7 +57,6 @@ pub(super) fn lit(l: &syn::Lit) -> ast::Lit {
 }
 
 pub(super) fn path(p: &syn::Path) -> ast::Path {
-    check_path(p);
     ast::Path {
         leading_colon: p.leading_colon.is_some(),
         segments: p
@@ -69,31 +68,6 @@ pub(super) fn path(p: &syn::Path) -> ast::Path {
             })
             .collect(),
         span: span_of(p),
-    }
-}
-
-/// Verus の内部のパス（`verus_builtin::..`、`vstd::..::admit` / `assume_`）は書けない（#16 の既定）。
-fn check_path(p: &syn::Path) {
-    let names: Vec<String> = p
-        .segments
-        .iter()
-        .map(|s| {
-            let n = s.ident.to_string();
-            n.strip_prefix("r#").unwrap_or(&n).to_string()
-        })
-        .collect();
-    let (Some(first), Some(last)) = (names.first(), names.last()) else {
-        return;
-    };
-    let bad = matches!(first.as_str(), "verus_builtin" | "verus_builtin_macros")
-        || first == "vstd" && matches!(last.as_str(), "admit" | "assume_");
-    if bad {
-        push(
-            span_of(p),
-            Message::VerusOnly {
-                written: names.join("::"),
-            },
-        );
     }
 }
 

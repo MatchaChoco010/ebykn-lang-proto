@@ -33,13 +33,46 @@ pub(super) fn scan(ts: &TokenStream) {
             TokenTree::Ident(id) => {
                 let name = unraw(&id.to_string());
                 if name.starts_with("__eyk_") {
-                    push(sp(id.span()), Message::ReservedPrefix { ident: name });
+                    push(
+                        sp(id.span()),
+                        Message::ReservedPrefix {
+                            ident: name.clone(),
+                        },
+                    );
+                }
+                if refers_to_crate(&tts, i, &name) {
+                    push(sp(id.span()), Message::VstdDirect { name });
                 }
             }
             TokenTree::Punct(p) if p.as_char() == '#' => attr(&tts, i),
             TokenTree::Group(g) => scan(&g.stream()),
             _ => {}
         }
+    }
+}
+
+/// `.eyk` が直接参照しないクレート（#16 の既定）。`.eyk` に要るものは `ebykn_prelude` が
+/// 再公開し、全 `.eyk` に暗黙に `use` される（仕様 §3.1、§7.1）。
+pub(super) const FORBIDDEN_CRATES: &[&str] =
+    &["vstd", "verus_builtin", "verus_builtin_macros", "builtin"];
+
+/// `tts[i]`（名前 `name`）が、参照してはいけないクレートをパスとして指しているか。
+/// パスの部分（`vstd::x`、`::vstd`、`a::vstd`）、`use vstd`、`extern crate vstd` を見る。
+/// `builtin` はよくある語なので、パスの先頭（`builtin::x`）と `use` / `extern crate` だけを見る。
+fn refers_to_crate(tts: &[TokenTree], i: usize, name: &str) -> bool {
+    if !FORBIDDEN_CRATES.contains(&name) {
+        return false;
+    }
+    let colon = |j: usize| matches!(tts.get(j), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    let kw = |j: Option<usize>, k: &str| matches!(j.and_then(|j| tts.get(j)), Some(TokenTree::Ident(x)) if x == k);
+    let next_path = colon(i + 1) && colon(i + 2);
+    let prev_path = i >= 2 && colon(i - 1) && colon(i - 2);
+    let prev_path_mid = prev_path && i >= 3 && matches!(tts.get(i - 3), Some(TokenTree::Ident(_)));
+    let after_kw = kw(i.checked_sub(1), "use") || kw(i.checked_sub(1), "crate");
+    if name == "builtin" {
+        next_path && !prev_path_mid || after_kw
+    } else {
+        next_path || prev_path || after_kw
     }
 }
 
@@ -68,7 +101,7 @@ fn attr(tts: &[TokenTree], i: usize) {
 /// 属性の中身（`path args`）を検査する。`cfg_attr(条件, 属性, ..)` は中の属性を再帰的に見る
 /// （rustc は Verus が属性を読む前に `cfg_attr` を展開する）。
 fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
-    // 先頭の `::` を飛ばす。
+    // 先頭の `::` を飛ばし、パス（`a::b::c`）の名前を集める。
     let mut k = 0;
     while matches!(body.get(k), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
         k += 1;
@@ -77,6 +110,31 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
         return;
     };
     let name = unraw(&head.to_string());
+    let mut last = name.clone();
+    let mut end = k + 1;
+    while matches!(body.get(end), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        && matches!(body.get(end + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        && let Some(TokenTree::Ident(seg)) = body.get(end + 2)
+    {
+        last = unraw(&seg.to_string());
+        end += 3;
+    }
+    // 属性の値の中のマクロの呼び出しと証明の構文（`#[doc = evil!()]`）。`cfg_attr` は下で
+    // 中の属性ごとに見る。
+    if name != "cfg_attr" {
+        let rest: TokenStream = body[end..].iter().cloned().collect();
+        scan_opaque(&rest);
+    }
+    // Verus の属性はパスの最後の名前で見る（`#[vstd::prelude::verus_verify]`）。
+    if last == "verus_verify" || last == "verus_spec" {
+        push(
+            span,
+            Message::VerusOnly {
+                written: format!("#[{last}]"),
+            },
+        );
+        return;
+    }
     if name == "verifier" {
         push(span, Message::VerifierAttr);
     } else if name == "verus" {
@@ -84,13 +142,6 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
             span,
             Message::VerusOnly {
                 written: "#[verus::..]".into(),
-            },
-        );
-    } else if name == "verus_verify" || name == "verus_spec" {
-        push(
-            span,
-            Message::VerusOnly {
-                written: format!("#[{name}]"),
             },
         );
     } else if name == "path" || name == "macro_use" {
@@ -172,16 +223,16 @@ pub(super) const VERUS_MACROS: &[&str] = &[
 ];
 
 /// マクロのパス（`r#` を外した名前の列）が `.eyk` で呼べるものか（#16 の既定）。
-/// 裸の名前か、std / core / alloc から始まるパス（vstd のマクロは vstd から始まるパス）。
+/// std のマクロは裸の名前か std / core / alloc から始まるパス、vstd のマクロは裸の名前だけ。
 pub(super) fn macro_allowed(names: &[String]) -> Option<MacroKind> {
     let last = names.last()?.as_str();
     let first = names.first()?.as_str();
     let vstd = crate::VSTD_MACROS.contains(&last);
     let std = crate::ALLOWED_MACROS.contains(&last) && !vstd;
+    // vstd のマクロは `ebykn_prelude` が再公開する裸の名前だけ（vstd は直接参照しない）。
     match names.len() {
         1 if vstd => Some(MacroKind::Vstd),
         1 if std => Some(MacroKind::Std),
-        _ if vstd && first == "vstd" => Some(MacroKind::Vstd),
         _ if std && matches!(first, "std" | "core" | "alloc") => Some(MacroKind::Std),
         _ => None,
     }
@@ -258,10 +309,6 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
         } else if (name == "proof" || name == "exec") && ident(next).as_deref() == Some("fn") {
             Some(Message::VerusOnly {
                 written: format!("{name} fn"),
-            })
-        } else if (name == "verus_builtin" || name == "verus_builtin_macros") && punct(next, ':') {
-            Some(Message::VerusOnly {
-                written: format!("{name}::.."),
             })
         } else if punct(next, '!')
             && !KEYWORDS.contains(&name.as_str())

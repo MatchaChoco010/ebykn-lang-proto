@@ -284,7 +284,7 @@ fn only_listed_macros_can_be_called() {
     );
     rejects(
         "fn f() { verus_builtin_macros::x! {} }",
-        "`verus_builtin_macros::x` is Verus syntax",
+        "cannot refer to the crate `verus_builtin_macros` directly",
     );
     // 別のファイルを読み込む。
     rejects(
@@ -329,15 +329,15 @@ fn only_listed_macros_can_be_called() {
     );
     rejects(
         "fn f() { ::verus_builtin::assume_(false) }",
-        "`verus_builtin::assume_` is Verus syntax",
+        "cannot refer to the crate `verus_builtin` directly",
     );
     rejects(
         "fn f() { vstd::prelude::admit() }",
-        "`vstd::prelude::admit` is Verus syntax",
+        "cannot refer to the crate `vstd` directly",
     );
     rejects(
         "fn f() { vec![::verus_builtin::assume_(false)] }",
-        "`verus_builtin::..` is Verus syntax",
+        "cannot refer to the crate `verus_builtin` directly",
     );
     // どの位置のマクロも同じ。
     for src in [
@@ -350,7 +350,7 @@ fn only_listed_macros_can_be_called() {
     }
     // 一覧のマクロは呼べる（裸の名前、std / core / alloc、vstd のパス）。
     ok(
-        "fn f() { vstd::seq![1, 2]; std::println!(\"x\"); core::assert!(x); let v = vec![1]; \
+        "fn f() { seq![1, 2]; std::println!(\"x\"); core::assert!(x); let v = vec![1]; \
         let s = format!(\"{}\", line!()); todo!() }\nuse std::vec;\nuse crate::m::map;",
     );
 }
@@ -546,4 +546,147 @@ fn raw_identifier_proof_calls_are_rejected() {
         "fn f() { let x = r#assert(y); }",
         "`assert(..)` is proof syntax",
     );
+}
+
+// ---------------------------------------------------------------------------
+// 3 回目のレビュー（#16 の既定を広げたもの）
+
+const DIRECT: &str = "directly; use the names that `ebykn_prelude` re-exports";
+
+/// 規則 1（F1）：vstd・verus_builtin・verus_builtin_macros・builtin は、use、extern crate、
+/// パス、属性、マクロの引数のどこでも参照しない。
+#[test]
+fn forbidden_crates_are_never_referred_to() {
+    for (src, krate) in [
+        ("use vstd::prelude::admit as ok;\nfn f() { ok(); }", "vstd"),
+        ("use vstd as v;\nfn f() { v::prelude::admit(); }", "vstd"),
+        (
+            "extern crate vstd as v;\nfn f() { v::pervasive::admit(); }",
+            "vstd",
+        ),
+        (
+            "mod m { pub use vstd::prelude::admit; }\nfn f() { m::admit(); }",
+            "vstd",
+        ),
+        (
+            "use verus_builtin as b;\nfn f() ensures false { b::assume_(false); }",
+            "verus_builtin",
+        ),
+        (
+            "use vstd::prelude::{self as p};\nfn f() { p::assume_(false); }",
+            "vstd",
+        ),
+        (
+            "fn f() { println!(\"{}\", { use vstd::prelude::admit as ok; ok(); 1 }) }",
+            "vstd",
+        ),
+        ("use ::vstd::seq::Seq;", "vstd"),
+        ("use a::{b, vstd::x};", "vstd"),
+        ("use a::vstd;", "vstd"),
+        ("fn f(x: vstd::seq::Seq<int>) {}", "vstd"),
+        ("fn f() { let vstd::X { a } = y; }", "vstd"),
+        ("fn f() { vstd::seq![1] }", "vstd"),
+        ("use builtin::*;", "builtin"),
+        ("fn f() { builtin::admit() }", "builtin"),
+        (
+            "use verus_builtin_macros::verus_verify as vv;",
+            "verus_builtin_macros",
+        ),
+    ] {
+        rejects(
+            src,
+            &format!("cannot refer to the crate `{krate}` {DIRECT}"),
+        );
+    }
+    // 日本語の文言。
+    let j = diags_in("use vstd::prelude::*;", ebykn_syntax::diag::Lang::Ja);
+    assert_eq!(
+        j,
+        [
+            "src/lib.eyk:1:5: E0001: 構文エラー: `.eyk` はクレート `vstd` を直接参照できません。全 `.eyk` が暗黙に使う `ebykn_prelude` の名前（`Seq`、`Set`、`Map`、`seq!`、`set!`、`map!`、`View` など）を使います"
+        ]
+    );
+    // `builtin` はよくある語なので、パスの途中と変数はよい。名前の `vstd` も変数ならよい。
+    ok(
+        "mod builtin { pub fn f() {} }\nfn g() { crate::builtin::f(); let builtin = 1; let vstd = builtin; }",
+    );
+}
+
+/// 規則 1：付録 A・B の `.eyk` は vstd を参照せずに読める（`Seq`、`seq!` などは prelude の名前）。
+#[test]
+fn appendix_does_not_refer_to_vstd() {
+    ok(include_str!("../../../tests/golden/stack/src/lib.eyk"));
+    ok(include_str!("fixtures/dlist.eyk"));
+}
+
+/// 規則 2：std・core・alloc・vstd・ebykn_prelude という名前への改名を拒否する。
+#[test]
+fn reserved_names_cannot_be_given_to_something_else() {
+    let want = "the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to something else";
+    for src in [
+        "extern crate foo as std;",
+        "extern crate foo as ebykn_prelude;",
+        "use foo as vstd;",
+        "use foo as core;",
+        "use foo::bar as alloc;",
+        "use foo::std;",
+        "use foo::{x as ebykn_prelude};",
+    ] {
+        rejects(src, want);
+    }
+    ok("use std;\nuse core;\nextern crate alloc;\nuse std::collections::HashMap;");
+}
+
+/// 規則 3（F2）：属性の verus_verify / verus_spec は、パスの最後の名前で見る。
+#[test]
+fn verus_attributes_are_found_by_their_last_name() {
+    rejects(
+        "#[vstd::prelude::verus_verify(external_body)] fn g() -> (r: bool) ensures r == false { true }",
+        "`#[verus_verify]` is Verus syntax",
+    );
+    rejects(
+        "#[cfg_attr(all(), vstd::prelude::verus_spec(ensures false))] fn f() {}",
+        "`#[verus_spec]` is Verus syntax",
+    );
+    rejects(
+        "#[a::b::verus_spec] fn f() {}",
+        "`#[verus_spec]` is Verus syntax",
+    );
+    // 改名した属性は、改名の use で拒否する（vstd などを参照するため）。
+    rejects(
+        "use vstd::prelude::verus_verify as vv;\n#[vv(external_body)] fn g() ensures false {}",
+        &format!("cannot refer to the crate `vstd` {DIRECT}"),
+    );
+}
+
+/// F3：許可リストは最後の名前だけでは判定しない（パスの先頭も見る）。
+#[test]
+fn allowed_macro_names_under_other_paths_are_rejected() {
+    rejects(
+        "fn f() { evil::vec![1] }",
+        &format!("macro `evil::vec!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { evil::println!(\"x\") }",
+        &format!("macro `evil::println!` {NOT_ALLOWED}"),
+    );
+    rejects(
+        "fn f() { vec![evil::vec![1]] }",
+        &format!("macro `evil::vec!` {NOT_ALLOWED}"),
+    );
+}
+
+/// F4：属性の値の中のマクロにも許可リストをかける。
+#[test]
+fn macros_in_attribute_values_are_checked() {
+    rejects(
+        "#[doc = evil!()] fn f() {}",
+        &format!("macro `evil!` {NOT_ALLOWED}"),
+    );
+    rejects("#[doc = verus!{}] fn f() {}", "`verus!` is Verus syntax");
+    rejects(
+        "#[cfg_attr(all(), doc = evil!())] fn f() {}",
+        &format!("macro `evil!` {NOT_ALLOWED}"),
+    );
+    ok("#[doc = \"text\"] #[doc = concat!(\"a\", \"b\")] fn f() {}");
 }

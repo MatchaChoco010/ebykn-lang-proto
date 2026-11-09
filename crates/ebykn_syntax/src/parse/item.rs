@@ -211,12 +211,28 @@ fn check_rust_item(it: &syn::Item) {
                 }
             }
         }
+        syn::Item::ExternCrate(e) => {
+            if let Some((_, r)) = &e.rename
+                && RESERVED_NAMES.contains(&r.to_string().as_str())
+                && *r != e.ident
+            {
+                push(
+                    sp(r.span()),
+                    Message::ReservedRename {
+                        written: format!("extern crate {} as {r}", e.ident),
+                    },
+                );
+            }
+        }
         syn::Item::Union(u) => {
             fields(&syn::Fields::Named(u.fields.clone()));
         }
         other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
     }
 }
+
+/// 改名して付けられない名前（#16 の既定）。
+const RESERVED_NAMES: &[&str] = &["std", "core", "alloc", "vstd", "ebykn_prelude"];
 
 /// `use` の木を検査する（#16 の既定）。Verus のマクロの名前を取り込む・改名するものと、
 /// `.eyk` で呼べるマクロの名前を外のクレートから取り込む・その名前に改名するもの
@@ -243,7 +259,9 @@ fn check_use(tree: &syn::UseTree, prefix: &mut Vec<String>) {
                 [prefix, std::slice::from_ref(&o)].concat().join("::")
             )
         };
-        if super::tokens::VERUS_MACROS.contains(&o.as_str())
+        if RESERVED_NAMES.contains(&n.as_str()) && !(prefix.is_empty() && o == n) {
+            push(sp(name.span()), Message::ReservedRename { written });
+        } else if super::tokens::VERUS_MACROS.contains(&o.as_str())
             || super::tokens::VERUS_MACROS.contains(&n.as_str())
         {
             push(sp(orig.span()), Message::VerusOnly { written });
