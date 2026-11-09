@@ -26,7 +26,7 @@ impl<T> Copy for Ptr<T> {
 /// `Ptr<T>` の指す先を読み書き・解放する権限（tracked）。
 ///
 /// 型不変条件として `T` がゼロサイズ型でないことを持つ。`Region` はこれを使って、
-/// 挿入する権限の鍵が既存の鍵と重ならないことを示す（`OPEN.md`）。
+/// 挿入する権限の鍵が既存の鍵と重ならないことを示す（`docs/current-spec.md`）。
 pub tracked struct PointsTo<T> {
     tracked perm: simple_pptr::PointsTo<T>,
 }
@@ -67,7 +67,7 @@ impl<T> PointsTo<T> {
     }
 }
 
-/// `T` がゼロサイズ型でないことを確かめる。ゼロサイズ型なら戻らない（`OPEN.md`）。
+/// `T` がゼロサイズ型でないことを確かめる。ゼロサイズ型なら戻らない（`docs/current-spec.md`）。
 ///
 /// `size_of::<T>()` は定数なので、ゼロサイズでない型では分岐ごと消える。
 #[verifier::exec_allows_no_decreases_clause]
@@ -120,7 +120,7 @@ impl<T> Ptr<T> {
         self.0.borrow(Tracked(&perm.perm))
     }
 
-    /// 指す先に `v` を書く（`*p = v`）。初期化済みなら前の値は drop せずに捨てる（`OPEN.md`）。
+    /// 指す先に `v` を書く（`*p = v`）。初期化済みなら前の値は drop せずに捨てる（`docs/current-spec.md`）。
     pub fn write(self, Tracked(perm): Tracked<&mut PointsTo<T>>, v: T)
         requires
             old(perm).pptr() == self,

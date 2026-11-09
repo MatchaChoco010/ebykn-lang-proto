@@ -766,7 +766,7 @@ fn verus_clause_builtins_are_rejected_as_calls() {
     ok(
         "mod m { pub fn requires(x: bool) {} }\npub fn f(s: &S) { m::requires(true); s.decreases(); }\npub struct S {}\nimpl S { pub fn decreases(&self) {} }",
     );
-    // 中を読まないマクロの引数の中は名前解決しないので、パス付きでも拒否する（`OPEN.md`）。
+    // 中を読まないマクロの引数の中は名前解決しないので、パス付きでも拒否する（`docs/current-spec.md`）。
     rejects(
         "pub fn f(x: u64) { println!(\"{}\", m::requires(x)); }",
         "`m::requires(..)` is Verus syntax",

@@ -238,7 +238,7 @@ pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
     }
 }
 
-/// マクロの呼び出し。`.eyk` で呼べるマクロは固定の一覧だけ（#16 の既定、`OPEN.md`）。
+/// マクロの呼び出し。`.eyk` で呼べるマクロは固定の一覧だけ（#16 の既定、`docs/current-spec.md`）。
 /// vstd の仕様用のマクロの引数は Ebykn の式として読み、std のマクロの引数からは証明の
 /// 構文と Verus の構文を字句的に探す。
 pub(super) fn mac(m: &syn::Macro) -> ast::Macro {

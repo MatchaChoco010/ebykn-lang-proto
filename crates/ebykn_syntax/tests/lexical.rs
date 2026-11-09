@@ -87,7 +87,7 @@ fn at_sign_is_resolved_by_position() {
     assert_eq!(e("let S { a, @r } = s;"), "(let S { a, @r } s)");
 }
 
-/// 権限 `p@` の直後の契約の句のキーワードは、消去フィールドの名前にしない（`OPEN.md`）。
+/// 権限 `p@` の直後の契約の句のキーワードは、消去フィールドの名前にしない（`docs/current-spec.md`）。
 #[test]
 fn clause_keyword_after_permission_starts_a_clause() {
     assert_eq!(

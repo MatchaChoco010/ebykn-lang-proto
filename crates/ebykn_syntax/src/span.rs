@@ -2,7 +2,7 @@
 //!
 //! 位置はバイトの範囲で持ち、行と列はファイルの本文から求める。行は 1 から、列は 1 から
 //! 数え、列は Unicode のスカラー値（`char`）の数で数える（rustc の JSON 診断の
-//! `column_start` と同じ）。長さはバイトで数える（`OPEN.md`）。
+//! `column_start` と同じ）。長さはバイトで数える（`docs/current-spec.md`）。
 
 use std::fmt;
 

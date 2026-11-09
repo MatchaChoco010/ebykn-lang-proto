@@ -1,4 +1,4 @@
-//! `check-prelude-exports`：`ebykn_prelude` が vstd を glob で再公開していない（#16 の既定、`OPEN.md`）。
+//! `check-prelude-exports`：`ebykn_prelude` が vstd を glob で再公開していない（#16 の既定、`docs/current-spec.md`）。
 //!
 //! `.eyk` には暗黙に `use ebykn_prelude::*;` が付く（仕様 §3.1）。prelude が `pub use vstd::prelude::*;`
 //! などをすると、`.eyk` から `admit` や `requires` などの Verus の組み込みに届く。そこで、

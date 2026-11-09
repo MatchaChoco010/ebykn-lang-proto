@@ -257,7 +257,7 @@ const KEYWORDS: &[&str] = &[
 
 /// Ebykn が中を構文として読まないトークン列から、証明の構文と Verus の構文に当たる形と、
 /// `.eyk` で呼べないマクロの呼び出しを探して診断にする。読まないものについて黙らないため
-/// （`OPEN.md`）。
+/// （`docs/current-spec.md`）。
 pub(super) fn scan_opaque(ts: &TokenStream) {
     let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
     let ident = |tt: Option<&TokenTree>| match tt {
@@ -313,7 +313,7 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             }
             let leading = j >= 2 && punct(tts.get(j - 1), ':') && punct(tts.get(j - 2), ':');
             let written = format!("{}{}(..)", if leading { "::" } else { "" }, segs.join("::"));
-            // 中を読まないトークン列の中は名前解決しないので、どの綴りも拒否する（`OPEN.md`）。
+            // 中を読まないトークン列の中は名前解決しないので、どの綴りも拒否する（`docs/current-spec.md`）。
             super::reserved_path(
                 std::slice::from_ref(&name),
                 true,

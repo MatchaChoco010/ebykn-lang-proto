@@ -28,7 +28,7 @@ fn borrow_blocks() {
         e("borrow r[h] { Some(&(*h).val) }"),
         "(borrow r[h] {(call Some (& (. (paren (* h)) val)))})"
     );
-    // 付録 A：match の腕とブロックの末尾の式（`OPEN.md`）。
+    // 付録 A：match の腕とブロックの末尾の式（`docs/current-spec.md`）。
     assert_eq!(
         e("match x { Some(t) => borrow r[t] { 1 }, None => 2 }"),
         "(match x (Some(t) => (borrow r[t] {1})) (None => 2))"

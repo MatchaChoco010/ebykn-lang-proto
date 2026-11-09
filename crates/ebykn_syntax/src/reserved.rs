@@ -67,7 +67,7 @@ pub const VERUS_MACROS: &[&str] = &[
 /// 固定した Verus（`release/0.2026.11.02.8bf68ee`）の `verus_builtin` の `src/lib.rs` の公開関数のうち、
 /// 契約の句（`requires` など）、証明（`assert_` など）、モードの変換（`tracked_exec` など）、
 /// 書き下しの内部の印に当たるものをすべて挙げた。値を求めるだけの仕様の関数（`equal`、`imply`、
-/// `add`、`spec_literal_int` など）と、Ebykn が使う `old` は入れない（`OPEN.md`）。
+/// `add`、`spec_literal_int` など）と、Ebykn が使う `old` は入れない（`docs/current-spec.md`）。
 /// `opens_invariants_none` / `opens_invariants_any` は Verus の句の名前で、関数ではないが入れる。
 pub const VERUS_BUILTIN_CALLS: &[&str] = &[
     // 句

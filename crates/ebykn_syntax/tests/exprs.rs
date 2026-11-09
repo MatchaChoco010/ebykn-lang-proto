@@ -117,7 +117,7 @@ fn at_forms() {
         e("self@nodes[self@order[i]].prev"),
         "(. (index (@ self nodes) (index (@ self order) i)) prev)"
     );
-    // 付録 A は `self` 以外にも `@name` を付ける（`OPEN.md`）。
+    // 付録 A は `self` 以外にも `@name` を付ける（`docs/current-spec.md`）。
     assert_eq!(
         e("old(self)@order.index_of(h)"),
         "(.index_of (@ (call old self) order) h)"

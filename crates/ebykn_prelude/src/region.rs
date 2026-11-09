@@ -132,7 +132,7 @@ impl<L: Loc> Region<L> {
         Region { map: Map::tracked_empty() }
     }
 
-    /// 権限を入れる（`put r[p];`）。鍵が新しいことは事後条件で返す（`OPEN.md`）。
+    /// 権限を入れる（`put r[p];`）。鍵が新しいことは事後条件で返す（`docs/current-spec.md`）。
     pub proof fn insert(tracked &mut self, tracked perm: L::Perm)
         requires
             L::perm_init(perm),
