@@ -205,13 +205,25 @@ pub struct WhereClause {
     pub span: Span,
 }
 
-/// マクロの呼び出し（`seq![..]` など）。引数は読まずにトークン列のまま持つ。
+/// マクロの呼び出し。`tokens` は引数のトークン列。vstd の仕様用のマクロ（`seq!`、`set!`、
+/// `map!`）は引数を Ebykn の式として読み、`args` に持つ（`OPEN.md`）。
 #[derive(Debug, Clone)]
 pub struct Macro {
     pub path: Path,
     pub delimiter: Delimiter,
     pub tokens: TokenStream,
+    pub args: MacroArgs,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum MacroArgs {
+    /// 引数を構文として読まないマクロ（`println!`、`vec!` など）。
+    Tokens,
+    /// `seq![a, b]` / `set![a, b]`。
+    Exprs(Vec<Expr>),
+    /// `map![k => v, ..]`。
+    Map(Vec<(Expr, Expr)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

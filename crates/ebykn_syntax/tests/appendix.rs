@@ -74,7 +74,7 @@ fn stack_reads() {
             "(let n (call Ptr::new (struct Node val:v next:(. self head))))",
             "(= (. self head) (call Some n));",
             "(put self@nodes[n])",
-            "(spec= (@ self order) (+ seq!(n) (@ self order)))",
+            "(spec= (@ self order) (+ seq![n] (@ self order)))",
         ]
     );
     assert_eq!(

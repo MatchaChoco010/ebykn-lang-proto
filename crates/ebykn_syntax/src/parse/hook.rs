@@ -29,6 +29,10 @@ pub(super) const CLAUSE_KEYWORDS: &[&str] = &[
 ];
 
 pub(super) fn hook(site: EbyknSite, input: ParseStream) -> syn::Result<bool> {
+    // `parse_eyk` の外では上流と同じに動く。
+    if !super::in_parse() {
+        return Ok(false);
+    }
     match site {
         EbyknSite::Stmt => stmt(input),
         EbyknSite::Atom { allow_struct } => match peek_atom(input) {
@@ -512,8 +516,14 @@ pub(super) enum RawFieldPat {
         pat: Option<syn::Pat>,
         span: proc_macro2::Span,
     },
-    Erased(proc_macro2::Ident),
-    ErasedRest(proc_macro2::Span),
+    Erased {
+        attrs: Vec<syn::Attribute>,
+        ident: proc_macro2::Ident,
+    },
+    ErasedRest {
+        attrs: Vec<syn::Attribute>,
+        span: proc_macro2::Span,
+    },
 }
 
 pub(super) fn parse_pat_struct_body(input: ParseStream) -> syn::Result<RawPatStructBody> {
@@ -533,9 +543,12 @@ pub(super) fn parse_pat_struct_body(input: ParseStream) -> syn::Result<RawPatStr
             content.parse::<Token![@]>()?;
             if content.peek(Token![..]) {
                 content.parse::<Token![..]>()?;
-                fields.push(RawFieldPat::ErasedRest(start));
+                fields.push(RawFieldPat::ErasedRest { attrs, span: start });
             } else {
-                fields.push(RawFieldPat::Erased(content.parse::<syn::Ident>()?));
+                fields.push(RawFieldPat::Erased {
+                    attrs,
+                    ident: content.parse::<syn::Ident>()?,
+                });
             }
         } else {
             let by_ref = content.parse::<Option<Token![ref]>>()?.is_some();
@@ -683,13 +696,49 @@ pub(super) fn parse_stmt_kind(
         }
         StmtKind::Atom(k) => RawStmt::Atom(parse_atom(input, k)?),
         StmtKind::Item => {
-            let item = if lookahead_only {
-                super::suppressed(|| item::parse_item(input, item::Ctx::Block))?
+            if lookahead_only {
+                RawStmt::Item(Box::new(lookahead_item(input)?))
             } else {
-                item::parse_item(input, item::Ctx::Block)?
-            };
-            RawStmt::Item(Box::new(item))
+                RawStmt::Item(Box::new(item::parse_item(input, item::Ctx::Block)?))
+            }
         }
+    })
+}
+
+/// 差し込み口で、ブロックの中の項目を読む。読んだ項目と診断を覚えておき、写すとき
+/// （[`parse_stmt_verbatim`]）に使う。読み直すと、入れ子の項目の深さについて指数的になる。
+fn lookahead_item(input: ParseStream) -> syn::Result<ast::Item> {
+    let lo = input.span().byte_range().start;
+    if let Some(c) = super::cached_item(lo) {
+        skip_to(input, c.hi)?;
+        return Ok(c.item);
+    }
+    let begin = input.fork();
+    let (item, diags) = super::captured(|| item::parse_item(input, item::Ctx::Block));
+    let item = item?;
+    let hi = super::span_between(&begin, input).hi;
+    super::cache_item(
+        lo,
+        super::CachedItem {
+            item: item.clone(),
+            diags,
+            hi,
+        },
+    );
+    Ok(item)
+}
+
+/// バイト位置 `hi` までのトークンを読み飛ばす。
+fn skip_to(input: ParseStream, hi: usize) -> syn::Result<()> {
+    input.step(|cursor| {
+        let mut c = *cursor;
+        while let Some((tt, next)) = c.token_tree() {
+            if tt.span().byte_range().start >= hi {
+                break;
+            }
+            c = next;
+        }
+        Ok(((), c))
     })
 }
 
@@ -777,6 +826,23 @@ pub(super) fn parse_stmt_verbatim(
     let attrs = ahead.call(syn::Attribute::parse_outer)?;
     match peek_stmt(&ahead)? {
         Some(StmtKind::Item) => {
+            // 差し込み口で読んだ項目があれば使う（属性はフォークが先に読んでいるので、ここで足す）。
+            let lo = ahead.span().byte_range().start;
+            if let Some(c) = super::cached_item(lo) {
+                for d in c.diags {
+                    super::push(d.span, d.message);
+                }
+                input.advance_to(&ahead);
+                skip_to(input, c.hi)?;
+                let mut item = c.item;
+                let mut outer = super::convert::attrs(&attrs);
+                if let Some(a) = outer.first() {
+                    item.span = a.span.to(item.span);
+                }
+                outer.append(&mut item.attrs);
+                item.attrs = outer;
+                return Ok((Vec::new(), RawStmt::Item(Box::new(item))));
+            }
             // 項目は属性ごと読む。
             let raw = parse_stmt_kind(input, StmtKind::Item, false)?;
             Ok((Vec::new(), raw))

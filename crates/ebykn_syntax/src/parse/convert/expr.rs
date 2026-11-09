@@ -12,6 +12,11 @@ use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawV
 use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
 
+/// 呼び出しの形で書く証明の構文（仕様 §5.7）。`.eyk` ではどの位置でも拒否する。
+const PROOF_CALLS: &[&str] = &["assert", "reveal", "reveal_with_fuel", "hide"];
+/// 呼び出しの形で書く Verus の証明の関数で、Ebykn にないもの（`unchecked` を使う）。
+const VERUS_CALLS: &[&str] = &["assume", "admit"];
+
 fn mk(attrs: Vec<ast::Attr>, kind: ast::ExprKind, span: Span) -> ast::Expr {
     ast::Expr { attrs, kind, span }
 }
@@ -84,6 +89,19 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
         syn::Expr::Call(c) => {
             if c.atomically.is_some() {
                 return rejected(&c, verus_only("atomically"));
+            }
+            // `assert(..)` などは、式の位置でも証明の構文（Verus に渡すとそう読まれる）。
+            if let syn::Expr::Path(p) = &*c.func
+                && p.qself.is_none()
+                && let Some(i) = p.path.get_ident()
+            {
+                let n = i.to_string();
+                if PROOF_CALLS.contains(&n.as_str()) {
+                    return rejected(&c, proof(&format!("{n}(..)")));
+                }
+                if VERUS_CALLS.contains(&n.as_str()) {
+                    return rejected(&c, verus_only(&format!("{n}(..)")));
+                }
             }
             mk(
                 attrs(&c.attrs),
@@ -328,7 +346,13 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
             )
         }
         syn::Expr::View(v) => match &*v.expr {
-            syn::Expr::Path(p) if p.qself.is_none() && p.path.get_ident().is_some() => {
+            // 権限は `Ident "@"`。`self@` などは Verus の view の書き方。
+            syn::Expr::Path(p)
+                if p.qself.is_none()
+                    && p.path.get_ident().is_some_and(|i| {
+                        !matches!(i.to_string().as_str(), "self" | "Self" | "super" | "crate")
+                    }) =>
+            {
                 let id = p.path.get_ident().expect("ident");
                 mk(attrs(&v.attrs), K::Perm(ident(id)), span)
             }
@@ -349,6 +373,7 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
         // async / await / yield / try ブロック / &raw など。中は読まずに Verus に渡す。
         other => {
             let tk = tokens(&other);
+            crate::parse::tokens::scan_opaque(&tk.tokens);
             mk(Vec::new(), K::Rust(tk), span)
         }
     }
@@ -940,8 +965,16 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                             span: sp(span),
                         }
                     }
-                    hook::RawFieldPat::Erased(i) => ast::FieldPat::Erased(ident(&i)),
-                    hook::RawFieldPat::ErasedRest(s) => ast::FieldPat::ErasedRest(sp(s)),
+                    hook::RawFieldPat::Erased { attrs: a, ident: i } => ast::FieldPat::Erased {
+                        attrs: attrs(&a),
+                        ident: ident(&i),
+                    },
+                    hook::RawFieldPat::ErasedRest { attrs: a, span: s } => {
+                        ast::FieldPat::ErasedRest {
+                            attrs: attrs(&a),
+                            span: sp(s),
+                        }
+                    }
                 })
                 .collect();
             ast::Pat {

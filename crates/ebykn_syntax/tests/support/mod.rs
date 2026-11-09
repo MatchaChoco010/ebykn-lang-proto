@@ -275,7 +275,22 @@ pub fn expr(e: &Expr) -> String {
             format!("(match {} {})", expr(x), a.join(" "))
         }
         K::Lit(l) => l.text.clone(),
-        K::Macro(m) => format!("{}!({})", path(&m.path), m.tokens),
+        K::Macro(m) => match &m.args {
+            MacroArgs::Tokens => format!("{}!({})", path(&m.path), m.tokens),
+            MacroArgs::Exprs(v) => format!(
+                "{}![{}]",
+                path(&m.path),
+                v.iter().map(expr).collect::<Vec<_>>().join(", ")
+            ),
+            MacroArgs::Map(v) => format!(
+                "{}![{}]",
+                path(&m.path),
+                v.iter()
+                    .map(|(k, x)| format!("{} => {}", expr(k), expr(x)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
         K::Paren(x) => format!("(paren {})", expr(x)),
         K::Path { path: p, .. } => path(p),
         K::Range { start, end, closed } => format!(
@@ -399,6 +414,10 @@ pub fn stmt(s: &Stmt) -> String {
     }
 }
 
+fn attr_prefix(a: &[Attr]) -> String {
+    a.iter().map(|a| format!("#[{}] ", path(&a.path))).collect()
+}
+
 pub fn pat(p: &Pat) -> String {
     match &p.kind {
         PatKind::Ident {
@@ -454,8 +473,10 @@ pub fn pat(p: &Pat) -> String {
                             format!("{}: {}", member(m), pat(x))
                         }
                     }
-                    FieldPat::Erased(i) => format!("@{}", ident(i)),
-                    FieldPat::ErasedRest(_) => "@..".into(),
+                    FieldPat::Erased { attrs, ident: i } => {
+                        format!("{}@{}", attr_prefix(attrs), ident(i))
+                    }
+                    FieldPat::ErasedRest { attrs, .. } => format!("{}@..", attr_prefix(attrs)),
                 })
                 .collect();
             if *rest {

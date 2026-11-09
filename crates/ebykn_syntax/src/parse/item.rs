@@ -100,22 +100,11 @@ fn item_start(t: &[TokenTree]) -> bool {
     let any = |names: &[&str], tt: Option<&TokenTree>| names.iter().any(|n| is_ident(tt, n));
     any(
         &[
-            "pub",
-            "fn",
-            "struct",
-            "enum",
-            "trait",
-            "impl",
-            "mod",
-            "type",
-            "use",
-            "extern",
-            "broadcast",
-            "uninterp",
-            "assume_specification",
+            "pub", "fn", "struct", "enum", "trait", "impl", "mod", "type", "use", "extern",
         ],
         a,
-    ) || is_ident(a, "static") && matches!(b, Some(TokenTree::Ident(i)) if i != "move")
+    ) || verus_item_start(t)
+        || is_ident(a, "static") && matches!(b, Some(TokenTree::Ident(i)) if i != "move")
         || is_ident(a, "union") && matches!(b, Some(TokenTree::Ident(_)))
         || is_ident(a, "macro_rules") && is_punct(b, '!')
         || is_ident(a, "const") && matches!(b, Some(TokenTree::Ident(_)))
@@ -131,6 +120,17 @@ fn item_start(t: &[TokenTree]) -> bool {
         || any(&["ghost", "tracked"], a) && any(&["struct", "enum"], b)
 }
 
+/// Verus の項目の先頭か。後ろに Verus の形が続くときだけそう見る（`broadcast(tx, 1);` は
+/// Rust の呼び出し）。
+fn verus_item_start(t: &[TokenTree]) -> bool {
+    let (a, b) = (t.first(), t.get(1));
+    let any = |names: &[&str], tt: Option<&TokenTree>| names.iter().any(|n| is_ident(tt, n));
+    is_ident(a, "broadcast") && any(&["use", "group", "proof", "fn", "axiom"], b)
+        || is_ident(a, "uninterp") && is_ident(b, "spec")
+        || is_ident(a, "assume_specification")
+            && (is_punct(b, '<') || super::is_group(b, proc_macro2::Delimiter::Bracket))
+}
+
 /// 一つの項目を読む。
 pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item> {
     let begin = input.fork();
@@ -138,7 +138,15 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
     let a = ahead.call(syn::Attribute::parse_outer)?;
     let v: syn::Visibility = ahead.parse()?;
     if is_rust_passthrough(&ahead) {
-        let _: syn::Item = input.parse()?;
+        let it: syn::Item = input.parse()?;
+        // マクロの呼び出し（`verus! { .. }`、`macro_rules!` など）は名前と中身を検査する。
+        // それ以外も、中を読まないので証明の構文を字句的に探す。
+        match &it {
+            syn::Item::Macro(m) => {
+                convert::mac(&m.mac);
+            }
+            other => super::tokens::scan_opaque(&quote::ToTokens::to_token_stream(other)),
+        }
         let ts = tokens_between(&begin, input);
         let span = span_between(&begin, input);
         return Ok(ast::Item {
@@ -219,15 +227,15 @@ fn verus_item(input: ParseStream) -> Option<Message> {
         verus("exec fn", "fn")
     } else if is_ident(a, "axiom") && is_ident(b, "fn") {
         verus("axiom fn", "unchecked lemma fn")
-    } else if is_ident(a, "broadcast") {
+    } else if is_ident(a, "broadcast") && verus_item_start(&t) {
         verus("broadcast", "lemma group / use lemmas")
-    } else if is_ident(a, "assume_specification") {
+    } else if is_ident(a, "assume_specification") && verus_item_start(&t) {
         verus("assume_specification", "unchecked fn path::f(..)")
     } else if (is_ident(a, "ghost") || is_ident(a, "tracked"))
         && (is_ident(b, "struct") || is_ident(b, "enum"))
     {
         only("ghost struct / tracked struct")
-    } else if is_ident(a, "uninterp") {
+    } else if is_ident(a, "uninterp") && verus_item_start(&t) {
         only("uninterp spec fn")
     } else if is_ident(a, "spec") && is_ident(b, "const") {
         only("spec const")
@@ -785,9 +793,7 @@ fn impl_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
         syn::Generics::default()
     };
     let t = peek_tts(input, 2);
-    if is_ident(t.first(), "spec")
-        && (matches!(t.get(1), Some(TokenTree::Ident(i)) if i != "for") || is_punct(t.get(1), ':'))
-    {
+    if is_ident(t.first(), "spec") && matches!(t.get(1), Some(TokenTree::Ident(i)) if i != "for") {
         let kw = parse_kw(input, "spec")?;
         let p: syn::Path = input.parse()?;
         let self_ty = if input.peek(Token![for]) {
@@ -853,6 +859,7 @@ fn type_item(input: ParseStream) -> syn::Result<ast::ItemKind> {
         // 仕様 §5.1：`where` の後が `Type :` の形なら Rust の where 句、そうでなければ部分集合型。
         let rust_where = super::lookahead(input, |f| {
             f.parse::<Token![where]>()?;
+            let _: Option<syn::BoundLifetimes> = f.parse()?;
             let _: syn::Type = f.parse()?;
             if super::hook::is_single_colon(&peek_tts(f, 2)) {
                 Ok(())

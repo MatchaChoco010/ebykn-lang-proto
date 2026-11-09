@@ -433,7 +433,7 @@ pub enum FieldPat {
         span: Span,
     },
     /// `@name`。
-    Erased(Ident),
+    Erased { attrs: Vec<Attr>, ident: Ident },
     /// `@..`（残りの消去フィールドを捨てる）。
-    ErasedRest(Span),
+    ErasedRest { attrs: Vec<Attr>, span: Span },
 }

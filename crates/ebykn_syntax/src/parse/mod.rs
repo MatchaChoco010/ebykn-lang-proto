@@ -58,7 +58,8 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
         cx.borrow_mut().replace(Cx {
             file: file.clone(),
             diags: Vec::new(),
-            suppress: 0,
+            capture: Vec::new(),
+            items: std::collections::HashMap::new(),
             pending: Vec::new(),
         })
     });
@@ -94,9 +95,11 @@ pub fn parse_eyk(file: &SourceFile) -> Parsed {
 struct Cx {
     file: SourceFile,
     diags: Vec<Diagnostic>,
-    /// 0 より大きい間は、[`push`] した診断を捨てる。差し込み口が項目を先読みする間に使う
-    /// （同じ項目は後で読み直すので、そのときに診断を出す）。
-    suppress: u32,
+    /// [`captured`] の中では、[`push`] した診断をここに貯める。
+    capture: Vec<Vec<Diagnostic>>,
+    /// 差し込み口が文の位置で読んだ項目（ブロックの中の項目）。鍵は項目の最初のトークンの
+    /// バイト位置。差し込み口で読んだ項目を、写すときに読み直さないために使う。
+    items: std::collections::HashMap<usize, CachedItem>,
     /// [`err`] で作ったエラーの中身。エラーの文言には添字だけを書く。
     pending: Vec<Message>,
 }
@@ -161,21 +164,47 @@ pub(crate) fn span_of_tokens(ts: &TokenStream) -> Option<Span> {
     Some(sp(first.span()).to(sp(last.span())))
 }
 
-/// 診断を足す（先読みの間は捨てる）。
+/// 診断を足す（[`captured`] の中では貯める）。
 pub(crate) fn push(span: Span, message: Message) {
     with_cx(|cx| {
-        if cx.suppress == 0 {
-            cx.diags.push(Diagnostic::new(span, message));
+        let d = Diagnostic::new(span, message);
+        match cx.capture.last_mut() {
+            Some(c) => c.push(d),
+            None => cx.diags.push(d),
         }
     });
 }
 
-/// 先読みの間、診断を捨てる。
-pub(crate) fn suppressed<R>(f: impl FnOnce() -> R) -> R {
-    with_cx(|cx| cx.suppress += 1);
+/// `f` の中で足した診断を、足さずに返す。
+pub(crate) fn captured<R>(f: impl FnOnce() -> R) -> (R, Vec<Diagnostic>) {
+    with_cx(|cx| cx.capture.push(Vec::new()));
     let r = f();
-    with_cx(|cx| cx.suppress -= 1);
-    r
+    let d = with_cx(|cx| cx.capture.pop().expect("capture"));
+    (r, d)
+}
+
+/// 差し込み口で読んだ項目と、そのときの診断。`hi` は項目の最後のトークンの終わり。
+#[derive(Clone)]
+pub(crate) struct CachedItem {
+    pub item: ast::Item,
+    pub diags: Vec<Diagnostic>,
+    pub hi: usize,
+}
+
+pub(crate) fn cache_item(lo: usize, item: CachedItem) {
+    with_cx(|cx| {
+        cx.items.insert(lo, item);
+    });
+}
+
+pub(crate) fn cached_item(lo: usize) -> Option<CachedItem> {
+    with_cx(|cx| cx.items.get(&lo).cloned())
+}
+
+/// `parse_eyk` の中か。差し込み口は、`parse_eyk` の外（ほかの verus_syn の利用者）では
+/// 何もしない。
+pub(crate) fn in_parse() -> bool {
+    CX.with(|cx| cx.try_borrow().map(|c| c.is_some()).unwrap_or(false))
 }
 
 const PENDING: &str = "\u{1}ebykn-pending#";
