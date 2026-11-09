@@ -472,6 +472,20 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#6（PR #13）、#61。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
 * 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`drop` から呼べる関数は判断待ち（#94）。
 
+### §7.2 実行関数の `decreases` は任意
+
+本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、この属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
+
+- `decreases` を書いたループと再帰は、この属性の下でも Verus が確かめます（減らなければ `failed`）。
+- `spec fn`・`lemma fn`・純粋関数（`fn f(..) -> T = e;`。spec の側を持つ）の再帰は、今までどおり `decreases` が要ります。定義の整合性に要るためです（設計ノート §4.3）。
+- そのため、実行関数の `verified` は停止を含みません。戻ったときに契約を満たし、戻るまでに算術のあふれや権限の誤りがないことを示します。停止を示すのは `decreases` を書いたループと再帰だけです（§9「`ebykn verify` の項目の状態と出力」）。
+- この属性は `--no-cheating` でも拒まれないので、`verify` の紛れ込んだ前提の照合で許す拒否は増えません。
+- `tests/golden/exec_decreases/` と、プローブ `exec_no_decreases*.rs`（`OPEN.md` の「M0 の実測」）で固定してあります。
+
+* 元の仕様：§7.2 の表は実行関数の `decreases` を書いたとおり写すだけで、書かない場合を定めていない。設計ノート §4.3 は「`spec fn` の再帰は必須、実行関数は任意」と決めているが、固定した Verus では書かないと検証の前に止まっていた。
+* 根拠：#81。条件付きの正しさ（設計ノート §3.1 の A1）は、書いた契約を満たすことを保証する。停止は、`decreases` を書いて選ぶ性質（§4.3）。
+* 状態：基準で決めた。
+
 ### §7.3 構造体と資源の書き下し
 
 - `put r[p];` は `proof { <r>.insert(__eyk_perm_p); }` です。`borrow mut` の末尾の `insert` も `proof { }` に入れます。実行コードに文として置くと、proof のモードの関数を呼べないエラーになります。
@@ -557,6 +571,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
+- 実行関数の `verified` は停止を含みません（§7.2「実行関数の `decreases` は任意」）。`verified` の実行関数があるときは、そのことを標準エラーに英日の文言で出します（`verified` for an executable function means it meets its contract whenever it returns; termination is proven only for loops and recursion that have `decreases`）。
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。

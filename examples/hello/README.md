@@ -29,6 +29,7 @@ ebykn: check passed (lowered to `$PWD/build/verus`; the self-contained check §6
 $ ebykn verify
 verified hello::double
 results 1 verified, 0 errors
+ebykn: `verified` for an executable function means it meets its contract whenever it returns; termination is proven only for loops and recursion that have `decreases`
 ```
 
 `$PWD` は、この例のディレクトリの絶対パスです。書き下した Verus のソースは `build/verus/src/lib.rs` にあります。

@@ -23,6 +23,7 @@ $ ebykn verify
 verified linearity-fixed::read_then_free
 verified linearity-fixed::free_once
 results 2 verified, 0 errors
+ebykn: `verified` for an executable function means it meets its contract whenever it returns; termination is proven only for loops and recursion that have `decreases`
 ```
 
 ## 試してみること

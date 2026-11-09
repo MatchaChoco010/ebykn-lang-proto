@@ -1316,6 +1316,7 @@ mod tests {
             admitted: vec!["k::l".into()],
             unchecked: vec![],
             external: vec![],
+            exec: vec![],
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),

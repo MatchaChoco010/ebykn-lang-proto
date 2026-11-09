@@ -36,6 +36,7 @@ verified shared-accounts::demo
 unchecked shared-accounts::main
 results 5 verified, 0 errors
 ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): shared-accounts::main (unchecked)
+ebykn: `verified` for an executable function means it meets its contract whenever it returns; termination is proven only for loops and recursion that have `decreases`
 $ ebykn build
 ebykn: built `build/verus/target/debug/shared-accounts` without verifying it; run `ebykn verify` to verify (`build --verified` comes in M5)
 $ echo $?

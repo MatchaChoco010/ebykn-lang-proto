@@ -1,0 +1,8 @@
+verified exec_decreases::halve_to_zero
+verified exec_decreases::count_down
+verified exec_decreases::halve_checked
+failed exec_decreases::stuck
+verified exec_decreases::tri
+verified exec_decreases::Counter::drain
+unchecked exec_decreases::spin
+results 9 verified, 1 errors

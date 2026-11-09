@@ -54,6 +54,9 @@ pub struct Output {
     pub unchecked: Vec<String>,
     /// `#[test]` の項目（`#[verifier::external]`。Verus は見ない）。
     pub external: Vec<String>,
+    /// 本体を検証する実行関数（`#[verifier::exec_allows_no_decreases_clause]` を付けた項目）。`decreases`
+    /// を書いていないループと再帰の停止は示さない（#81）。
+    pub exec: Vec<String>,
     /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
     /// `func-details` の名前の形（`k::m::impl&%*::e`。`*` は impl の番号）。
     pub verus_patterns: BTreeMap<String, String>,
@@ -83,6 +86,7 @@ pub(crate) struct Report {
     admitted: Vec<String>,
     unchecked: Vec<String>,
     external: Vec<String>,
+    exec: Vec<String>,
     verus_patterns: BTreeMap<String, String>,
     macros: Vec<MacroUse>,
 }
@@ -311,6 +315,7 @@ pub fn lower_with_crates(
     out.admitted = r.admitted;
     out.unchecked = r.unchecked;
     out.external = r.external;
+    out.exec = r.exec;
     out.verus_patterns = r.verus_patterns;
     out.macros = r.macros;
     Ok(out)

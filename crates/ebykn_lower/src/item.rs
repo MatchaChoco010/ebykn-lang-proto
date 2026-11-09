@@ -724,6 +724,15 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
     match &f.body {
         None => format!("{a}{v}{};", sig(&mut c)),
         Some(ast::FnBody::Block(b)) => {
+            // 実行関数の `decreases` は任意（設計ノート §4.3）。Verus は実行関数のループと再帰に
+            // `decreases` を求めるので、本体を検証する実行関数にだけ、それを外す属性を付ける。書いた
+            // `decreases` は、この属性の下でも Verus が確かめる（#81。`tests/verus-probes/exec_no_decreases*.rs`）。
+            // `spec fn`・`lemma fn`・純粋関数（spec の側を持つ）の再帰は、今までどおり `decreases` が要る。
+            if f.unchecked.is_none() && !is_test(&item.attrs) {
+                a = format!("#[verifier::exec_allows_no_decreases_clause] {a}");
+                let path = cx.item_path(&f.sig.ident.name);
+                cx.report.borrow_mut().exec.push(path);
+            }
             let sig = sig(&mut c);
             let body = c.body_block(b);
             format!("{a}{v}{sig} {}", rebind_owned(&f.contract, body))

@@ -21,14 +21,14 @@ impl<T> Stack<T> {
 }
 
 impl<T> Stack<T> {
-    pub fn new() -> (__eyk_r: Self)
+    #[verifier::exec_allows_no_decreases_clause] pub fn new() -> (__eyk_r: Self)
     ensures __eyk_r.invariant(), {
         Stack {
             head: None, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty())
         }
     }
 
-    pub fn push(&mut self, v: T)
+    #[verifier::exec_allows_no_decreases_clause] pub fn push(&mut self, v: T)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
         let (n, Tracked(__eyk_perm_n)) = Ptr::new(Node { val: v, next: self.head });
@@ -41,7 +41,7 @@ impl<T> Stack<T> {
         }
     }
 
-    pub fn pop(&mut self) -> Option < T >
+    #[verifier::exec_allows_no_decreases_clause] pub fn pop(&mut self) -> Option < T >
     requires old(self).invariant(),
     ensures final(self).invariant(), {
         let h = self.head?;
@@ -56,7 +56,7 @@ impl<T> Stack<T> {
 
 }
 
-pub fn unit_stack() -> Option < () > {
+#[verifier::exec_allows_no_decreases_clause] pub fn unit_stack() -> Option < () > {
     let mut s = Stack::< () >::new();
     s.push(());
     s.push(());

@@ -7,12 +7,12 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-pub fn alloc < T > (v: T) -> T {
+#[verifier::exec_allows_no_decreases_clause] pub fn alloc < T > (v: T) -> T {
     let (p, Tracked(__eyk_perm_p)) = Ptr::new(v);
     p.free(Tracked(__eyk_perm_p))
 }
 
-pub fn unit() {
+#[verifier::exec_allows_no_decreases_clause] pub fn unit() {
     alloc(());
 }
 
