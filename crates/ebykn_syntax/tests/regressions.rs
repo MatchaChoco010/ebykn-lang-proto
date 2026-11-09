@@ -721,3 +721,26 @@ fn forbidden_crates_in_use_groups_are_rejected() {
     // グループの中の自分のモジュールはよい。
     ok("use {self::m, crate::n as k};");
 }
+
+/// 最後の確認：許可リストのマクロの引数の中の `use` のグループも見る。`..` の直後の
+/// `builtin` はパスの先頭。
+#[test]
+fn forbidden_crates_in_use_groups_inside_macro_arguments_are_rejected() {
+    rejects(
+        "fn f() { assert!({ use {vstd}; true }) }",
+        &format!("cannot refer to the crate `vstd` {DIRECT}"),
+    );
+    let src = "fn f() { println!(\"{}\", { use {vstd as v}; v::prelude::admit(); 1 }) }";
+    rejects(src, &format!("cannot refer to the crate `vstd` {DIRECT}"));
+    rejects(src, "`admit(..)` is Verus syntax");
+    rejects(
+        "fn f() { vec![{ use {self::m, builtin as b}; 1 }] }",
+        &format!("cannot refer to the crate `builtin` {DIRECT}"),
+    );
+    rejects(
+        "fn f() { for i in 0..builtin::x() {} }",
+        &format!("cannot refer to the crate `builtin` {DIRECT}"),
+    );
+    // `use` のグループでない `{ }` の先頭はよい。
+    ok("fn f() { assert!({ let builtin = 1; builtin > 0 }); }");
+}

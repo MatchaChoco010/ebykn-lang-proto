@@ -27,8 +27,23 @@ const PROOF_ATTRS: &[&str] = &[
 const VERUS_ATTRS: &[&str] = &["all_triggers", "via_fn", "when_used_as_spec"];
 
 pub(super) fn scan(ts: &TokenStream) {
+    scan_in(ts, false);
+}
+
+/// `use_group` は、`use` の木の `{ }` のグループの中か。マクロの引数の中の `use` は
+/// 構文として読まないので、ここで `use {vstd as v};` のグループの先頭の名前を見る。
+fn scan_in(ts: &TokenStream, use_group: bool) {
     let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
+    // `use` から `;` までの間か（`use<'a>` の精密な捕捉は除く）。
+    let mut in_use = false;
     for (i, tt) in tts.iter().enumerate() {
+        match tt {
+            TokenTree::Ident(id) if id == "use" => {
+                in_use = !matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '<');
+            }
+            TokenTree::Punct(p) if p.as_char() == ';' => in_use = false,
+            _ => {}
+        }
         match tt {
             TokenTree::Ident(id) => {
                 let name = unraw(&id.to_string());
@@ -40,19 +55,27 @@ pub(super) fn scan(ts: &TokenStream) {
                         },
                     );
                 }
-                if refers_to_crate(&tts, i, &name) {
+                let group_head = use_group
+                    && (i == 0
+                        || matches!(tts.get(i - 1), Some(TokenTree::Punct(p)) if p.as_char() == ','));
+                if refers_to_crate(&tts, i, &name)
+                    || group_head && FORBIDDEN_CRATES.contains(&name.as_str())
+                {
                     push(sp(id.span()), Message::VstdDirect { name });
                 }
             }
             TokenTree::Punct(p) if p.as_char() == '#' => attr(&tts, i),
-            TokenTree::Group(g) => scan(&g.stream()),
+            TokenTree::Group(g) => {
+                let inner_use = (in_use || use_group) && g.delimiter() == Delimiter::Brace;
+                scan_in(&g.stream(), inner_use)
+            }
             _ => {}
         }
     }
 }
 
-/// `.eyk` が直接参照しないクレート（#16 の既定）。`.eyk` に要るものは `ebykn_prelude` が
-/// 再公開し、全 `.eyk` に暗黙に `use` される（仕様 §3.1、§7.1）。
+/// `.eyk` が直接参照しないクレート（#16 の既定）。`.eyk` は vstd の名前（`Seq`、`seq!` など）を
+/// 裸の名前で書き、生成する各 `.rs` の先頭の `use vstd::prelude::*;`（仕様 §7.5）で解決する。
 pub(super) const FORBIDDEN_CRATES: &[&str] =
     &["vstd", "verus_builtin", "verus_builtin_macros", "builtin"];
 
@@ -70,7 +93,9 @@ fn refers_to_crate(tts: &[TokenTree], i: usize, name: &str) -> bool {
     let prev_path_mid = prev_path && i >= 3 && matches!(tts.get(i - 3), Some(TokenTree::Ident(_)));
     let after_kw = kw(i.checked_sub(1), "use") || kw(i.checked_sub(1), "crate");
     // `a.builtin::<u8>()` はメソッドの呼び出し。
-    let after_dot = matches!(i.checked_sub(1).and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.');
+    // `0..builtin::x()` の `..` はメソッドの `.` ではない。
+    let dot = |j: Option<usize>| matches!(j.and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.');
+    let after_dot = dot(i.checked_sub(1)) && !dot(i.checked_sub(2));
     if name == "builtin" {
         next_path && !prev_path_mid && !after_dot || after_kw
     } else {
