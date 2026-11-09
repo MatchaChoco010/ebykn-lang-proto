@@ -629,6 +629,55 @@ fn foreign_impl_test_methods_are_listed() {
     assert_eq!(out.external, ["single::<u64 as Tr>::e"]);
 }
 
+/// 本体を検証する実行関数の一覧（`Output::exec`）。`verify` の停止の注記と、`--json` の
+/// `"termination": "not_proven"` がこの一覧で決まる（#81）。関数・impl のメソッド・trait の既定のメソッド・
+/// 外の型への impl のメソッド・`Drop::drop` を含み、`spec fn`・純粋関数・`lemma fn`・`unchecked`・`#[test]`・
+/// 本体のない trait のメソッドを含まない。一覧に入る項目には、書き下しで属性が付く。
+#[test]
+fn exec_functions_are_listed() {
+    let src = "\
+pub fn f(x: u64) -> u64 { x }
+pub struct S { pub a: u64 }
+impl S { pub fn m(&self) -> u64 { self.a } }
+pub trait Tr {
+    fn e(&self) -> u64;
+    fn d(&self) -> u64 { self.e() }
+}
+impl Tr for u32 { fn e(&self) -> u64 { 1 } }
+pub struct G { pub a: u64 }
+impl Drop for G { fn drop(&mut self) { self.a = 0; } }
+pub spec fn sp(n: nat) -> nat decreases n, = if n == 0 { 0 } else { sp((n - 1) as nat) };
+pub fn pf(x: u32) -> u32 requires x < 100, = x * 2;
+lemma fn l(x: u64) ensures x + 0 == x;
+unchecked fn u() {}
+#[test]
+fn t() {}
+";
+    let (p, _) = project::single(src);
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    let mut exec = out.exec.clone();
+    exec.sort();
+    assert_eq!(
+        exec,
+        [
+            "single::<u32 as Tr>::e",
+            "single::G::drop",
+            "single::S::m",
+            "single::Tr::d",
+            "single::f",
+        ]
+    );
+    // 一覧に入った数だけ、書き下しに属性が付く（一覧と属性が食い違わない）。
+    let text = &out.files[0].text;
+    for attr in [
+        "#[verifier::exec_allows_no_decreases_clause]",
+        "#[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]",
+    ] {
+        assert_eq!(text.matches(attr).count(), exec.len(), "{attr}:\n{text}");
+    }
+}
+
 #[test]
 fn owned_regions_are_rebound_as_mut() {
     // #90：値で受けた領域は本体の先頭で `mut` に束縛し直す（Verus は引数のパターン

@@ -474,12 +474,13 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 ### §7.2 実行関数の `decreases` は任意
 
-本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、この属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
+本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` と `#[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、前の属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
 
 - `decreases` を書いたループと再帰は、この属性の下でも Verus が確かめます（減らなければ `failed`）。
 - `spec fn`・`lemma fn`・純粋関数（`fn f(..) -> T = e;`。spec の側を持つ）の再帰は、今までどおり `decreases` が要ります。定義の整合性に要るためです（設計ノート §4.3）。
-- そのため、実行関数の `verified` は停止を含みません。戻ったときに契約を満たし、戻るまでに算術のあふれや権限の誤りがないことを示します。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先の関数のものを含む）に届けば、止まらないことがあります。Verus はこのとき警告を出しますが、`ebykn verify` は失敗したときしか Verus の出力を見せません（§9「`ebykn verify` の項目の状態と出力」）。
-- この属性は `--no-cheating` でも拒まれないので、`verify` の紛れ込んだ前提の照合で許す拒否は増えません。
+- そのため、実行関数の `verified` は停止を含みません。戻ったときに契約を満たし、戻るまでに算術のあふれや権限の誤りがないことを示します。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先の関数のものを含む）に届けば、止まらないことがあります。停止を含まないことは、`ebykn verify` の注記と `--json` の `termination` で示します（§9「`ebykn verify` の項目の状態と出力」）。
+- 前の属性だけだと、Verus は関数の `decreases` を書いた実行関数に、停止を保証しないという警告をいつも出し（ループの `decreases` には出しません）、`#[verifier::allow(..)]` を案内します。`.eyk` には `#[verifier::..]` を書けない（E0102）ので、利用者はこの案内に従えません。そのため、後の属性でこの警告を消します。
+- どちらの属性も `--no-cheating` で拒まれないので、`verify` の紛れ込んだ前提の照合で許す拒否は増えません。
 - `tests/golden/exec_decreases/` と、プローブ `exec_no_decreases*.rs`（`OPEN.md` の「M0 の実測」）で固定してあります。
 
 * 元の仕様：§7.2 の表は実行関数の `decreases` を書いたとおり写すだけで、書かない場合を定めていない。設計ノート §4.3 は「`spec fn` の再帰は必須、実行関数は任意」と決めているが、固定した Verus では書かないと検証の前に止まっていた。
@@ -597,7 +598,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
-* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
+* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）、#81（PR #116）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。実行関数の `verified` が停止を含まないことは、人が読む出力と `--json` の両方で示す。
 * 状態：基準で決めた。
 
 ### 生成クレートの成果物は `build/verus/target`

@@ -39,3 +39,16 @@ ebykn: `verified` for an executable function does not include termination: it me
 - `requires x <= 1000,` の行を消して `ebykn verify` を実行し、`2 * x` の桁あふれを Verus がどう報告するかを見る。
 - `ensures r == 2 * x,` を `ensures r == 3 * x,` に変えて、契約を満たさない本体がどう報告されるかを見る。
 - `ebykn --lang ja check` で、診断を日本語で出す。
+- `decreases` のないループを持つ関数を `src/lib.eyk` に足して `ebykn verify` を実行し、`verified` になることを見る。実行関数の `decreases` は任意で、`verified` は停止を含みません（戻ったときに契約を満たすという意味です）。注記の行が出ることと、`ebykn verify --json` の項目に `"termination":"not_proven"` が付くことも見る。
+
+  ```eyk
+  pub fn halve(x: u64) -> (r: u64)
+      ensures r == 0,
+  {
+      let mut y = x;
+      while y > 0 {
+          y = y / 2;
+      }
+      y
+  }
+  ```

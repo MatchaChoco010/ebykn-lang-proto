@@ -7,7 +7,7 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-#[verifier::exec_allows_no_decreases_clause] pub fn halve_to_zero(x: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn halve_to_zero(x: u64) -> (r: u64)
 ensures r == 0, {
     let mut y = x;
     while y > 0 {
@@ -16,10 +16,14 @@ ensures r == 0, {
     y
 }
 
-#[verifier::exec_allows_no_decreases_clause] pub fn count_down(n: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn count_down(n: u64) -> (r: u64)
 ensures r == 0, { if n == 0 { 0 } else { count_down(n - 1) } }
 
-#[verifier::exec_allows_no_decreases_clause] pub fn halve_checked(x: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn count(n: u64) -> (r: u64)
+ensures r == n,
+decreases n, { if n == 0 { 0 } else { count(n - 1) + 1 } }
+
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn halve_checked(x: u64) -> (r: u64)
 ensures r == 0, {
     let mut y = x;
     while y > 0
@@ -29,7 +33,7 @@ ensures r == 0, {
     y
 }
 
-#[verifier::exec_allows_no_decreases_clause] pub fn stuck(x: u64) -> u64 {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn stuck(x: u64) -> u64 {
     let mut y = x;
     while y > 0
     decreases y, {
@@ -44,7 +48,7 @@ decreases n, { if n == 0 { 0 } else { n + tri((n - 1) as nat) } }
 pub struct Counter { pub n: u64, }
 
 impl Counter {
-    #[verifier::exec_allows_no_decreases_clause] pub fn drain(&mut self)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn drain(&mut self)
     ensures final(self).n == 0, {
         while self.n > 0 {
             self.n = self.n - 1;
@@ -58,7 +62,7 @@ impl Counter {
 pub trait Drain {
     fn left(&self) -> u64;
 
-    #[verifier::exec_allows_no_decreases_clause] fn spin_down(&self) -> u64 {
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn spin_down(&self) -> u64 {
         let mut k = self.left();
         while k > 0 {
             k = k - 1;

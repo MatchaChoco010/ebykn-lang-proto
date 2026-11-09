@@ -814,8 +814,9 @@ pub fn cfg_assumption_message(cfg_uses: &[String]) -> Option<(String, String)> {
 ///
 /// `decreases` が示すのは、それを書いたループや再帰が整礎であることだけで、関数が停止することではない。
 /// `decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先のものを含む）に届けば止まらない
-/// ことがある。Verus はそのとき警告を出すが、`verify` は失敗したときしか Verus の出力を見せないので、
-/// この注記で断る。
+/// ことがある。Verus は、関数の `decreases` を書いた実行関数に停止を保証しないという警告をいつも出すが、
+/// `.eyk` では従えない `#[verifier::allow(..)]` を案内するので、書き下しがその属性を付けて警告を消し
+/// （`ebykn_lower` の `EXEC_NO_DECREASES`）、この注記で断る。
 pub fn termination_note(
     items: &[ItemStatus],
     exec: &[String],

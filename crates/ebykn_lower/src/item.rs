@@ -13,6 +13,13 @@ use ebykn_syntax::ast::{
 use crate::expr::{PermKind, ident, perm_var};
 use crate::{Cx, Piece, attr};
 
+/// 本体を検証する実行関数に付ける属性（#81）。`exec_allows_no_decreases_clause` は、`decreases` のない
+/// ループと再帰を停止を示さずに検証させる。この属性の下で関数に `decreases` を書くと、Verus は停止を
+/// 保証しないと警告し、`#[verifier::allow(..)]` を案内する。`.eyk` には `#[verifier::..]` を書けない（E0102）
+/// ので、その案内に利用者は従えない。停止を含まないことは `verify` の注記で断るので、警告は `allow` で消す
+/// （`tests/verus-probes/exec_no_decreases_warning.rs`、`exec_no_decreases_allow.rs`）。
+const EXEC_NO_DECREASES: &str = "#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]";
+
 /// 項目の列を一片ずつ書き下す。
 pub(crate) fn items(cx: &Cx, items: &[ast::Item], indent: usize, out: &mut Vec<Piece>) {
     for item in items {
@@ -729,7 +736,7 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
             // `decreases` は、この属性の下でも Verus が確かめる（#81。`tests/verus-probes/exec_no_decreases*.rs`）。
             // `spec fn`・`lemma fn`・純粋関数（spec の側を持つ）の再帰は、今までどおり `decreases` が要る。
             if f.unchecked.is_none() && !is_test(&item.attrs) {
-                a = format!("#[verifier::exec_allows_no_decreases_clause] {a}");
+                a = format!("{EXEC_NO_DECREASES} {a}");
                 let path = cx.item_path(&f.sig.ident.name);
                 cx.report.borrow_mut().exec.push(path);
             }
@@ -944,7 +951,7 @@ fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &
                         let path = c.item_path(&f.sig.ident.name);
                         // 既定のメソッドも、実行関数の `decreases` は任意（`fn_text` と同じ。#81）。
                         if f.unchecked.is_none() && !is_test(&ti.attrs) {
-                            a = format!("#[verifier::exec_allows_no_decreases_clause] {a}");
+                            a = format!("{EXEC_NO_DECREASES} {a}");
                             c.report.borrow_mut().exec.push(path.clone());
                         }
                         (fc.block(b), Some(path))

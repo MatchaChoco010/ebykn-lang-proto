@@ -54,7 +54,7 @@ pub struct Output {
     pub unchecked: Vec<String>,
     /// `#[test]` の項目（`#[verifier::external]`。Verus は見ない）。
     pub external: Vec<String>,
-    /// 本体を検証する実行関数（`#[verifier::exec_allows_no_decreases_clause]` を付けた項目）。`decreases`
+    /// 本体を検証する実行関数（`#[verifier::exec_allows_no_decreases_clause]` などを付けた項目）。`decreases`
     /// を書いていないループと再帰の停止は示さない（#81）。
     pub exec: Vec<String>,
     /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
