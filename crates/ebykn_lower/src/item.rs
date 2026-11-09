@@ -617,32 +617,40 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
         Some(ast::FnBody::Block(b)) => {
             let sig = sig_text(&mut c, &f.sig, &f.contract, &exp);
             let body = c.body_block(b);
-            format!("{a}{v}{sig} {}", rebind_owned_regions(&f.contract, body))
+            format!("{a}{v}{sig} {}", rebind_owned(&f.contract, body))
         }
         Some(ast::FnBody::Pure(e)) => pure_fn(&mut c, &a, &item.vis, f, e, &exp),
     }
 }
 
-/// 値で受けた領域（`uses r: Region<..>`）は持っているので、`take` / `put` / `&mut r` で変更できるよう、
-/// 本体の先頭で `mut` に束縛し直す（#90）。Verus は引数のパターン `Tracked(mut r)` を受け付けない。
-/// 変更しない関数で `unused_mut` の警告を出さない。
-fn rebind_owned_regions(contract: &ast::Contract, body: String) -> String {
+/// 値で受けた領域（`uses r: Region<..>`）と移動で受けた権限（`uses p@`）は持っているので、変更
+/// できるよう本体の先頭で `mut` に束縛し直す（#90、#102）。Verus は引数のパターン `Tracked(mut r)` を
+/// 受け付けない。
+fn rebind_owned(contract: &ast::Contract, body: String) -> String {
     let lets: String = contract
         .uses()
         .filter_map(|u| match u {
             UsesItem::Named { ident: i, ty, .. }
                 if !matches!(ty.kind, ast::TypeKind::Ref { .. }) =>
             {
-                let r = ident(i);
-                Some(format!("#[allow(unused_mut)] let tracked mut {r} = {r}; "))
+                Some(ident(i))
             }
+            UsesItem::Perm {
+                mode: PermMode::Move,
+                ident: i,
+                ..
+            } => Some(perm_var(&i.name)),
             _ => None,
         })
+        .map(|v| format!("let tracked mut {v} = {v}; "))
         .collect();
-    match body.strip_prefix('{') {
-        Some(rest) if !lets.is_empty() => format!("{{ {lets}{rest}"),
-        _ => body,
+    if lets.is_empty() {
+        return body;
     }
+    let rest = body
+        .strip_prefix('{')
+        .expect("関数の本体の書き下しは `{` で始まる");
+    format!("{{ {lets}{rest}")
 }
 
 /// 純粋関数 `fn f(..) -> T = e;`（§7.2）：`when_used_as_spec` の `fn` と `spec fn` の組。
