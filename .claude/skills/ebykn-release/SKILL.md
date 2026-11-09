@@ -14,6 +14,7 @@ description: ebykn-lang-proto でリリースを切る手順。ワークツリ�
 - どの手順でも、コマンドが権限の判定で拒否されたり確認を求められたりしたら、そこで止まる。別の方法で回り込まない。取り消せない操作（タグと `release` の push、`gh release create`、`gh pr create`・`gh pr edit`・`gh pr comment`）だけでなく、手順 0〜3 で使うもの（スライドの道具のダウンロード、`git worktree add`、yomiyasu など）も同じ。手順 9 の「止まったとき」の形で、止まった手順・`$dir`・PDF のパス（まだなければ「なし」）を知らせる。残りの手順は、コーディネーターが「止まった回を続ける」の表に従って行う。コーディネーターは、同じマシンの `$dir` を読める。
 - 例外は、見つけた問題の `gh issue create` が拒否されたとき。作る予定だった Issue の題と本文を `$dir/pending-issues/<番号>.md`（1 から数える）に残し、手順 9 の知らせに書く。リリースは止めない。
 - コマンドのブロックは、どれも `bash -euo pipefail <<'EOF'` … `EOF` で包んで打つ。Bash ツールのシェルは zsh のことがあり、zsh では `"$sha:refs/..."` の `:r` が修飾子として展開されるため。ブロックの中でも、`:` の前の変数は `${sha}` のように括る。
+- 重い処理（`cargo`、Verus、Typst）は、AGENTS.md の「マシンの資源」のとおり、`ebykn-limited` があればその下で 1 つずつ走らせる。手順 3 の報告スライドも同じ（`ebykn-report-slides` スキル）。`<scratchpad>` の `$dir` には、テキストと PDF だけを置き、ビルドは置かない。
 - シェルの変数はブロックをまたいで残らないので、手順 1 で作る `vars` を各ブロックの最初に読み込む。`<scratchpad>` と `<id>` は実際の値に置き換える。
 
 ## 0. ワークツリーを最新にし、コーディネーターの Run を確かめる
@@ -463,7 +464,8 @@ ws=$(sed -n 's/^ws=//p' "$dir/release-ws.txt")
 if [ ! -f "$ws/examples/README.md" ]; then
   echo 'playground=なし' >> "$dir/release-ws.txt"; exit 0   # この版の develop にまだ examples/ がない
 fi
-(cd "$ws" && cargo xtask playground) 2>&1 | tee "$dir/playground.txt"
+lim=$(command -v ebykn-limited || true)   # ない環境では、そのまま走らせる
+(cd "$ws" && ${lim:+"$lim"} cargo xtask playground) 2>&1 | tee "$dir/playground.txt"
 echo "playground=$ws/playground" >> "$dir/release-ws.txt"
 EOF
 ```
