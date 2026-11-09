@@ -634,3 +634,77 @@ fn region_arguments_survive_missing_facts() {
         assert!(got.contains(&squash(want)), "{want:?} がない:\n{got}");
     }
 }
+
+/// 利用者の `impl Drop`（#61、現行仕様 §7.2）：std の `Drop` の `fn drop` に `opens_invariants none` と
+/// `no_unwind` を足す。Verus はどちらもない `Drop` の実装を拒否し、利用者は `.eyk` にどちらも書けない。
+#[test]
+fn std_drop_gets_opens_invariants_none_and_no_unwind() {
+    let marked = "fn drop(&mut self) opens_invariants none no_unwind {}";
+    for (src, why) in [
+        (
+            "pub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "裸の Drop",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl std::ops::Drop for S { fn drop(&mut self) {} }",
+            "std::ops::Drop",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl ::core::ops::Drop for S { fn drop(&mut self) {} }",
+            "::core::ops::Drop",
+        ),
+        (
+            "use std::ops::Drop as D;\npub struct S { a: u64 }\nimpl D for S { fn drop(&mut self) {} }",
+            "use の別名",
+        ),
+        (
+            "use std::ops;\npub struct S { a: u64 }\nimpl ops::Drop for S { fn drop(&mut self) {} }",
+            "use したモジュールからのパス",
+        ),
+        (
+            "pub fn f() {}\nmod m { pub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} } }",
+            "mod の中",
+        ),
+    ] {
+        let got = lowered(src);
+        assert!(
+            got.contains(&squash(marked)),
+            "{why}：{marked:?} がない:\n{got}"
+        );
+    }
+    // 本体を検証しない `unchecked` でも、Verus は `Drop` の実装に両方を要求する。
+    has(
+        "pub struct S { a: u64 }\nimpl Drop for S { unchecked fn drop(&mut self) {} }",
+        "#[verifier::external_body] fn drop(&mut self) opens_invariants none no_unwind {}",
+    );
+}
+
+/// std の `Drop` でないトレイトの `drop` には何も足さない（クレートで定義した同じ名前のトレイト、
+/// `Drop` の impl の `drop` 以外のメソッド、固有の impl の `drop`）。
+#[test]
+fn other_drops_are_not_marked() {
+    for (src, why) in [
+        (
+            "pub trait Drop { fn drop(&mut self); }\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "クレートの Drop",
+        ),
+        (
+            "mod t { pub trait Drop { fn drop(&mut self); } }\nuse t::Drop;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "use したクレートの Drop",
+        ),
+        (
+            "mod t { pub trait Drop { fn drop(&mut self); } }\nuse t::*;\npub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) {} }",
+            "glob の use で見えるクレートの Drop",
+        ),
+        (
+            "pub struct S { a: u64 }\nimpl S { pub fn drop(&mut self) {} }",
+            "固有の impl",
+        ),
+    ] {
+        let got = lowered(src);
+        assert!(
+            !got.contains("opens_invariants"),
+            "{why}：opens_invariants がある:\n{got}"
+        );
+    }
+}

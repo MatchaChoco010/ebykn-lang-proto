@@ -590,7 +590,9 @@ fn int_type(t: &ast::Type) -> bool {
         "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize")))
 }
 
-fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
+/// `drop_fn` は std の `Drop` の impl の `fn drop`（#61）。Verus は `opens_invariants none` と
+/// `no_unwind` のない `Drop` の実装を拒否し、利用者はどちらも `.eyk` に書けないので、書き下しが足す。
+fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
     let mut c = fn_cx(cx, &f.sig, &f.contract);
     let exp = cx
         .facts
@@ -612,10 +614,14 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
         cx.report.borrow_mut().unchecked.push(path);
     }
     let v = vis(&item.vis);
+    let sig = |c: &mut Cx| {
+        let s = sig_text(c, &f.sig, &f.contract, &exp);
+        if drop_fn { drop_marks(s) } else { s }
+    };
     match &f.body {
-        None => format!("{a}{v}{};", sig_text(&mut c, &f.sig, &f.contract, &exp)),
+        None => format!("{a}{v}{};", sig(&mut c)),
         Some(ast::FnBody::Block(b)) => {
-            let sig = sig_text(&mut c, &f.sig, &f.contract, &exp);
+            let sig = sig(&mut c);
             let body = c.body_block(b);
             format!("{a}{v}{sig} {}", rebind_owned_regions(&f.contract, body))
         }
@@ -643,6 +649,13 @@ fn rebind_owned_regions(contract: &ast::Contract, body: String) -> String {
         Some(rest) if !lets.is_empty() => format!("{{ {lets}{rest}"),
         _ => body,
     }
+}
+
+/// `Drop` の `fn drop` の署名に `opens_invariants none` と `no_unwind` を足す（現行仕様 §7.2）。
+/// `no_unwind` は契約の `no_panic` からも来るので重ねない。Verus の句の順で `opens_invariants` が前。
+fn drop_marks(sig: String) -> String {
+    let base = sig.strip_suffix(" no_unwind").unwrap_or(&sig);
+    format!("{base} opens_invariants none no_unwind")
 }
 
 /// 純粋関数 `fn f(..) -> T = e;`（§7.2）：`when_used_as_spec` の `fn` と `spec fn` の組。
@@ -902,6 +915,13 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
                             .unwrap_or_default();
                         out.push(tokens(
                             format!("{}{kwv} spec {sig} {{ {body} }}", attrs(&m.attrs)),
+                            Some(c.item_path(&f.sig.ident.name)),
+                            indent + 1,
+                        ));
+                    }
+                    ItemKind::Fn(f) if kind == ImplTrait::Drop && f.sig.ident.name == "drop" => {
+                        out.push(tokens(
+                            fn_text(&c, m, f, true),
                             Some(c.item_path(&f.sig.ident.name)),
                             indent + 1,
                         ));

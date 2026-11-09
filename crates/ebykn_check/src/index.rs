@@ -219,6 +219,9 @@ pub enum ImplTrait {
     Invariant,
     /// `impl View for T`。
     View,
+    /// std の `Drop`（`impl Drop for T`、`std::ops::Drop`・`core::ops::Drop` と、その `use` の別名）。
+    /// 書き下しが `fn drop` に `opens_invariants none` と `no_unwind` を足す（#61）。
+    Drop,
     /// それ以外のトレイト。
     Other,
     /// 最後の名前が `Invariant` / `View` で、`impl Invariant for T` の 1 つの書き方でないもの
@@ -551,7 +554,7 @@ impl Index {
                         ms.insert(info.name.clone(), info);
                     }
                 }
-                ImplTrait::Other | ImplTrait::Misspelled => {}
+                ImplTrait::Drop | ImplTrait::Other | ImplTrait::Misspelled => {}
             }
         }
     }
@@ -578,8 +581,76 @@ impl Index {
             // cfg で消えうるトレイトは、クレートの定義として数えない（消えれば prelude に解決する）。
             Resolved::Type(p) if !self.is_gated(&p) => ImplTrait::Other,
             _ if ebykn => ImplTrait::Misspelled,
+            Resolved::Unknown if self.is_std_drop(module, t) => ImplTrait::Drop,
             _ => ImplTrait::Other,
         }
+    }
+
+    /// トレイトのパスが std の `Drop` か。クレートの中に解決しないパスの `use` の別名をたどり、
+    /// `Drop`（std の prelude）、`std::ops::Drop`、`core::ops::Drop` のどれかになれば std の `Drop`。
+    fn is_std_drop(&self, module: &[String], t: &ast::Path) -> bool {
+        if !t
+            .segments
+            .iter()
+            .all(|s| matches!(s.args, ast::GenericArgs::None))
+        {
+            return false;
+        }
+        let segs: Vec<String> = t.segments.iter().map(|s| s.ident.name.clone()).collect();
+        let Some(p) = self.external_path(module, t.leading_colon, segs, 0) else {
+            return false;
+        };
+        let p: Vec<&str> = p.iter().map(String::as_str).collect();
+        match p.as_slice() {
+            ["std" | "core", "ops", "Drop"] => true,
+            // `::Drop` は外のクレートの名前で、prelude の `Drop` ではない。
+            ["Drop"] => !t.leading_colon,
+            _ => false,
+        }
+    }
+
+    /// クレートの中に解決しないパスを、先頭の名前の `use` の別名をたどって外のパスにする。
+    /// クレートの定義（このモジュールの名前、`crate` / `self` / `super` / `Self`、glob の `use`
+    /// で見える名前）に当たれば `None`。
+    fn external_path(
+        &self,
+        module: &[String],
+        leading_colon: bool,
+        segs: Vec<String>,
+        depth: usize,
+    ) -> Option<Vec<String>> {
+        if leading_colon {
+            return Some(segs);
+        }
+        let first = segs.first()?.as_str();
+        if depth > 16 || matches!(first, "crate" | "self" | "super" | "Self" | "ebykn_prelude") {
+            return None;
+        }
+        let scope = self.modules.get(module)?;
+        if scope.items.contains_key(first) {
+            return None;
+        }
+        for imp in &scope.imports {
+            if let Import::Name { alias, path } = imp
+                && alias == first
+            {
+                let mut p = path.clone();
+                p.extend(segs[1..].iter().cloned());
+                return self.external_path(module, false, p, depth + 1);
+            }
+        }
+        for imp in &scope.imports {
+            if let Import::Glob { path } = imp
+                && let Resolved::Module(m) = self.resolve_import(module, path, depth)
+                && self
+                    .modules
+                    .get(&m)
+                    .is_some_and(|s| s.items.contains_key(first))
+            {
+                return None;
+            }
+        }
+        Some(segs)
     }
 
     /// 型のパスを解決する（`Self` は `self_ty`）。型の別名はたどる。クレートの型でなければ `None`。

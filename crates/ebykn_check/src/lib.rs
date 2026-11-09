@@ -150,7 +150,7 @@ pub fn check_nested_items(
         let ebykn = match &item.kind {
             ItemKind::Impl(imp) => !matches!(
                 index.impl_trait(module, imp),
-                ImplTrait::Inherent | ImplTrait::Other
+                ImplTrait::Inherent | ImplTrait::Drop | ImplTrait::Other
             ),
             ItemKind::Struct(s) => s.owns.is_some() || s.spec.is_some(),
             ItemKind::Mod(_) => true,
@@ -346,7 +346,7 @@ fn check_impl(
             }
             return;
         }
-        ImplTrait::Inherent | ImplTrait::Other => {}
+        ImplTrait::Inherent | ImplTrait::Drop | ImplTrait::Other => {}
     }
     let own_impl = kind == ImplTrait::Inherent;
     for item in &imp.items {

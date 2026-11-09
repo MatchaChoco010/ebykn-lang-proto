@@ -1,0 +1,8 @@
+verified drop::Guard::drop
+verified drop::Full::drop
+verified drop::Owner::drop
+failed drop::Overflow::drop
+verified drop::m::Aliased::drop
+verified drop::m::Local::drop
+verified drop::scope_end
+results 6 verified, 1 errors
