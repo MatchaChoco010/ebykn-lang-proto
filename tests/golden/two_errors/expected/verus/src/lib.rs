@@ -7,11 +7,11 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-pub fn ok(x: u32) -> (r: u32)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn ok(x: u32) -> (r: u32)
 requires x <= 10,
 ensures r == x + 1, { x + 1 }
 
-pub fn bad(x: u32) -> (r: u32)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn bad(x: u32) -> (r: u32)
 ensures r == 1, r == 2, { x }
 
 } // verus!
