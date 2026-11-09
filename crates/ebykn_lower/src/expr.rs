@@ -558,10 +558,12 @@ impl Cx<'_> {
     /// 先頭に書く（PR #59 のレビュー。cfg は検査が E0003 にする）。
     fn assign(&mut self, lhs: &Expr, op: &str, rhs: String) -> String {
         let pre: String = lhs.attrs.iter().map(|a| crate::attr(a) + " ").collect();
+        // 括弧で包んだ `(*X) = e` も `*X = e` と同じ（#88）。
+        let bare = strip_parens(lhs);
         if let ExprKind::Unary {
             op: UnOp::Deref, ..
-        } = &lhs.kind
-            && let Some(x) = self.facts.derefs.get(&SpanKey::from(lhs.span)).cloned()
+        } = &bare.kind
+            && let Some(x) = self.facts.derefs.get(&SpanKey::from(bare.span)).cloned()
             && op == "="
             && !self.logic
         {
@@ -576,7 +578,7 @@ impl Cx<'_> {
         format!("{l} {op} {rhs}")
     }
 
-    /// 書き込む場所（`(*X).f`、`*X` など）：根の `*X` を `X.borrow_mut(..)` にする。
+    /// 書き込む場所（`(*X).f`、`*X` など）：根の `*X` を `(*X.borrow_mut(..))` にする。
     fn place(&mut self, e: &Expr) -> String {
         match &e.kind {
             ExprKind::Unary {
@@ -585,25 +587,40 @@ impl Cx<'_> {
                 Some(x) => format!("(*{x}.borrow_mut({}))", self.perm_mut(&x)),
                 None => self.expr(e),
             },
-            ExprKind::Paren(x) => {
-                if let ExprKind::Unary {
-                    op: UnOp::Deref, ..
-                } = &x.kind
-                    && let Some(p) = self.facts.derefs.get(&SpanKey::from(x.span)).cloned()
-                {
-                    return format!("{p}.borrow_mut({})", self.perm_mut(&p));
-                }
-                format!("({})", self.place(x))
-            }
+            // `(*X)` の括弧は、`*X` の書き下しが括弧を持つので重ねない。
+            ExprKind::Paren(x) if self.perm_deref(x).is_some() => self.place(x),
+            ExprKind::Paren(x) => format!("({})", self.place(x)),
             ExprKind::Field { base, member } => {
-                format!("{}.{}", self.place(base), member_str(member))
+                format!("{}.{}", self.place_base(base), member_str(member))
             }
             ExprKind::Index { base, index } => {
                 let i = self.expr(index);
-                format!("{}[{i}]", self.place(base))
+                format!("{}[{i}]", self.place_base(base))
             }
             _ => self.expr(e),
         }
+    }
+
+    /// フィールド・添字・メソッドの受け手としての場所。根の `(*X)` は `X.borrow_mut(..)`
+    /// （`&mut T` の自動の参照外し）にする。
+    fn place_base(&mut self, e: &Expr) -> String {
+        if let ExprKind::Paren(x) = &e.kind
+            && let Some(p) = self.perm_deref(x)
+        {
+            return format!("{p}.borrow_mut({})", self.perm_mut(&p));
+        }
+        self.place(e)
+    }
+
+    /// `e` が権限付きの `*X` なら `X`。
+    fn perm_deref(&self, e: &Expr) -> Option<String> {
+        let ExprKind::Unary {
+            op: UnOp::Deref, ..
+        } = &e.kind
+        else {
+            return None;
+        };
+        self.facts.derefs.get(&SpanKey::from(e.span)).cloned()
     }
 
     /// 呼び出しの末尾に足す消去される引数（callee の `uses` の宣言順）。検査が並べなかった領域も、
@@ -712,7 +729,7 @@ impl Cx<'_> {
         if let Some(x) = self.facts.frees.get(&key).cloned() {
             return format!("{x}.free(Tracked({}))", perm_var(&x));
         }
-        let recv = self.expr(receiver);
+        let recv = self.receiver(receiver);
         if self.logic && args.is_empty() && turbofish.is_none() {
             // `v.view()` ⇒ `v@`（§7.4）。`.first()` / `.last()` は vstd のまま（#11 の決定：案 B）。
             if method.name == "view" {
@@ -735,6 +752,20 @@ impl Cx<'_> {
                 .unwrap_or_default(),
             a.join(", ")
         )
+    }
+
+    /// メソッドの受け手。実行文脈で、根が権限付きの `*X`（`(*X).f`、`(*X)`）で、その権限を変更
+    /// できる（借用 `borrow` / `uses &X@` でない）なら、場所として `X.borrow_mut(..)` にする（#82）。
+    /// Ebykn は型を見ないので、受け手が `&self` か `&mut self` かは区別しない。
+    fn receiver(&mut self, r: &Expr) -> String {
+        if !self.logic
+            && let Some((_, span)) = ebykn_check::body::deref_root(r)
+            && let Some(x) = self.facts.derefs.get(&SpanKey::from(span)).cloned()
+            && self.perm_kind(&x) != PermKind::Ref
+        {
+            return self.place_base(r);
+        }
+        self.expr(r)
     }
 
     fn closure(&mut self, c: &ast::Closure) -> String {
@@ -1239,6 +1270,14 @@ fn restore(m: &mut BTreeMap<String, PermKind>, k: &str, saved: Option<PermKind>)
         None => {
             m.remove(k);
         }
+    }
+}
+
+/// 外側の括弧を外した式。
+fn strip_parens(e: &Expr) -> &Expr {
+    match &e.kind {
+        ExprKind::Paren(x) => strip_parens(x),
+        _ => e,
     }
 }
 

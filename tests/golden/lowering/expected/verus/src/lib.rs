@@ -189,6 +189,26 @@ ensures final(r).contains(p), final(r).index(p).val == 2, {
     proof {
         r.insert(__eyk_perm_p);
     }
+pub struct Bucket { pub items: Vec < u64 >, }
+
+pub fn push_item(p: Ptr < Bucket >, x: u64, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Bucket >>)
+requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
+ensures final(__eyk_perm_p).value().items@ == old(__eyk_perm_p).value().items@.push(x), final(__eyk_perm_p).pptr() == p, {
+    p.borrow_mut(Tracked(&mut *__eyk_perm_p)).items.push(x);
+}
+
+pub fn count_items(p: Ptr < Bucket >, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Bucket >>) -> (n: usize)
+requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
+ensures n == old(__eyk_perm_p).value().items@.len(), final(__eyk_perm_p).value() == old(__eyk_perm_p).value(), final(__eyk_perm_p).pptr() == p, { p.borrow_mut(Tracked(&mut *__eyk_perm_p)).items.len() }
+
+pub fn paren_write() -> (r: u64)
+ensures r == 3, {
+    let (q, Tracked(__eyk_perm_q)) = Ptr::new(0u64);
+    q.write(Tracked(&mut __eyk_perm_q), 1);
+    (*q.borrow_mut(Tracked(&mut __eyk_perm_q))) += 2;
+    let x = *q.read(Tracked(&__eyk_perm_q));
+    let n = q.free(Tracked(__eyk_perm_q));
+    x
 }
 
 } // verus!

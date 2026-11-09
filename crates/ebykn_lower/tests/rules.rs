@@ -897,3 +897,89 @@ fn raw_identifiers_keep_their_prefix() {
         "crate::r#gen(1)",
     );
 }
+
+/// `*p` の場所の書き下し（§7.3）。括弧で包んだ `(*q)` への代入は `*q` と同じ（#88）。
+#[test]
+fn parenthesized_deref_assignment_is_a_write() {
+    let src = "pub fn f() -> u64 { let q = Ptr::new(0u64); (*q) = 1; ((*q)) = 2; (*q) += 3; *q += 4; let x = *q; let n = q.free(); x }";
+    has(src, "q.write(Tracked(&mut __eyk_perm_q), 1);");
+    has(src, "q.write(Tracked(&mut __eyk_perm_q), 2);");
+    has(src, "(*q.borrow_mut(Tracked(&mut __eyk_perm_q))) += 3;");
+    has(src, "(*q.borrow_mut(Tracked(&mut __eyk_perm_q))) += 4;");
+    lacks(src, "q.borrow_mut(Tracked(&mut __eyk_perm_q)) = 1");
+    lacks(src, "q.borrow_mut(Tracked(&mut __eyk_perm_q)) += 3");
+    // フィールドへの代入の根は、これまでどおり `p.borrow_mut(..)`。
+    let src = format!("{PRE}fn f(p: Ptr<Node>) uses &mut p@ {{ (*p).val = 1; ((*p)).val = 2; }}");
+    has(&src, "p.borrow_mut(Tracked(&mut *__eyk_perm_p)).val = 1;");
+    has(
+        &src,
+        "((*p.borrow_mut(Tracked(&mut *__eyk_perm_p)))).val = 2;",
+    );
+}
+
+/// メソッドの受け手の `(*p).f` / `(*p)`：権限を変更できれば `borrow_mut`、借用（`uses &p@`、
+/// `borrow`）なら `read`（#82）。論理文脈は `value()`。
+#[test]
+fn method_receivers_through_writable_permissions_borrow_mut() {
+    let pre = "pub struct B { pub out: Vec<u64> }\n";
+    let src = format!("{pre}fn f(p: Ptr<B>, x: u64) uses &mut p@ {{ (*p).out.push(x); }}");
+    has(
+        &src,
+        "p.borrow_mut(Tracked(&mut *__eyk_perm_p)).out.push(x);",
+    );
+    lacks(&src, "p.read");
+    let src = format!("{pre}fn f(p: Ptr<Vec<u64>>, x: u64) uses &mut p@ {{ (*p).push(x); }}");
+    has(&src, "p.borrow_mut(Tracked(&mut *__eyk_perm_p)).push(x);");
+    // 持っている権限（`Ptr::new`、`borrow mut`）。
+    let src = format!(
+        "{pre}fn f() {{ let q = Ptr::new(B {{ out: Vec::new() }}); (*q).out.push(1); let b = q.free(); }}"
+    );
+    has(
+        &src,
+        "q.borrow_mut(Tracked(&mut __eyk_perm_q)).out.push(1);",
+    );
+    let src = format!(
+        "{pre}pub struct P {{ a: u64 }} owns {{ r: Region<Ptr<B>> }}\nimpl P {{ fn f(&mut self, p: Ptr<B>) requires old(self)@r.contains(p), {{ borrow mut self@r[p] {{ (*p).out.push(1); }} }} }}"
+    );
+    has(
+        &src,
+        "p.borrow_mut(Tracked(&mut __eyk_perm_p)).out.push(1);",
+    );
+    // 共有の借用は `read` のまま。
+    let src = format!("{pre}fn f(p: Ptr<B>) -> usize uses &p@ {{ (*p).out.len() }}");
+    has(&src, "(*p.read(Tracked(&*__eyk_perm_p))).out.len()");
+    lacks(&src, "borrow_mut");
+    let src = format!(
+        "{pre}pub struct P {{ a: u64 }} owns {{ r: Region<Ptr<B>> }}\nimpl P {{ fn f(&self, p: Ptr<B>) -> usize requires self@r.contains(p), {{ borrow self@r[p] {{ (*p).out.len() }} }} }}"
+    );
+    has(&src, "(*p.read(Tracked(&*__eyk_perm_p))).out.len()");
+    // 論理文脈は値。
+    let src = format!(
+        "{pre}fn f(p: Ptr<B>) uses &mut p@ ensures final(*p).out.view().len() == old(*p).out.view().len(), {{ }}"
+    );
+    has(
+        &src,
+        "final(__eyk_perm_p).value().out@.len() == old(__eyk_perm_p).value().out@.len()",
+    );
+}
+
+/// メソッドの受け手は権限の `&mut` を取るので、指す値を借用したままの `(*p).out.len()` は Rust の
+/// 借用検査で止まる（`E0502`。PR #105 のレビュー、現行仕様 §7.3 の制限）。受け手を参照の式で包んだ
+/// `(&(*p).out).len()` は値が要る位置と同じ `read` を通るので、借用と並べて書ける。
+#[test]
+fn shared_receiver_through_a_reference_reads() {
+    let pre = "pub struct B { pub out: Vec<u64> }\n";
+    let src = format!(
+        "{pre}fn f(p: Ptr<B>) -> usize uses &mut p@ {{ let s = &(*p).out; let m = (*p).out.len(); s.len() + m }}"
+    );
+    has(&src, "let s = &(*p.read(Tracked(&*__eyk_perm_p))).out;");
+    has(
+        &src,
+        "let m = p.borrow_mut(Tracked(&mut *__eyk_perm_p)).out.len();",
+    );
+    let src = format!(
+        "{pre}fn f(p: Ptr<B>) -> usize uses &mut p@ {{ let s = &(*p).out; let m = (&(*p).out).len(); s.len() + m }}"
+    );
+    has(&src, "let m = (&(*p.read(Tracked(&*__eyk_perm_p))).out).len();");
+    lacks(&src, "borrow_mut");
+}
