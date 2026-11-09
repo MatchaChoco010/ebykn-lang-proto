@@ -122,7 +122,37 @@ fn attr(tts: &[TokenTree], i: usize) {
     }
     let span = sp(tts[i].span()).to(sp(g.span()));
     let body: Vec<TokenTree> = g.stream().into_iter().collect();
+    // 内側の属性は Rust の組み込みのものだけ（#49。`#![feature]` と内側の属性マクロ）。Verus と
+    // 証明の属性は `meta` が別の文言で拒否する。
+    if inner
+        && !diagnosed_by_meta(&body)
+        && let Some(written) =
+            crate::macros::non_builtin_in_tokens(&body, crate::macros::AttrPosition::Inner)
+    {
+        push(span, Message::AttrPosition { written });
+    }
     meta(&body, inner, span);
+}
+
+/// [`meta`] が自分の文言で拒否する属性（Verus と証明の属性）か。
+fn diagnosed_by_meta(body: &[TokenTree]) -> bool {
+    let names: Vec<String> = body
+        .iter()
+        .take_while(|t| matches!(t, TokenTree::Ident(_) | TokenTree::Punct(_)))
+        .filter_map(|t| match t {
+            TokenTree::Ident(i) => Some(unraw(&i.to_string())),
+            _ => None,
+        })
+        .collect();
+    let Some(first) = names.first() else {
+        return false;
+    };
+    let last = names.last().expect("空でない");
+    matches!(first.as_str(), "verifier" | "verus")
+        || PROOF_ATTRS.contains(&first.as_str())
+        || VERUS_ATTRS.contains(&first.as_str())
+        || last == "verus_verify"
+        || last == "verus_spec"
 }
 
 /// 属性の中身（`path args`）を検査する。`cfg_attr(条件, 属性, ..)` は中の属性を再帰的に見る

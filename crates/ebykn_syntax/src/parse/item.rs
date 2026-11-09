@@ -232,7 +232,7 @@ fn check_rust_item(it: &syn::Item) {
 }
 
 /// 改名して付けられない名前（#16 の既定）。
-const RESERVED_NAMES: &[&str] = &["std", "core", "alloc", "vstd", "ebykn_prelude"];
+use crate::reserved::RESERVED_CRATE_NAMES as RESERVED_NAMES;
 
 /// `use` の木を検査する（#16 の既定）。Verus のマクロの名前を取り込む・改名するものと、
 /// `.eyk` で呼べるマクロの名前を外のクレートから取り込む・その名前に改名するもの

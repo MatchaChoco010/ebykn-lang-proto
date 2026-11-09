@@ -58,6 +58,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - `[verus]` の `release` / `commit` が、`ebykn` をビルドしたときの固定値（このリポジトリのルートの `Cargo.toml` の `[workspace.metadata.verus]`）と違えば `E0002` です。
 - `Ebykn.toml` はカレントディレクトリから上へ探します（cargo と同じ）。
 - `[dependencies]` は値を保ったまま、鍵の名前の順に `build/verus/Cargo.toml` へ写します。
+- `[dependencies]` の鍵に `std`・`core`・`alloc`・`vstd`・`ebykn_prelude`・`verus_builtin`・`verus_builtin_macros`（`-` は `_` と同じ）は使えず、`E0002` です。この名前の依存クレートがあると、`::core::clone::Clone` や `use core::..` がそのクレートを指します（#49。`.eyk` の改名の拒否と同じ名前）。
 - 生成する `build/verus/Cargo.toml` の `vstd` は、crates.io の `vstd = "=0.0.0-2026-11-01-0251"`（`cargo verus new` が出す版）です。
 
 * 元の仕様：§3.2 は例だけで、必須の鍵、知らない鍵の扱い、探し方、vstd の取り先を定めていない。
@@ -133,14 +134,14 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 1. 関数の本体の中のマクロは、どのクレートのものも使える。呼べるマクロの許可リストをやめ、壊れる形の拒否リストと、`ebykn verify` の出力の照合（§9、#37）で扱う。拒否リストの候補は、`.eyk` に書いた証明の入口（`verus!`、`proof!` などの名前と `verifier` の属性）、Verus が自分で設定する cfg（`verus_keep_ghost`、`verus_keep_ghost_body`、`verus_only`、`verus_verify_core`、`verus_no_vstd`）と `debug_assertions` を条件に含む `cfg!` / `#[cfg]`、`env!` / `option_env!` / `include!`。
 2. Verus が対応していない std のマクロ（`println!` 系、`write!`、`writeln!`、`dbg!`）は、prelude の関数の呼び出しに書き下し、その関数を前提として `ebykn status` に出す。
-3. derive・属性マクロを使えるようにし、検証されない部分を前提として一覧に出す。std の derive は Verus が検証する。関数に付く属性マクロ（`#[tokio::main]` など）は、検証する本体と、マクロを付ける薄い外側に分けて書き下す。
+3. derive・属性マクロを使えるようにし、検証されない部分を前提として一覧に出す。std の derive は前提に出さない（仕様がなく、verified なコードがその振る舞いに頼れない）。関数に付く属性マクロ（`#[tokio::main]` など）は、検証する本体と、マクロを付ける薄い外側に分けて書き下す。
 4. 利用者の `macro_rules!` を使えるようにし、モジュール直下で項目を作るものは前提として一覧に出す。
 5. 関数の中の一部だけを `unchecked { .. }` ブロックにする逃げ道を足すかは、作者の判断（足すなら別の Issue で構文を詰める）。
 6. 依存クレートのマクロの中身は、依存クレートと同じく信頼する前提として扱う（`assume` の類は §9 の照合で捕まえる）。
 
 作者のコメント（#27）は、cfg で分岐するなら組み合わせごとに検証を走らせる方向（組み合わせを CLI で指定する）も示しています。形は決まっていません。
 
-#16 の調査では、関数の本体の中の式・文のマクロ（std のマクロと利用者の `macro_rules!`）は、展開した後も Verus が手で書いたコードと同じく検証します（`println!` 系と `write!` は Verus が拒否する）。derive・属性マクロが `verus!` の外に作る項目は検証されず、それを前提に呼び出し側が verified になりえます。この穴は #49（P0）で扱います。依存クレートの derive と属性マクロは拒否せず、それが付いた項目を `ebykn verify` の前提の一覧に `macro ext_macros::One derive on external_macros::S` のような行で出します（#53 の提案の 3）。std の derive（`Clone`、`Copy`、`Debug`、`PartialEq`、`Eq`、`Hash`、`Default`、`PartialOrd`、`Ord`）は Verus が検証するので出しません。実装中（PR #57）。今の develop は、derive・属性マクロが作る項目を一覧に出しません。
+#16 の調査では、関数の本体の中の式・文のマクロ（std のマクロと利用者の `macro_rules!`）は、展開した後も Verus が手で書いたコードと同じく検証します（`println!` 系と `write!` は Verus が拒否する）。derive・属性マクロが `verus!` の外に作る項目は検証されず、それを前提に呼び出し側が verified になりえます（#49）。依存クレートの derive と属性マクロは拒否せず、それが付いた項目を `ebykn verify` の前提の一覧に出します（#53 の提案の 3。下の「[依存クレートの derive と属性マクロ](#依存クレートの-derive-と属性マクロ)」）。
 
 今の develop（#16 の既定の許可リストと、#27 の既定 B）：
 
@@ -155,11 +156,35 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - `cfg!`（`std::cfg!` / `core::cfg!` を含む）と、関数の中に付けた `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は `E0003` です。関数の中とは、文・式・`let`・match の腕・構造体リテラルの欄・構造体パターンの欄・引数・本体の中の項目と、本体の中で定義した構造体・列挙の欄と列挙子です。項目に付ける `#[cfg]` は通します（Verus が見なかった項目は `verify` で `unknown`、同じパスの重複は `E0003`）。
 - `env!` / `option_env!` / `file!`（`std::` / `core::` から始まるパスを含む）は、`unchecked fn` の本体の外では、どこに書いても `E0003` です。値が要るなら `unchecked fn` で包みます。`unchecked fn` の本体の中の入れ子の `fn` では、その `fn` 自身が `unchecked` かどうかで決め直します。
 - `line!` / `column!` / `module_path!` / `include_str!` / `include_bytes!` は、Verus の実行と素のビルドで同じ値になるので通します。ただし生成コードの位置とモジュールを指すので、`include_str!` で読むファイルは `build/verus/src/` から見たパス（`"../../../src/data.txt"` など）で書きます。
-- 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）、外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ。#49）。
+- 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）。外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ）は、項目に付けたものを前提の一覧に出し、ほかの位置のものを拒否します（下の「依存クレートの derive と属性マクロ」）。項目に付けた手続きマクロが健全な証明（`proof!{ reveal(..) }` など）を持ち込む経路は残ります（#16 の判断の案 X / 案 Y）。
 
 * 元の仕様：マクロの扱いを定めていない。§5 は Rust の文法を土台とする。
 * 根拠：#16（PR #15、#20、#26）、#27（PR #26、`tests/golden/cfg_in_body/`）、#53、#49。`assume_specification .. ensures false` や `admit()` が一つ紛れ込むだけで何でも verified になる（P0）。
-* 状態：判断待ちの既定（#53）。今の develop は上の許可リスト。derive・属性マクロの穴（#49）は実装中（PR #57）、cfg と `env!` などの拒否リストへの組み替え（#27）は実装中（PR #59）。
+* 状態：判断待ちの既定（#53）。今の develop は上の許可リスト。cfg と `env!` などの拒否リストへの組み替え（#27）は実装中（PR #59）。
+
+### 依存クレートの derive と属性マクロ
+
+依存クレートの derive と属性マクロは、項目（`fn`、`struct`、`enum`、`union`、`trait`、`impl`、`mod`、`const`、`static`、`type`、`use`、`extern crate`、`extern` ブロックの中の宣言と、`impl`・`trait` の中の項目、関数の本体の中の項目）に付けて書けます。マクロが作る項目は `verus!` の外になり、Verus が検証しないので、`ebykn verify` は付いている項目を前提の一覧に必ず出します（下の「`ebykn verify` の項目の状態と出力」の `macro`）。
+
+- 判定は字句的に、どの項目にどの属性が付いているかで行います（`crates/ebykn_syntax/src/macros.rs` の表）。`cfg_attr(..)` と `unsafe(..)` の中も見ます。
+- 出さないもの（std と Rust のもの）：
+  - std の derive：`Clone`、`Copy`、`Debug`、`PartialEq`、`Eq`、`Hash`、`Default`、`PartialOrd`、`Ord` を、裸の名前か `std::` / `core::` から始まるパスで書いたもの。`std::..::derive` / `core::..::derive` のパスの derive（`core::prelude::v1::derive`）の中も同じです。std の derive が作るのは std の書いた impl だけです。固定した Verus は derive した `Clone` の impl だけを検証し、ほかの impl は検証しません。それでも、どの impl にも仕様がないので、verified なコードはその振る舞い（`a == b` の結果、`S::default()` の値など）に頼れません。
+  - Rust の組み込みの属性：Rust リファレンスの Built-in attributes index のうち、Conditional compilation（`cfg`、`cfg_attr`）、Testing（`test`、`ignore`、`should_panic`）、Derive（`derive`、`automatically_derived`）、Macros（`macro_export`、`macro_use`、`proc_macro`、`proc_macro_derive`、`proc_macro_attribute`）、Diagnostics（`allow`、`expect`、`warn`、`deny`、`forbid`、`deprecated`、`must_use`）、ABI, linking, symbols, and FFI（`link`、`link_name`、`link_ordinal`、`no_link`、`repr`、`crate_type`、`no_main`、`export_name`、`link_section`、`no_mangle`、`used`、`crate_name`）、Code generation（`inline`、`cold`、`naked`、`no_builtins`、`target_feature`、`track_caller`、`instruction_set`）、Documentation（`doc`）、Preludes（`no_std`、`no_implicit_prelude`）、Modules（`path`）、Limits（`recursion_limit`、`type_length_limit`）、Runtime（`panic_handler`、`global_allocator`、`windows_subsystem`）、Type system（`non_exhaustive`）、Debugger（`debugger_visualizer`、`collapse_debuginfo`）。Features（`feature`）は入れません（下の位置の規則）。
+  - ツールの属性：Rust リファレンスの Tool attributes が挙げる `clippy`、`rustfmt`、`diagnostic`、`miri`、`rust_analyzer` の名前空間（`diagnostic::on_unimplemented` を含む）。
+- 名前を覆い隠す書き方は、std や Rust のものとして数えません。クレートのどこかでその名前を束縛していれば（`use` の葉と改名、`mod`、`extern crate`、依存クレートがコードで使われる名前）、前提として出します。
+  - `use evil::Clone;` の後の `#[derive(Clone)]`、`use evil::x as derive;`（`test`、`global_allocator` も）の後の `#[derive(..)]`。
+  - `clippy` などと同じ名前の依存クレートがあるときの `#[clippy::x]`。依存クレートの名前は、改名（`package = ..`）なら鍵、そうでなければそのクレートの `[lib] name`（`[lib] name = "clippy"` も）です。
+  - `core` という名前を束縛しているときの `#[derive(::core::clone::Clone)]`（先頭の `::` があっても）と、`use core::clone::Clone;` の後の `#[derive(Clone)]`。
+  - `inline`・`allow` などの組み込みの属性は、同じ名前を取り込むと rustc が曖昧さのエラー（E0659）にするので、数えてよいものです。glob の `use` で std の derive や `derive` / `test` を取り込んでも曖昧さのエラーになります。
+- 依存クレートがコードで使われる名前は、書き下しでは `Ebykn.toml` と path の依存の `Cargo.toml` から決めます。registry や git の依存、読めない `Cargo.toml` があって決められなければ、std のパス（`std::..` / `core::..`）、std から取り込んだ名前、ツールの属性を数えず、前提として出します。`verify` は Verus の実行の後に `cargo metadata --offline` で名前を確定し、一覧を決め直します。`cargo metadata` が失敗すれば、決められないときの扱いのままです。
+- 項目の外側の属性のほかの位置には、決まった属性だけを書けます。ほかの属性は `E0001` です。tokio や serde はこれらの位置を使わないので、#53 の方針に反しません。
+  - 内側の属性 `#![..]`（ファイルの先頭、`mod` の中）：上の Rust の組み込みの属性のうち、名前を覆い隠せないもの（`test`・`derive`・`global_allocator` を除く）だけです。依存クレートの属性マクロ、ツールの属性、`#![feature(..)]` は書けません。安定版の Rust は内側の属性マクロを許しませんが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で動くので、`verify` では内側の属性マクロが走ります（`mod m { #![evil::x] }` が一覧にない `impl` を足せる）。`#![feature(..)]` を拒否するのは、`#![feature(proc_macro_hygiene)]` で文・式の属性マクロも走るようになるためです。
+  - 文・式・`let`・match の腕の外側の属性：内側と同じ組み込みの属性と、ツールの属性（`#[rustfmt::skip] let ..`）です。ここに付く属性マクロは、Verus でも E0658（`proc_macro_hygiene` は有効でない）で大きく失敗します。`E0001` は、`#![feature]` の拒否の後ろの二重の守りです。
+- `#[override]` は `override` が予約語なので構文解析が読めず（`E0001`）、`#[r#override]` は利用者が束縛した名前として前提に出します。
+
+* 元の仕様：マクロの扱いを定めていない。
+* 根拠：#49（PR #57）、#53。`tests/golden/external_macros/`（属性マクロを付けた `ensures r == 1` の関数が verified と出ても、Verus なしのビルドでは 0 を返す。前提の一覧に `macro` の行が出る）、`crates/ebykn_syntax/tests/macros.rs`（綴りの総当たり）、`crates/ebykn_check/tests/attr_positions.rs`（位置の拒否）、プローブ `external_impl_of_spec_trait.rs`・`std_derive_no_spec.rs`・`automatically_derived_body.rs`（OPEN.md の「M0 の実測」）。
+* 状態：判断待ちの既定（#16 の案 X / 案 Y）。案 Y（依存クレートのマクロを `Ebykn.toml` で明示して許可する）になれば、許可したマクロだけを書ける形に変わり、`status` に前提として出します。前提に検証されない項目がある関数も `verified` と出します。依存先の前提の伝播は M5 の `status` で扱います。
 
 ### §5.2 名前付きの消去される引数は、呼び出しの `uses` で渡す
 
@@ -387,6 +412,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `admit` | 本体のない補題 |
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
+| `macro` | 依存クレートの derive・属性マクロが付いた項目（§5 の「依存クレートの derive と属性マクロ」）。マクロが作る項目は Verus が検証しない |
 | `failed` | Verus のエラーの失敗の場所が、項目の行の範囲にある。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`） |
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
@@ -396,7 +422,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
 - Verus の数えたエラーと読み取ったエラーの見出しの数が違えば、エラーを割り当てられないとみなします。
 - `failed` か `unknown` があれば、`verify` は失敗します。
-- 証明なしの前提（`admit` / `unchecked` / `external`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
+- 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
+- `macro` の行は、derive なら `macro <パス> derive on <項目>`、属性マクロなら `macro <パス> on <項目>` です（`macro serde::Serialize derive on k::Foo`、`macro tokio::main on k::main`）。ファイルごとに、項目の行の後に並べます。`--json` では `status` が `macro` で、`macro`（パス）と `kind`（`derive` / `attribute`）が付きます。
 - 出力は、項目ごとの「状態 パス」の行と、最後の `results N verified, M errors` です（`status`（M5）の形が決まるまでの仮の形）。
 - Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの失敗の場所がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
 - `--json` では、1 行の JSON（`$message_type: ebykn-verify`。`results` は `{"ran": true, "verified": N, "errors": M}` か `{"ran": false, "errors": N}`）を標準出力に出し、Verus の診断は標準エラーに出します。
@@ -409,7 +436,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 次のときは、照合できないとして失敗にします：Verus が失敗したのに見出しを読めない、cargo の数えたエラー（`due to N previous errors`）と読んだ見出しの数が違う、cargo がクレートを作り直した行（`Checking 名前 v..`）がない。cargo は同じ位置・同じ文言のエラーを 1 つにまとめて出すが件数はまとめる前の数のままなので、Ebykn の `admit()` と同じ位置に紛れ込んだ拒否も、この件数の食い違いで照合できないことになります。各実行の前の `cargo clean -p` が失敗したら、`verify` を止めます。
 - 紛れ込んだ前提があるか照合できないときは、どの項目がそれに頼るか分からないので、`verified` の項目をすべて `unknown` にします。
 - 出力は、テキストでは `smuggled 位置 文言` の行（照合できなければ `smuggled unreadable: 理由`。位置は、生成コードならプロジェクトのルートからのパスを字句的に正規化したもの）、`--json` では `no_cheating`（`state` が `clean` / `smuggled` / `unreadable` / `not_run`、`checked`、`smuggled` の位置と文言か `reason`）です。標準エラーには、紛れ込んだものの Verus の診断と英日の文言を出します（照合できないときは、Ebykn 自身の前提への拒否も含むと断って、2 回目の出力の全文）。
-- 捕まえるのは、Verus が `--no-cheating` で拒否するもの（`assume` / `admit` / `external_body` / `assume_specification`、`assume_termination` など）が、Ebykn の前提の一覧の外に出たときだけです。`verus!` の外で依存クレートの derive・属性マクロが作る項目は、Verus が検証しないだけで拒否しないので捕まえません（#49）。
+- 捕まえるのは、Verus が `--no-cheating` で拒否するもの（`assume` / `admit` / `external_body` / `assume_specification`、`assume_termination` など）が、Ebykn の前提の一覧の外に出たときだけです。`verus!` の外で依存クレートの derive・属性マクロが作る項目は、Verus が検証しないだけで拒否しないので捕まえません。それが付いた項目は `macro` の前提として出します（#49）。
 - M5 で性質ファイル（trait の仕様）を足すと、一つの仕様からメソッドごとに拒否が出うるので、「許す拒否は項目ごとに一つ」の規則をそのとき仕様の単位で数え直します。
 - `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 

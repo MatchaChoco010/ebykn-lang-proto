@@ -148,6 +148,9 @@ pub enum Message {
     /// Ebykn が読まないコードを取り込む書き方（`#[path]`、`#[macro_use]`、Verus のマクロの
     /// 取り込みなど。#16 の既定）。
     Unread { written: String },
+    /// 項目の外側の属性のほかの位置（`#![..]`、文・式・`let`・match の腕）の、Rust の組み込みでない
+    /// 属性（#49。`crate::macros::non_builtin`）。`written` は属性のパス。
+    AttrPosition { written: String },
     /// `.eyk` が直接参照しないクレート（vstd など。#16 の既定）。
     VstdDirect { name: String },
     /// std / core / alloc / vstd / ebykn_prelude という名前への改名（#16 の既定）。
@@ -360,6 +363,12 @@ impl Message {
             ),
             (Message::Unread { written }, Ja) => format!(
                 "構文エラー: `{written}` は `.eyk` に書けません。Ebykn が読まないコードを取り込むためです"
+            ),
+            (Message::AttrPosition { written }, En) => format!(
+                "syntax error: the attribute `{written}` cannot be written here; an inner attribute (`#![..]`) or an attribute on a statement or expression must be one of Rust's built-in attributes (`allow`, `cfg`, `doc`, ..), and `#![feature(..)]` cannot be written. A derive or attribute macro of a dependency can be written on an item, where `ebykn verify` lists the items it makes as assumptions"
+            ),
+            (Message::AttrPosition { written }, Ja) => format!(
+                "構文エラー: 属性 `{written}` はここに書けません。内側の属性（`#![..]`）と、文・式に付ける属性は、Rust の組み込みの属性（`allow`、`cfg`、`doc` など）だけです。`#![feature(..)]` は書けません。依存クレートの derive や属性マクロは項目に付けて書けます。そのとき、マクロが作る項目は `ebykn verify` が前提の一覧に出します"
             ),
             (Message::VstdDirect { name }, En) => format!(
                 "syntax error: `.eyk` cannot refer to the crate `{name}` directly; write the bare names instead (`Seq`, `Set`, `Map`, `seq!`, `set!`, `map!`, ..) without `{name}::`"

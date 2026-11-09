@@ -1,0 +1,10 @@
+[package]
+name = "ext_macros"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+# golden の外のワークスペースに入らない。
+[workspace]
