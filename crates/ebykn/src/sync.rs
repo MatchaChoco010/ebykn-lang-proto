@@ -113,11 +113,17 @@ pub struct FileSync {
     pub source: String,
     pub base: String,
     pub outcome: Outcome,
+    /// 書く前に `.eykp` と基準の両方を git が追跡していて、作業ツリーに変更がなかったか。そのときだけ、
+    /// `git checkout` でこの `sync` を取りやめられる（インデックスの版に戻るので、コミットしていない
+    /// 変更があれば一緒に消える）。
+    pub undoable: bool,
 }
 
 /// `sync` の結果。`files` は `.eykp` のパスの順。
 #[derive(Debug, Clone, Default)]
 pub struct SyncReport {
+    /// プロジェクトのルート（取りやめのコマンドの `git -C` に使う）。
+    pub root: String,
     pub files: Vec<FileSync>,
     /// 対応する `.eykp` のない基準（`.ebykn/sync/<p>.eyk`）。名前を変えたか消したモジュールの基準で、
     /// 残すと、あとで同じ名前のモジュールが古い基準から変更を当てる。
@@ -153,7 +159,27 @@ impl SyncReport {
         }
         for f in &self.files {
             let (p, s, b) = (&f.proof, &f.source, &f.base);
-            let undo = format!("git checkout -- {p} {b}");
+            let undo = if f.undoable {
+                match lang {
+                    En => format!(
+                        " (to undo this sync, run `git -C {} checkout -- {p} {b}`)",
+                        self.root
+                    ),
+                    Ja => format!(
+                        "（この sync を取りやめるには `git -C {} checkout -- {p} {b}`）",
+                        self.root
+                    ),
+                }
+            } else {
+                match lang {
+                    En => format!(
+                        " (`git checkout` cannot undo this sync: `{p}` or `{b}` was not committed as it was before the sync, so restoring them would lose uncommitted changes)"
+                    ),
+                    Ja => format!(
+                        "（この sync は `git checkout` では取りやめられません。`{p}` か `{b}` が sync の前の状態のままコミットされていないので、戻すとコミットしていない変更が消えます）"
+                    ),
+                }
+            };
             let line = match (&f.outcome, lang) {
                 (Outcome::Unchanged, En) => format!("unchanged {p}"),
                 (Outcome::Unchanged, Ja) => {
@@ -162,10 +188,10 @@ impl SyncReport {
                 (Outcome::Merged, En) => format!("merged {p} (changes in `{s}`)"),
                 (Outcome::Merged, Ja) => format!("merged {p}（`{s}` の変更を取り込みました）"),
                 (Outcome::Conflict(n), En) => format!(
-                    "conflict {p}: {n} conflict(s) left in the file; resolve them, then run `ebykn check` (to undo this sync, run `{undo}`)"
+                    "conflict {p}: {n} conflict(s) left in the file; resolve them, then run `ebykn check`{undo}"
                 ),
                 (Outcome::Conflict(n), Ja) => format!(
-                    "conflict {p}: 衝突 {n} か所をファイルに残しました。直してから `ebykn check` を実行してください（この sync を取りやめるには `{undo}`）"
+                    "conflict {p}: 衝突 {n} か所をファイルに残しました。直してから `ebykn check` を実行してください{undo}"
                 ),
                 (Outcome::BaseCreated, En) => format!(
                     "base {p}: no base `{b}` yet; recorded the current `{s}` as the base without changing `{p}`"
@@ -180,10 +206,10 @@ impl SyncReport {
                     "error {p}: 基準 `{b}` がなく、`.eykp` のない基準があります（上に挙げたもの）。このモジュールの名前を変えたなら、古い基準を `{b}` に移してから `ebykn sync` をもう一度実行してください"
                 ),
                 (Outcome::UnresolvedMarkers, En) => format!(
-                    "error {p}: conflict markers from a previous `ebykn sync` remain; resolve them first (or undo that sync with `{undo}`)"
+                    "error {p}: conflict markers from a previous `ebykn sync` remain; resolve them first"
                 ),
                 (Outcome::UnresolvedMarkers, Ja) => format!(
-                    "error {p}: 前の `ebykn sync` の衝突の印が残っています。先に直してください（その sync を取りやめるには `{undo}`）"
+                    "error {p}: 前の `ebykn sync` の衝突の印が残っています。先に直してください"
                 ),
                 (Outcome::MissingSource, En) => {
                     format!("error {p}: `{s}` does not exist; `{p}` was left unchanged")
@@ -283,7 +309,10 @@ pub const BASE_DIR: &str = ".ebykn/sync";
 
 /// プロジェクト `root` の `proof/` の `.eykp` をすべて追従させる。
 pub fn sync(root: &Path) -> SyncReport {
-    let mut report = SyncReport::default();
+    let mut report = SyncReport {
+        root: root.display().to_string(),
+        ..SyncReport::default()
+    };
     let Some(proofs) = rel_files(root, "proof", ".eykp", &mut report) else {
         return report;
     };
@@ -306,9 +335,14 @@ pub fn sync(root: &Path) -> SyncReport {
             source: format!("src/{stem}.eyk"),
             base: format!("{BASE_DIR}/{stem}.eyk"),
             outcome: Outcome::Unchanged,
+            undoable: false,
         };
-        let outcome = sync_one(root, &f, !report.orphan_bases.is_empty());
-        report.files.push(FileSync { outcome, ..f });
+        let (outcome, undoable) = sync_one(root, &f, !report.orphan_bases.is_empty());
+        report.files.push(FileSync {
+            outcome,
+            undoable,
+            ..f
+        });
     }
     report
 }
@@ -363,7 +397,13 @@ fn has_markers(proof: &[u8], f: &FileSync) -> bool {
         .any(|l| l == open.as_bytes() || l == close.as_bytes())
 }
 
-fn sync_one(root: &Path, f: &FileSync, orphans: bool) -> Outcome {
+fn sync_one(root: &Path, f: &FileSync, orphans: bool) -> (Outcome, bool) {
+    let mut undoable = false;
+    let outcome = sync_inner(root, f, orphans, &mut undoable);
+    (outcome, undoable)
+}
+
+fn sync_inner(root: &Path, f: &FileSync, orphans: bool, undoable: &mut bool) -> Outcome {
     let read = |rel: &str| {
         std::fs::read(root.join(rel)).map_err(|e| {
             let missing = e.kind() == std::io::ErrorKind::NotFound;
@@ -427,6 +467,13 @@ fn sync_one(root: &Path, f: &FileSync, orphans: bool) -> Outcome {
             stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
         });
     };
+    // 衝突を数えたのに印がない出力は信じない（`.eykp` を印のない中身で置き換えない）。
+    if conflicts > 0 && !has_markers(&out.stdout, f) {
+        return Outcome::Failed(Reason::Git {
+            stderr: format!("reported {conflicts} conflict(s) but wrote no conflict markers"),
+        });
+    }
+    *undoable = committed_as_is(root, &[&f.proof, &f.base]);
     if let Err(e) = write_atomic(&root.join(&f.proof), &out.stdout) {
         return Outcome::Failed(Reason::Write {
             path: f.proof.clone(),
@@ -450,6 +497,21 @@ fn sync_one(root: &Path, f: &FileSync, orphans: bool) -> Outcome {
     }
 }
 
+/// `paths`（ルートからの相対）をすべて git が追跡していて、作業ツリーに変更がないか。
+fn committed_as_is(root: &Path, paths: &[&str]) -> bool {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .arg("--")
+            .args(paths)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    git(&["ls-files", "--error-unmatch"]) && git(&["diff", "--quiet"])
+}
+
 /// `git merge-file` の終了コードを衝突の数として読む。0〜127 が衝突の数（git は 127 で打ち切る）で、
 /// それ以外（二進のファイルの 255、シグナルで止まったときの `None` など）は失敗。
 pub fn merge_conflicts(code: Option<i32>) -> Option<u32> {
@@ -461,8 +523,30 @@ pub fn merge_conflicts(code: Option<i32>) -> Option<u32> {
 
 /// `path` を `bytes` で置き換える。同じディレクトリの一時ファイルに書いてから名前を変えるので、
 /// 途中で失敗しても `path` は前の中身のまま残る。
+///
+/// - `path` が symlink なら、指す先を置き換える（symlink はそのまま残る）。
+/// - すでにあるファイルの mode を引き継ぐ。読み取り専用のファイルは置き換えずに失敗にする
+///   （`std::fs::write` と同じく、読み取り専用のファイルを黙って上書きしない）。
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
+    let resolved;
+    let path = match std::fs::canonicalize(path) {
+        Ok(p) => {
+            resolved = p;
+            resolved.as_path()
+        }
+        Err(_) => path,
+    };
+    let perms = match std::fs::metadata(path) {
+        Ok(m) if m.permissions().readonly() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the file is read-only",
+            ));
+        }
+        Ok(m) => Some(m.permissions()),
+        Err(_) => None,
+    };
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
     let name = path
@@ -475,6 +559,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        if let Some(p) = perms {
+            std::fs::set_permissions(&tmp, p)?;
+        }
         std::fs::rename(&tmp, path)
     })();
     if result.is_err() {

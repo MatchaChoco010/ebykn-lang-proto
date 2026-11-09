@@ -340,3 +340,169 @@ fn reasons_are_translated() {
     assert!(ja.contains("`git merge-file` が失敗しました"), "{ja}");
     assert!(ja.contains("は変えていません"), "{ja}");
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let st = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+}
+
+/// 取りやめの案内（`git checkout`）は、`.eykp` と基準の両方がコミットされたまま変更がないときだけ出す。
+/// コミットしていない証明の作業があれば、戻すと消えることを伝える（#93 の再確認 SF1）。
+#[test]
+fn undo_hint_only_when_both_files_are_committed_as_is() {
+    let p = Proj::new("undo");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", &PROOF.replace("{ 2 }", "{ 2 + 0 }"));
+    p.outcomes();
+    git(&p.0, &["init", "-q"]);
+    git(&p.0, &["add", "."]);
+    git(&p.0, &["commit", "-q", "-m", "c"]);
+    p.write("src/lib.eyk", &SRC.replace("{ 2 }", "{ 20 }"));
+    let r = sync(&p.0);
+    assert!(r.files[0].undoable);
+    let en = r.lines(ebykn_syntax::diag::Lang::En).join("\n");
+    let cmd = format!(
+        "git -C {} checkout -- proof/lib.eykp .ebykn/sync/lib.eyk",
+        p.0.display()
+    );
+    assert!(en.contains(&cmd), "{en}");
+    // 案内どおりに戻すと、sync の前に戻る。
+    let out = Command::new("sh").arg("-c").arg(&cmd).output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        p.read("proof/lib.eykp"),
+        PROOF.replace("{ 2 }", "{ 2 + 0 }")
+    );
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+
+    // コミットしていない補題があるときは、取りやめの案内を出さない。
+    let with_lemma = PROOF.replace("{ 2 }", "{ 2 + 0 }") + "lemma fn extra() ensures true { }\n";
+    p.write("proof/lib.eykp", &with_lemma);
+    let r = sync(&p.0);
+    assert!(!r.files[0].undoable);
+    let en = r.lines(ebykn_syntax::diag::Lang::En).join("\n");
+    assert!(!en.contains("checkout --"), "{en}");
+    assert!(en.contains("would lose uncommitted changes"), "{en}");
+}
+
+/// `sync()` が `.eykp` と基準を書く所でも一時ファイルから置き換えることを、書き込みを失敗させて
+/// 確かめる（#93 の再確認 SF2）。
+#[test]
+fn sync_writes_through_the_atomic_path() {
+    // `.eykp` を書けない：`.eykp` も基準も前のまま。
+    let p = Proj::new("atomic-proof");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", PROOF);
+    p.outcomes();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    std::fs::create_dir(p.0.join("proof/.lib.eykp.ebykn-sync-tmp")).unwrap();
+    let r = sync(&p.0);
+    assert!(
+        matches!(&r.files[0].outcome, Outcome::Failed(Reason::Write { path, .. }) if path == "proof/lib.eykp"),
+        "{:?}",
+        r.files[0].outcome
+    );
+    assert_eq!(p.read("proof/lib.eykp"), PROOF);
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+
+    // 基準を書けない：基準は前のまま、`.eykp` は取り込んだ中身。
+    let p = Proj::new("atomic-base");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", PROOF);
+    p.outcomes();
+    let new = SRC.replace("{ 1 }", "{ 10 }");
+    p.write("src/lib.eyk", &new);
+    std::fs::create_dir(p.0.join(".ebykn/sync/.lib.eyk.ebykn-sync-tmp")).unwrap();
+    let r = sync(&p.0);
+    assert!(
+        matches!(
+            &r.files[0].outcome,
+            Outcome::BaseNotUpdated { conflicts: 0, .. }
+        ),
+        "{:?}",
+        r.files[0].outcome
+    );
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+    assert_eq!(p.read("proof/lib.eykp"), PROOF.replace("{ 1 }", "{ 10 }"));
+}
+
+#[cfg(unix)]
+#[test]
+fn mode_symlink_and_read_only_files() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    // mode を引き継ぐ。
+    let p = Proj::new("mode");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", PROOF);
+    p.outcomes();
+    let proof = p.0.join("proof/lib.eykp");
+    std::fs::set_permissions(&proof, std::fs::Permissions::from_mode(0o600)).unwrap();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    assert_eq!(p.outcomes()[0].1, Outcome::Merged);
+    assert_eq!(mode(&proof), 0o600);
+
+    // 読み取り専用の `.eykp` は置き換えない。
+    std::fs::set_permissions(&proof, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let before = p.read("proof/lib.eykp");
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 11 }"));
+    assert!(matches!(
+        p.outcomes()[0].1,
+        Outcome::Failed(Reason::Write { .. })
+    ));
+    assert_eq!(p.read("proof/lib.eykp"), before);
+    std::fs::set_permissions(&proof, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    // symlink の `.eykp` は、指す先を更新し、symlink のまま残す。
+    let p = Proj::new("symlink");
+    p.write("src/lib.eyk", SRC);
+    p.write("real/lib.eykp", PROOF);
+    std::fs::create_dir_all(p.0.join("proof")).unwrap();
+    std::os::unix::fs::symlink(p.0.join("real/lib.eykp"), p.0.join("proof/lib.eykp")).unwrap();
+    p.outcomes();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    assert_eq!(p.outcomes()[0].1, Outcome::Merged);
+    assert!(
+        std::fs::symlink_metadata(p.0.join("proof/lib.eykp"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(p.read("real/lib.eykp"), PROOF.replace("{ 1 }", "{ 10 }"));
+}
+
+/// 衝突を数えたのに印のない出力は信じない（本物の git ではならないが、安全側に倒す。#93 の再確認）。
+#[cfg(unix)]
+#[test]
+fn conflicts_without_markers_are_not_trusted() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let p = Proj::new("fakegit");
+    p.write("src/lib.eyk", SRC);
+    p.write("proof/lib.eykp", PROOF);
+    p.outcomes();
+    p.write("src/lib.eyk", &SRC.replace("{ 1 }", "{ 10 }"));
+    let bin = p.0.join("fakebin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("git"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ebykn"))
+        .arg("sync")
+        .current_dir(&p.0)
+        .env("PATH", &bin)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("wrote no conflict markers"), "{err}");
+    assert_eq!(p.read("proof/lib.eykp"), PROOF);
+    assert_eq!(p.read(".ebykn/sync/lib.eyk"), SRC);
+}
