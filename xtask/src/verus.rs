@@ -7,6 +7,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::fetch;
+
 /// Verus で検証するクレート。`verus-verify` は各クレートを Verus で検証し、Verus なしの cargo でもビルドする。
 /// vstd に依存するクレートはすべてここに載せ、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
 pub const CRATES: &[&str] = &["crates/ebykn_prelude", "tests/golden/stack/expected/verus"];
@@ -211,6 +213,20 @@ fn sha256_of(file: &Path) -> Result<String, String> {
         .ok_or_else(|| "sha256sum の出力を読めません".to_string())
 }
 
+/// 固定したリリースの資産を `download` で `zip` に取り、sha256 を固定値と比べる。
+fn fetch_asset(
+    pin: &Pin,
+    zip: &Path,
+    download: impl FnOnce(&str, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = format!(
+        "https://github.com/verus-lang/verus/releases/download/{}/{}",
+        pin.release, pin.asset
+    );
+    download(&url, zip)?;
+    fetch::check_sha256(&pin.asset, &sha256_of(zip)?, &pin.sha256)
+}
+
 /// 固定した Verus をキャッシュに入れ、Verus が要求する toolchain を rustup で入れる。
 pub fn install(root: &Path) -> bool {
     match try_install(root) {
@@ -232,21 +248,10 @@ fn try_install(root: &Path) -> Result<PathBuf, String> {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let zip = dir.join(&pin.asset);
-        let url = format!(
-            "https://github.com/verus-lang/verus/releases/download/{}/{}",
-            pin.release, pin.asset
-        );
-        run(Command::new("curl")
-            .args(["-sSfL", "-o"])
-            .arg(&zip)
-            .arg(&url))?;
-        let got = sha256_of(&zip)?;
-        if got != pin.sha256 {
+        let what = format!("Verus {}", pin.release);
+        if let Err(e) = fetch_asset(&pin, &zip, |url, dest| fetch::download(&what, url, dest)) {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(format!(
-                "{} の sha256 が固定値と違います（期待 {}、実際 {got}）",
-                pin.asset, pin.sha256
-            ));
+            return Err(e);
         }
         run(Command::new("unzip")
             .args(["-q", "-o"])
@@ -538,12 +543,70 @@ mod tests {
     fn fails_when_cargo_is_called_outside_cargo_command() {
         // verify_steps を通らない cargo の呼び出しは --locked の検査をすり抜ける。
         let src = real("xtask/src/verus.rs");
-        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
         let needle = ["Command::new(", "\"cargo\")"].concat();
         assert_eq!(
             body.matches(needle.as_str()).count(),
             1,
             "cargo の呼び出しは cargo_command だけにする"
+        );
+    }
+
+    #[test]
+    fn fails_when_the_fetched_asset_is_not_the_pinned_one() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        let dir = std::env::temp_dir().join(format!("ebykn-xtask-asset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join(&pin.asset);
+        let mut asked = None;
+        let r = fetch_asset(&pin, &zip, |url, dest| {
+            asked = Some(url.to_string());
+            std::fs::write(dest, "途中で切れた zip").map_err(|e| e.to_string())
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = r.unwrap_err();
+        assert!(e.contains("sha256") && e.contains(&pin.asset), "{e}");
+        let url = asked.unwrap();
+        assert!(
+            url.ends_with(&format!("/{}/{}", pin.release, pin.asset)),
+            "{url}"
+        );
+        // 取得の失敗はそのまま返し、sha256 まで進まない。
+        let r = fetch_asset(&pin, &zip, |_, _| Err("取れない".to_string()));
+        assert_eq!(r, Err("取れない".to_string()));
+    }
+
+    #[test]
+    fn fails_when_try_install_fetches_outside_fetch_asset() {
+        // fetch_asset を通らない取得は sha256 の照合をすり抜ける。
+        let src = real("xtask/src/verus.rs");
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
+        assert!(
+            !body.contains("use crate::fetch::"),
+            "fetch の関数を名前だけで取り込まない（呼び出しを数えられなくなる）"
+        );
+        let call = "fetch::download(";
+        assert_eq!(
+            body.matches(call).count(),
+            1,
+            "fetch::download は try_install の中で fetch_asset に渡す閉包からだけ呼ぶ"
+        );
+        let at = body.find(call).unwrap();
+        let start = body[..at]
+            .rfind("fetch_asset(")
+            .expect("fetch::download の前に fetch_asset がない");
+        assert!(
+            !body[start..at].contains(';'),
+            "fetch::download が fetch_asset の引数の中にない: {}",
+            &body[start..at]
+        );
+        let f = body.find("fn try_install(").expect("try_install がない");
+        let end = f + body[f..].find("\n}\n").expect("try_install の終わりがない");
+        assert!(
+            (f..end).contains(&start),
+            "fetch_asset の呼び出しが try_install の中にない"
         );
     }
 
