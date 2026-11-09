@@ -54,6 +54,7 @@ pub struct Checked {
 /// 読み込んだプロジェクトを検査する。
 pub fn check(project: &Project) -> Checked {
     let mut index = Index::default();
+    index.dependencies = project.dependency_crate_names().0.into_iter().collect();
     project.for_each_module(|m, f, items| index.add_module(m, f, items));
     // モジュールのファイルの先頭の `#![cfg(..)]`。
     for m in &project.modules {
@@ -200,7 +201,10 @@ fn plain_expr(index: &Index, module: &[String], e: &ast::Expr, d: &mut Diags, f:
 /// 型の引数の名前（外の `impl` / `trait` のものと、関数のもの）。
 fn type_params(outer: &[String], g: &ast::Generics) -> Vec<String> {
     let own = g.params.iter().filter_map(|p| match p {
-        ast::GenericParam::Type { ident, .. } => Some(ident.name.clone()),
+        // 定数の引数（`const N: usize`）も、式の中の名前として同じに扱う。
+        ast::GenericParam::Type { ident, .. } | ast::GenericParam::Const { ident, .. } => {
+            Some(ident.name.clone())
+        }
         _ => None,
     });
     outer.iter().cloned().chain(own).collect()
@@ -479,7 +483,9 @@ fn check_trait(
     diags: &mut Diags,
     facts: &mut Facts,
 ) {
-    let outer = type_params(&[], &t.generics);
+    // トレイトの中の `Self::f` で呼べるのはトレイトのメソッドだけで、契約を持てない（型の引数と同じ）。
+    let mut outer = type_params(&[], &t.generics);
+    outer.push("Self".to_string());
     for item in &t.items {
         match &item.kind {
             TraitItemKind::SpecFn(_) | TraitItemKind::LemmaFn(_) => diags.push(

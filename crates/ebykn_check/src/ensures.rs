@@ -373,11 +373,12 @@ impl Visitor<'_> {
                 self.expr(&region.index);
                 self.block(body);
             }
+            // Rust のトークンのまま持つ式（`.await` など）も、マクロの引数と同じく名前で探す。
+            ExprKind::Rust(tk) => self.tokens(tk.tokens.clone(), e.span),
             ExprKind::Path { .. }
             | ExprKind::Continue { .. }
             | ExprKind::Lit(_)
-            | ExprKind::Infer
-            | ExprKind::Rust(_) => {}
+            | ExprKind::Infer => {}
         }
     }
 
