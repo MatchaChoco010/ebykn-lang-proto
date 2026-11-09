@@ -186,6 +186,8 @@ pub enum Unimpl {
     Base,
     /// `uses` を持つ `async fn`（Verus が `Tracked(..)` の引数を扱えない。#101）。
     AsyncUses,
+    /// `gives` を持つ `async fn`（`.await` の位置で §6.2 が権限を追えない。#101）。
+    AsyncGives,
     /// `build --verified`（M5）。
     BuildVerified,
     /// クレートの外の型への `impl Invariant` / `impl View`（性質ファイル、M5）。
@@ -269,6 +271,12 @@ impl Unimpl {
             }
             (Unimpl::AsyncUses, Lang::Ja) => {
                 "`async fn` にはまだ `uses` を書けません。書き下した `Tracked(..)` の引数を Verus が読めないためです。権限や領域を使う処理を `uses` を持つ async でない `fn` に移し、`async fn` からそれを呼びます"
+            }
+            (Unimpl::AsyncGives, Lang::En) => {
+                "an `async fn` cannot have `gives` yet, because Ebykn does not track the permissions that `.await` hands back; return the permissions from a non-async `fn` with `gives`, and call it from the `async fn`"
+            }
+            (Unimpl::AsyncGives, Lang::Ja) => {
+                "`async fn` にはまだ `gives` を書けません。`.await` が返す権限を Ebykn が追わないためです。権限は `gives` を持つ async でない `fn` から返し、`async fn` からそれを呼びます"
             }
             (Unimpl::BuildVerified, Lang::En) => {
                 "`build --verified` needs `ebykn status`, which is implemented in M5"

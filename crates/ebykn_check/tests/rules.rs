@@ -198,7 +198,7 @@ fn unimplemented_features_fail_loudly() {
 }
 
 #[test]
-fn async_fns_cannot_have_uses_yet() {
+fn async_fns_cannot_have_uses_or_gives_yet() {
     // #101：Verus は `async fn` の `Tracked(..)` の引数を読めずに内部エラーで止まる。
     for f in [
         "async fn f(p: Ptr<Node>) uses &mut p@ { (*p).val = 1; }",
@@ -213,12 +213,24 @@ fn async_fns_cannot_have_uses_yet() {
             "an `async fn` cannot have `uses` yet",
         );
     }
-    // `gives` は戻り値の型なので通る。権限を使う処理は async でない関数に分けて呼べる。
-    accepts(&format!(
-        "{PRELUDE}async fn mk(v: u64) -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: v }}); q }}"
-    ));
+    // `.await` の位置で §6.2 が権限を追えないので、`gives` も止める。
+    for f in [
+        "async fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }",
+        "unchecked async fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }",
+        "impl Pool { async fn mk(&self, v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q } }",
+    ] {
+        rejects(
+            &format!("{PRELUDE}{f}"),
+            "E0003",
+            "an `async fn` cannot have `gives` yet",
+        );
+    }
+    // 権限を受け取る処理も返す処理も、async でない関数に分けて `async fn` から呼べる。
     accepts(&format!(
         "{PRELUDE}fn set(p: Ptr<Node>) uses &mut p@ {{ (*p).val = 1; }}\nasync fn outer() -> u64 {{ let p = Ptr::new(Node {{ val: 0 }}); set(p); let n = p.free(); n.val }}"
+    ));
+    accepts(&format!(
+        "{PRELUDE}fn mk(v: u64) -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: v }}); q }}\nasync fn outer() -> u64 {{ let q = mk(1); let n = q.free(); n.val }}"
     ));
 }
 

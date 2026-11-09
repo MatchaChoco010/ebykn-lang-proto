@@ -92,13 +92,17 @@ pub fn check_perm_targets(
     let push = |diags: &mut Vec<Diagnostic>, span: Span, m: CheckMsg| {
         diags.push(Diagnostic::new(span, Message::Check(m)));
     };
-    // `uses` を持つ `async fn` は、Verus が `Tracked(..)` の引数のパターンを読めずに内部エラーで止まる
-    // （#101）。`gives` は戻り値の型なので通る。
+    // `async fn` の権限は #101 で止める。`uses` は、Verus が `Tracked(..)` の引数のパターンを読めずに
+    // 内部エラーで止まる。`gives` は Verus が通すが、`.await` は生のトークンのままで §6.2 が受け取った
+    // 権限を追えず、黙って捨てられる。
     if sig.qualifiers.asyncness.is_some() {
         for c in &contract.clauses {
-            if matches!(c.kind, ast::ClauseKind::Uses(_)) {
-                push(diags, c.keyword, CheckMsg::Unimplemented(Unimpl::AsyncUses));
-            }
+            let unimpl = match c.kind {
+                ast::ClauseKind::Uses(_) => Unimpl::AsyncUses,
+                ast::ClauseKind::Gives(_) => Unimpl::AsyncGives,
+                _ => continue,
+            };
+            push(diags, c.keyword, CheckMsg::Unimplemented(unimpl));
         }
     }
     for u in contract.uses() {
