@@ -172,6 +172,12 @@ pub enum Message {
     /// 項目の外側の属性のほかの位置（`#![..]`、文・式・`let`・match の腕）の、Rust の組み込みでない
     /// 属性（#49。`crate::macros::non_builtin`）。`written` は属性のパス。
     AttrPosition { written: String },
+    /// 拒否リスト（[`crate::denylist`]、#27）の項目に当たる書き方。`written` は書いたもの
+    /// （cfg なら属性かマクロの形、マクロなら `name!`）。
+    Denied {
+        written: String,
+        entry: &'static crate::denylist::Entry,
+    },
     /// `.eyk` が直接参照しないクレート（vstd など。#16 の既定）。
     VstdDirect { name: String },
     /// std / core / alloc / vstd / ebykn_prelude という名前への改名（#16 の既定）。
@@ -448,6 +454,40 @@ impl Message {
                 "構文エラー: `{src}` ではマクロ `{name}!` を呼べません。呼べるのは次のマクロだけです: {}。自作のマクロが要るなら、それを使う関数を `unchecked fn` にします",
                 crate::ALLOWED_MACROS.join("、")
             ),
+            (Message::Denied { written, entry }, En) => {
+                let mut s = match entry.kind {
+                    crate::denylist::DenyKind::Cfg => format!(
+                        "syntax error: `{written}` cannot be written in `.eyk`, because its condition uses `{}`: {}",
+                        entry.name, entry.why_en
+                    ),
+                    crate::denylist::DenyKind::Macro { .. } => format!(
+                        "syntax error: `{written}` cannot be written in `.eyk`, because {}",
+                        entry.why_en
+                    ),
+                };
+                if !entry.hint_en.is_empty() {
+                    s.push_str("; ");
+                    s.push_str(entry.hint_en);
+                }
+                s
+            }
+            (Message::Denied { written, entry }, Ja) => {
+                let mut s = match entry.kind {
+                    crate::denylist::DenyKind::Cfg => format!(
+                        "構文エラー: `{written}` は `.eyk` に書けません（条件に `{}` を使っている）。書けないのは、{}ためです",
+                        entry.name, entry.why_ja
+                    ),
+                    crate::denylist::DenyKind::Macro { .. } => format!(
+                        "構文エラー: `{written}` は `.eyk` に書けません。書けないのは、{}ためです",
+                        entry.why_ja
+                    ),
+                };
+                if !entry.hint_ja.is_empty() {
+                    s.push('。');
+                    s.push_str(entry.hint_ja);
+                }
+                s
+            }
             (Message::Unread { written }, En) => format!(
                 "syntax error: `{written}` cannot be written in `{src}`, because it brings in code that Ebykn does not read"
             ),

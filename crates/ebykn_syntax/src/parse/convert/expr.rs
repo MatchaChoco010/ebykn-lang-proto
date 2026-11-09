@@ -904,6 +904,10 @@ fn stmt(s: syn::Stmt) -> ast::Stmt {
                 ast::ExprKind::Assign { lhs, rhs }
                     if semi.is_some() && matches!(lhs.kind, ast::ExprKind::Erased { .. }) =>
                 {
+                    // 仕様の代入は属性を書き下さないので、黙って捨てずに拒否する（#27）。
+                    if let Some(a) = lhs.leading_attrs().first() {
+                        push(a.span, cfg_stmt());
+                    }
                     ast::StmtKind::SpecAssign {
                         target: *lhs,
                         value: *rhs,
@@ -1020,10 +1024,26 @@ pub(in crate::parse) fn prover_mode(name: &proc_macro2::Ident) -> ast::ProverMod
     })
 }
 
+fn cfg_stmt() -> crate::diag::Message {
+    crate::diag::Message::Check(crate::diag::CheckMsg::Unimplemented(
+        crate::diag::Unimpl::CfgStmt,
+    ))
+}
+
 /// 文の位置の `Verbatim`（take / put / leak / borrow / ループ / 項目 / 証明の文）。
 pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt {
     let kind = match hook::parse_stmt_verbatim.parse2(ts) {
         Ok((a, raw)) => match raw {
+            RawStmt::Take(_) | RawStmt::Put(_) | RawStmt::Leak(_) if !a.is_empty() => {
+                // `take` / `put` / `leak` は属性を書き下さないので、黙って捨てずに拒否する（#27）。
+                push(span_of(&a[0]), cfg_stmt());
+                match raw {
+                    RawStmt::Take(r) => ast::StmtKind::Take(raw_region_index(r)),
+                    RawStmt::Put(r) => ast::StmtKind::Put(raw_region_index(r)),
+                    RawStmt::Leak(i) => ast::StmtKind::Leak(ident(&i)),
+                    _ => unreachable!(),
+                }
+            }
             RawStmt::Take(r) => ast::StmtKind::Take(raw_region_index(r)),
             RawStmt::Put(r) => ast::StmtKind::Put(raw_region_index(r)),
             RawStmt::Leak(i) => ast::StmtKind::Leak(ident(&i)),

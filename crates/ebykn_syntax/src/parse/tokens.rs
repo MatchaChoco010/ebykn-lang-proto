@@ -5,6 +5,8 @@
 //! - E0102：`#[verifier::..]` / `#![verifier::..]`（古い形の `#[verifier(..)]`、`r#verifier`、
 //!   先頭の `::`、`cfg_attr(.., verifier::..)` の中を含む）。
 //! - 証明の属性（仕様 §5.7 の `ProofAttr`）と Verus の属性。`.eyk` には書けない。
+//! - 拒否リスト（[`crate::denylist`]）の cfg の名前を条件に含む `cfg!(..)`、`#[cfg(..)]`、
+//!   `#[cfg_attr(条件, ..)]`（条件と中の `cfg(..)`）。マクロの引数と属性の値の中も見る（#27）。
 //!
 //! [`scan_opaque`] は、Ebykn が中を構文として読まないトークン列（マクロの引数など）から、
 //! 証明の構文と Verus の構文に当たる形を字句的に探す。
@@ -118,7 +120,14 @@ fn scan_in(ts: &TokenStream, use_group: bool) {
                 if refers_to_crate(&tts, i, &name)
                     || group_head && FORBIDDEN_CRATES.contains(&name.as_str())
                 {
-                    push(sp(id.span()), Message::VstdDirect { name });
+                    push(sp(id.span()), Message::VstdDirect { name: name.clone() });
+                }
+                // `cfg!(..)`（`std::cfg!` / `core::cfg!` も、名前の最後で見る）。
+                if name == "cfg"
+                    && matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
+                    && let Some(TokenTree::Group(g)) = tts.get(i + 2)
+                {
+                    deny_cfg(&g.stream(), "cfg!(..)", sp(id.span()).to(sp(g.span())));
                 }
             }
             TokenTree::Punct(p) if p.as_char() == '#' => attr(&tts, i),
@@ -188,6 +197,18 @@ fn attr(tts: &[TokenTree], i: usize) {
     {
         push(span, Message::AttrPosition { written });
     }
+    // cfg の述語（拒否リストの E0001 と、頼っている cfg の名前）は、属性ごとに一度だけ見る
+    // （`cfg_attr` の中の属性も [`crate::denylist::for_each_cfg_pred`] がたどる）。
+    let (kind, rest) = crate::denylist::attr_head(&body);
+    crate::denylist::for_each_cfg_pred(kind, rest, &mut |pred, cond| {
+        let written = match (cond, inner) {
+            (false, false) => "#[cfg(..)]",
+            (false, true) => "#![cfg(..)]",
+            (true, false) => "#[cfg_attr(..)]",
+            (true, true) => "#![cfg_attr(..)]",
+        };
+        deny_cfg(pred, written, span);
+    });
     meta(&body, inner, span);
 }
 
@@ -273,10 +294,13 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
                 written: format!("#[{name}]"),
             },
         );
+    } else if name == "cfg" {
+        // 述語は [`attr`] が拒否リストで見た。
     } else if name == "cfg_attr" {
+        // 条件と、中の cfg の述語は [`attr`] が拒否リストで見た（条件で属性が付くかどうかが変わる。
+        // `derive` などで、Verus のときだけ impl ができる）。ここでは中の属性のほかの検査だけをする。
         if let Some(TokenTree::Group(g)) = body.get(k + 1) {
             let args: Vec<TokenTree> = g.stream().into_iter().collect();
-            // 最初の引数は条件。残りが属性。
             for a in split_commas(&args).into_iter().skip(1) {
                 meta(a, inner, span);
             }
@@ -297,6 +321,61 @@ fn meta(body: &[TokenTree], inner: bool, span: crate::span::Span) {
                 written: format!("#[{name}]"),
             },
         );
+    }
+}
+
+/// cfg の述語に拒否リストの名前があれば、診断にする。`all` / `any` / `not` の入れ子の中まで、
+/// 識別子をすべて見る（`feature = "x"` の値は文字列なので見ない）。
+fn deny_cfg(pred: &TokenStream, written: &str, span: crate::span::Span) {
+    if let Some(entry) = crate::denylist::pred_entry(pred) {
+        push(
+            span,
+            Message::Denied {
+                written: written.into(),
+                entry,
+            },
+        );
+    }
+    let mut names = std::collections::BTreeSet::new();
+    cfg_names(pred, &mut names);
+    super::add_cfg_uses(names);
+}
+
+/// cfg の述語に書いた名前（`test`、`feature = "x"` など）を集める。`all` / `any` / `not` は中だけを見て、
+/// 真偽の値の `true` / `false` は数えない。
+pub(crate) fn cfg_names(pred: &TokenStream, out: &mut std::collections::BTreeSet<String>) {
+    let tts: Vec<TokenTree> = pred.clone().into_iter().collect();
+    let mut i = 0;
+    while i < tts.len() {
+        match &tts[i] {
+            TokenTree::Ident(id) => {
+                let written = id.to_string();
+                // `cfg(true)` / `cfg(false)` は真偽の値で、ビルドの設定で変わらない（`r#true` は名前）。
+                if matches!(written.as_str(), "true" | "false") {
+                    i += 1;
+                    continue;
+                }
+                let n = unraw(&written);
+                if matches!(n.as_str(), "all" | "any" | "not")
+                    && let Some(TokenTree::Group(g)) = tts.get(i + 1)
+                {
+                    cfg_names(&g.stream(), out);
+                    i += 2;
+                    continue;
+                }
+                if matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '=')
+                    && let Some(TokenTree::Literal(l)) = tts.get(i + 2)
+                {
+                    out.insert(format!("{n} = {l}"));
+                    i += 3;
+                    continue;
+                }
+                out.insert(n);
+            }
+            TokenTree::Group(g) => cfg_names(&g.stream(), out),
+            _ => {}
+        }
+        i += 1;
     }
 }
 
@@ -485,32 +564,19 @@ pub(super) fn macro_call_message(names: &[String]) -> Option<Message> {
         Some(Message::VerusOnly {
             written: format!("{last}!"),
         })
-    } else if last == "cfg"
-        && matches!(
-            names.first().map(String::as_str),
-            Some("cfg" | "std" | "core")
-        )
+    } else if let Some(entry) = crate::denylist::macro_entry(last)
+        && (names.len() == 1 || matches!(names.first().map(String::as_str), Some("std" | "core")))
     {
-        // `cfg!` は Verus のときと Verus なしのときで違う値になり、検証したコードとビルドするコードが
-        // 食い違う（#27 の既定 B）。
-        Some(Message::Check(crate::diag::CheckMsg::Unimplemented(
-            crate::diag::Unimpl::CfgInBody,
-        )))
-    } else if matches!(last.as_str(), "env" | "option_env" | "file")
-        && matches!(
-            names.first().map(String::as_str),
-            Some("env" | "option_env" | "file" | "std" | "core")
-        )
-    {
-        // コンパイル時の環境変数と、cargo が rustc に渡すファイルのパスは、Verus の実行と素のビルドで
-        // 値が違いうる（#27 の既定）。証明なしの前提として一覧に出る `unchecked fn` の本体でだけ許す。
-        let u = if last == "file" {
-            crate::diag::Unimpl::FileMacro
-        } else {
-            crate::diag::Unimpl::EnvMacro
-        };
-        (!super::in_unchecked_body())
-            .then_some(Message::Check(crate::diag::CheckMsg::Unimplemented(u)))
+        // 拒否リストのマクロ（#27）。`unchecked_ok` のものは、証明なしの前提として一覧に出る
+        // `unchecked fn` の本体でだけ許す。
+        let ok = matches!(
+            entry.kind,
+            crate::denylist::DenyKind::Macro { unchecked_ok: true }
+        ) && super::in_unchecked_body();
+        (!ok).then(|| Message::Denied {
+            written: format!("{last}!"),
+            entry,
+        })
     } else if macro_allowed(names).is_none() {
         Some(Message::MacroNotAllowed {
             name: names.join("::"),

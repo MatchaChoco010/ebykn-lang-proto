@@ -1,0 +1,47 @@
+// 文の cfg（PR #59 のレビューの B1・S1）。§6 の検査は cfg を評価しないので、次の文に付けた `#[cfg]` は E0003。
+// 代入と `take` / `put` / `leak` / 仕様の代入は、どの属性も E0003。総当たりは
+// `crates/ebykn_check/tests/cfg_stmt.rs`。
+
+pub struct Node { pub val: u64 }
+
+pub struct Pool { len: u64 } owns { nodes: Region<Ptr<Node>> }
+
+// `*p` への書き込み（書き下しが属性を落とし、test でない利用側のビルドと食い違っていた）。
+pub fn write() -> (r: u64) ensures r == 5, {
+    let q = Ptr::new(Node { val: 1 });
+    #[cfg(test)] (*q).val = 5;
+    let x = (*q).val;
+    let n = q.free();
+    x
+}
+
+// 権限を消費する文（消えると、§6 が見ないまま権限を捨てる）。
+pub fn leak_free() -> u64 {
+    let q = Ptr::new(Node { val: 3 });
+    let x = (*q).val;
+    #[cfg(any())] let n = q.free();
+    x
+}
+
+// take / put（属性を書き下さない）。
+pub fn put_gone(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires old(r).contains(p),
+    ensures final(r).contains(p),
+{
+    take r[p];
+    #[cfg(any())] put r[p];
+}
+
+impl Pool {
+    // 仕様の代入（取り込んだ verus_syn が属性を捨てていた）。
+    pub fn reset(&mut self) { #[cfg(test)] self@len = 0; }
+
+    // borrow mut のブロックを抜ける return（#21 の既定 D で権限を戻す展開をするが、cfg で消えると、§6 が
+    // 到達しないと見た後ろの書き込みが実行される）。
+    pub fn bm(&mut self, p: Ptr<Node>) requires old(self)@nodes.contains(p), {
+        borrow mut self@nodes[p] {
+            #[cfg(test)] return;
+            (*p).val = 0;
+        }
+    }
+}

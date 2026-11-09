@@ -57,6 +57,9 @@ pub struct Output {
     /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
     /// `func-details` の名前の形（`k::m::impl&%*::e`。`*` は impl の番号）。
     pub verus_patterns: BTreeMap<String, String>,
+    /// クレートが頼っている、ビルドの設定で値の変わる cfg の名前（[`Project::cfg_uses`]）。`verify` は、
+    /// 空でなければ、検証した組み合わせを前提として一覧に出す（#27、#87）。
+    pub cfg_uses: Vec<String>,
     /// std でも組み込みでもない手続きマクロ（依存クレートの derive と属性マクロ）が付いた項目。
     /// マクロが作る項目は Verus が検証しないので、`verify` が前提の一覧に必ず出す（#49）。
     pub macros: Vec<MacroUse>,
@@ -245,7 +248,10 @@ pub fn lower_with_crates(
     crates: Option<&[String]>,
 ) -> Result<Output, String> {
     let report = RefCell::new(Report::default());
-    let mut out = Output::default();
+    let mut out = Output {
+        cfg_uses: project.cfg_uses.iter().cloned().collect(),
+        ..Output::default()
+    };
     // 名前を覆い隠す書き方（`use evil::Clone;`、同じ名前の依存クレート）を見分ける（#49）。
     let mut bindings = ebykn_syntax::macros::Bindings::default();
     let (names, known) = project.dependency_crate_names();

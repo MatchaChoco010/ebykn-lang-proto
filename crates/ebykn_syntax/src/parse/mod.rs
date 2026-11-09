@@ -34,6 +34,9 @@ pub struct Parsed {
     /// 構文解析では判定できなかった、[`crate::reserved`] の表の名前を最後に持つパス。
     /// 検査（`ebykn_check`）が名前解決して決める。
     pub deferred: Vec<(Span, crate::reserved::DeferredName)>,
+    /// cfg の述語に書いた名前（`test`、`unix`、`feature = "x"`、`target_os = "linux"` など。`all` / `any` /
+    /// `not` は除く）。`ebykn verify` が、検証した cfg の組み合わせを前提として出す（#27、#87）。
+    pub cfg_uses: std::collections::BTreeSet<String>,
 }
 
 impl Parsed {
@@ -66,6 +69,7 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
                 },
                 diags: vec![Diagnostic::new(span, Message::Lex)],
                 deferred: Vec::new(),
+                cfg_uses: Default::default(),
             };
         }
     };
@@ -81,6 +85,7 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
             proof_attrs: Vec::new(),
             attr_ok: std::collections::HashSet::new(),
             unread: Vec::new(),
+            cfg_uses: Default::default(),
         })
     });
     tokens::scan(&tokens);
@@ -119,6 +124,7 @@ fn parse(file: &SourceFile, proof: bool) -> Parsed {
         file: parsed,
         diags,
         deferred,
+        cfg_uses: cx.cfg_uses,
     }
 }
 
@@ -145,6 +151,8 @@ struct Cx {
     /// （`proof { }`、`assert ..`、`lemma fn` の本体など）と、読めなかった項目。中の証明の属性には
     /// 「ここには書けない」を重ねない（[`check_proof_attrs`]）。
     unread: Vec<(usize, usize)>,
+    /// [`Parsed::cfg_uses`]。
+    cfg_uses: std::collections::BTreeSet<String>,
 }
 
 /// 中を読まずに診断にした範囲を覚える。
@@ -211,6 +219,11 @@ fn check_proof_attrs(cx: &mut Cx) {
 /// `.eykp` を読んでいるか。
 pub(crate) fn in_proof() -> bool {
     with_cx(|cx| cx.proof)
+}
+
+/// cfg の述語の名前を [`Parsed::cfg_uses`] に足す。
+pub(crate) fn add_cfg_uses(names: impl IntoIterator<Item = String>) {
+    with_cx(|cx| cx.cfg_uses.extend(names))
 }
 
 /// `unchecked fn` の本体を読んでいる間かを設定し、前の値を返す。
