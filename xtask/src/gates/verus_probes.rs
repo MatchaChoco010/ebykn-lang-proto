@@ -10,15 +10,18 @@
 //! // expect: verified <N>                     （一つ。N verified, 0 errors で成功する）
 //! // expect: errors <V> <E>                   （V verified, E errors で失敗する）
 //! // expect: rejected                         （検証の前に失敗し、結果の行が出ない）
+//! // expect: compile-error <N>                （N verified, 0 errors で検証が通った後、コンパイルで失敗する）
 //! // expect-output: <部分文字列>              （任意個。出力に含まれる）
 //! // expect-output-count: <回数> <部分文字列>  （任意個。出力にちょうどその回数だけ含まれる）
 //! // verus-args: <引数 ..>                    （任意。verus に足す引数）
 //! ```
 //!
-//! 失敗を期待するプローブ（`errors` / `rejected`）は、`expect-output` か `expect-output-count` を
+//! 失敗を期待するプローブ（`errors` / `rejected` / `compile-error`）は、`expect-output` か `expect-output-count` を
 //! 少なくとも一つ持つ。持たないと、タイプミスや構文エラーのような別の失敗も期待どおりに数えてしまう。
 //! 部分文字列の中の `\n` は改行、`\\` は `\` と読む。ヘッダの後ろに指示に見える行（`//expect:` など）が
 //! あれば失敗にする。
+//!
+//! Verus は `target/verus-probes/` で走らせる（`--compile` の成果物をリポジトリに置かない）。
 
 use std::path::Path;
 use std::process::Command;
@@ -33,6 +36,8 @@ pub enum Expect {
     Verified(u64),
     Errors(u64, u64),
     Rejected,
+    /// 検証は `N verified, 0 errors` で通り、その後のコンパイル（`--compile`）で失敗する。
+    CompileError(u64),
 }
 
 #[derive(Debug)]
@@ -168,6 +173,7 @@ fn parse_expect(v: &str) -> Result<Expect, String> {
         ["verified", n] => Ok(Expect::Verified(num(n)?)),
         ["errors", a, b] if num(b)? > 0 => Ok(Expect::Errors(num(a)?, num(b)?)),
         ["rejected"] => Ok(Expect::Rejected),
+        ["compile-error", n] => Ok(Expect::CompileError(num(n)?)),
         _ => Err(format!("expect を読めません: {v}")),
     }
 }
@@ -200,6 +206,7 @@ pub fn check(probe: &Probe, out: &Outcome) -> Vec<String> {
         (Expect::Verified(n), Some((v, 0))) if out.success && v == *n => {}
         (Expect::Errors(a, b), Some((v, e))) if !out.success && v == *a && e == *b => {}
         (Expect::Rejected, None) if !out.success => {}
+        (Expect::CompileError(n), Some((v, 0))) if !out.success && v == *n => {}
         (want, got) => errs.push(format!(
             "{f}: 期待 {want:?} に対し、結果 {got:?}・終了 {}",
             if out.success { "成功" } else { "失敗" }
@@ -225,14 +232,24 @@ pub fn run(repo: &Repo) -> Report {
         .and_then(|t| read_pin(&t))
         .and_then(|p| installed(&p).map(|b| (p, b)));
     match bin {
-        Ok((pin, bin)) => run_with(repo, &|file, args| {
-            verus(
-                &bin.join("verus"),
-                &pin.toolchain,
-                &repo.root.join(file),
-                args,
-            )
-        }),
+        Ok((pin, bin)) => {
+            let work = repo.root.join("target/verus-probes");
+            if let Err(e) = std::fs::create_dir_all(&work) {
+                return Report {
+                    errors: vec![format!("{} を作れません: {e}", work.display())],
+                    notes: Vec::new(),
+                };
+            }
+            run_with(repo, &|file, args| {
+                verus(
+                    &bin.join("verus"),
+                    &pin.toolchain,
+                    &repo.root.join(file),
+                    args,
+                    &work,
+                )
+            })
+        }
         Err(e) => Report {
             errors: vec![e],
             notes: Vec::new(),
@@ -240,8 +257,15 @@ pub fn run(repo: &Repo) -> Report {
     }
 }
 
-fn verus(bin: &Path, toolchain: &str, file: &Path, args: &[String]) -> Result<Outcome, String> {
+fn verus(
+    bin: &Path,
+    toolchain: &str,
+    file: &Path,
+    args: &[String],
+    work: &Path,
+) -> Result<Outcome, String> {
     let out = Command::new(bin)
+        .current_dir(work)
         .arg("--crate-type=lib")
         .args(args)
         .arg(file)
@@ -303,6 +327,7 @@ mod tests {
     const PROBE: &str = "tests/verus-probes/simple_pptr.rs";
     const REJECTED: &str = "tests/verus-probes/assume_specification_duplicate.rs";
     const JSON_FAILURE: &str = "tests/verus-probes/json_output_failure.rs";
+    const COMPILE_ERROR: &str = "tests/verus-probes/non_zst_compile.rs";
 
     /// 期待どおりの結果を返す偽の Verus。期待は `original` から読む（壊す前の実ファイル）。
     fn consistent(original: &str) -> impl Fn(&str, &[String]) -> Result<Outcome, String> + use<> {
@@ -312,6 +337,9 @@ mod tests {
                 Expect::Verified(n) => format!("verification results:: {n} verified, 0 errors"),
                 Expect::Errors(a, b) => format!("verification results:: {a} verified, {b} errors"),
                 Expect::Rejected => "error: aborting".to_string(),
+                Expect::CompileError(n) => {
+                    format!("verification results:: {n} verified, 0 errors\nerror: aborting")
+                }
             };
             let mut text = format!("{line}\n{}\n", probe.outputs.join("\n"));
             for (n, o) in &probe.counts {
@@ -369,6 +397,34 @@ mod tests {
         let fake = consistent(&verifies);
         let r = t.run_ref(|repo| run_with(repo, &fake));
         assert_fails(&r, "期待 Rejected");
+    }
+
+    #[test]
+    fn fails_when_a_compile_error_probe_compiles() {
+        let src = real(COMPILE_ERROR);
+        // 壊すのは Verus の結果の側：コンパイルで止まるはずのプローブが通ったことにする。
+        let compiles = mutate(&src, "// expect: compile-error 4", "// expect: verified 4");
+        let t = one(COMPILE_ERROR, &src);
+        let fake = consistent(&compiles);
+        let r = t.run_ref(|repo| run_with(repo, &fake));
+        assert_fails(&r, "期待 CompileError(4)");
+    }
+
+    #[test]
+    fn fails_when_a_compile_error_probe_fails_verification() {
+        let src = real(COMPILE_ERROR);
+        let t = one(COMPILE_ERROR, &src);
+        let fails = |_: &str, _: &[String]| {
+            Ok(Outcome {
+                success: false,
+                text: "verification results:: 3 verified, 1 errors\nerror[E0080]\nzero-sized T\n"
+                    .to_string(),
+            })
+        };
+        assert_fails(
+            &t.run_ref(|repo| run_with(repo, &fails)),
+            "期待 CompileError(4)",
+        );
     }
 
     #[test]

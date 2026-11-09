@@ -86,8 +86,9 @@ pub fn run(repo: &Repo) -> Report {
     r
 }
 
-/// コメントを除く（`//` から行末、`/* */`）。文字列の中は考えない（prelude の `use` には現れない）。
-fn strip_comments(s: &str) -> String {
+/// コメントを除き、文字列リテラルの中身を空にする（`"..."`、`r"..."`、`r#"..."#`）。文字列の中の
+/// 語（`"use Cell<T>"` の `use` など）を `use` 宣言と読まないため。閉じていない文字列は読めない入力として失敗にする。
+fn strip_comments(s: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut rest = s;
     while !rest.is_empty() {
@@ -95,13 +96,51 @@ fn strip_comments(s: &str) -> String {
             rest = r.find('\n').map_or("", |i| &r[i..]);
         } else if let Some(r) = rest.strip_prefix("/*") {
             rest = r.find("*/").map_or("", |i| &r[i + 2..]);
+        } else if let Some(r) = rest.strip_prefix("'\"'").or(rest.strip_prefix("'\\\"'")) {
+            // 文字リテラルの `'"'` / `'\"'` は文字列の始まりではない。
+            out.push_str("' '");
+            rest = r;
+        } else if let Some((hashes, r)) = raw_string_start(rest) {
+            let close = format!("\"{}", "#".repeat(hashes));
+            let end = r
+                .find(&close)
+                .ok_or("閉じていない生の文字列リテラルがあります")?;
+            out.push_str("\"\"");
+            rest = &r[end + close.len()..];
+        } else if let Some(r) = rest.strip_prefix('"') {
+            let mut chars = r.char_indices();
+            let mut end = None;
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => {
+                        end = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.ok_or("閉じていない文字列リテラルがあります")?;
+            out.push_str("\"\"");
+            rest = &r[end + 1..];
         } else {
             let c = rest.chars().next().unwrap();
             out.push(c);
             rest = &rest[c.len_utf8()..];
         }
     }
-    out
+    Ok(out)
+}
+
+/// 生の文字列リテラルの始まり（`r"` / `r#"` / `br"` ..）なら、`#` の数と中身の始まり。
+/// `r` / `br` のすぐ後に `#` の並びと `"` が続く形だけを受ける（生の識別子 `r#type` は受けない）。
+fn raw_string_start(s: &str) -> Option<(usize, &str)> {
+    let r = s.strip_prefix("br").or_else(|| s.strip_prefix('r'))?;
+    let hashes = r.len() - r.trim_start_matches('#').len();
+    let body = r[hashes..].strip_prefix('"')?;
+    Some((hashes, body))
 }
 
 /// `use` の葉。
@@ -148,7 +187,7 @@ fn resolve(path: &str, aliases: &[(String, String)]) -> String {
 
 /// すべての `use`（公開しないものを含む）の葉と `extern crate` を集める。
 fn exports(text: &str) -> Result<Vec<Use>, String> {
-    let s = strip_comments(text);
+    let s = strip_comments(text)?;
     let words: Vec<&str> = tokenize(&s);
     let mut out = Vec::new();
     let mut i = 0;
@@ -209,25 +248,28 @@ fn exports(text: &str) -> Result<Vec<Use>, String> {
 }
 
 fn tokenize(s: &str) -> Vec<&str> {
+    // 文字単位で読む（コメントの外の文字列リテラルに日本語があってもよい）。
     let mut out = Vec::new();
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i] as char;
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         if c.is_whitespace() {
-            i += 1;
-        } else if c == ':' && b.get(i + 1) == Some(&b':') {
+            continue;
+        }
+        if c == ':' && chars.peek().is_some_and(|&(_, n)| n == ':') {
+            chars.next();
             out.push("::");
-            i += 2;
         } else if c.is_alphanumeric() || c == '_' {
-            let start = i;
-            while i < b.len() && ((b[i] as char).is_alphanumeric() || b[i] == b'_') {
-                i += 1;
+            let mut end = i + c.len_utf8();
+            while let Some(&(j, n)) = chars.peek() {
+                if !(n.is_alphanumeric() || n == '_') {
+                    break;
+                }
+                end = j + n.len_utf8();
+                chars.next();
             }
-            out.push(&s[start..i]);
+            out.push(&s[i..end]);
         } else {
             out.push(&s[i..i + c.len_utf8()]);
-            i += c.len_utf8();
         }
     }
     out
@@ -304,6 +346,7 @@ mod tests {
 
     const LIB: &str = "crates/ebykn_prelude/src/lib.rs";
     const CELL: &str = "crates/ebykn_prelude/src/cell.rs";
+    const PTR: &str = "crates/ebykn_prelude/src/ptr.rs";
 
     fn repo(lib: &str) -> TempRepo {
         let mut t = TempRepo::new();
@@ -315,6 +358,51 @@ mod tests {
     #[test]
     fn passes_on_the_real_prelude() {
         assert_passes(&repo(&real(LIB)).run(run));
+    }
+
+    #[test]
+    fn passes_on_every_real_prelude_file() {
+        // `ptr.rs` には、コメントの外に日本語の文字列リテラル（`NonZst` の `assert!`）がある。
+        let mut t = repo(&real(LIB));
+        t.write(PTR, &real(PTR));
+        assert!(real(PTR).contains("ゼロサイズ型"));
+        assert_passes(&t.run(run));
+        assert_eq!(
+            tokenize("a(\"日本語\")::b"),
+            ["a", "(", "\"", "日本語", "\"", ")", "::", "b"]
+        );
+    }
+
+    #[test]
+    fn does_not_read_words_in_string_literals_as_use() {
+        // 文字列の中の `use` は宣言ではない（`NonZst` の文言に "use Cell<T>" がある）。
+        let lib = format!(
+            "{}\nconst A: &str = \"pub use vstd::prelude::*;\";\nconst B: &str = r#\"pub use vstd::prelude::*;\"#;\nconst C: char = '\"';\n",
+            real(LIB)
+        );
+        assert_passes(&repo(&lib).run(run));
+        assert_eq!(
+            strip_comments("a(\"x \\\" use y\", r#\"use \"z\"#) // use w").unwrap(),
+            "a(\"\", \"\") "
+        );
+    }
+
+    #[test]
+    fn fails_on_an_unclosed_string_literal() {
+        let broken = format!(
+            "{}\nconst A: &str = \"pub use vstd::prelude::*;\n",
+            real(LIB)
+        );
+        assert_fails(&repo(&broken).run(run), "閉じていない文字列リテラル");
+        let broken = format!("{}\nconst A: &str = r#\"x\";\n", real(LIB));
+        assert_fails(&repo(&broken).run(run), "閉じていない生の文字列リテラル");
+        // 文字列の外の glob は、文字列を挟んでも見つける。
+        let broken = mutate(
+            &real(LIB),
+            "pub use vstd::view::View;",
+            "const A: &str = \"x\";\npub use vstd::prelude::*;",
+        );
+        assert_fails(&repo(&broken).run(run), "`vstd::prelude::*`");
     }
 
     #[test]

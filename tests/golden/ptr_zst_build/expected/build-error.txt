@@ -1,0 +1,1 @@
+error[E0080]: evaluation panicked: Ptr<T> cannot point to a zero-sized type T; use Cell<T> if you need distinct identities / Ptr<T> の T にゼロサイズ型は使えません（識別が要るなら Cell<T> を使う）

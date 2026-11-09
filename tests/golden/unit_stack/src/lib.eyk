@@ -1,0 +1,37 @@
+pub struct Node<T> { pub val: T, next: Option<Ptr<Node<T>>> }
+pub struct Stack<T> { head: Option<Ptr<Node<T>>> } owns { nodes: Region<Ptr<Node<T>>> } spec { order: Seq<Ptr<Node<T>>> }
+
+impl<T> Invariant for Stack<T> {
+    closed spec fn invariant(&self) -> bool = and {
+        forall p in self@order, self@nodes.contains(p),
+        self.head == self@order.get(0),
+        forall i in 0..self@order.len(), self@nodes[self@order[i]].next == self@order.get(i + 1),
+    };
+}
+
+impl<T> Stack<T> {
+    pub fn new() -> Self { Stack { head: None, @nodes: Region::empty(), @order: Seq::empty() } }
+    pub fn push(&mut self, v: T) {
+        let n = Ptr::new(Node { val: v, next: self.head });
+        self.head = Some(n);
+        put self@nodes[n];
+        self@order = seq![n] + self@order;
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        let h = self.head?;
+        take self@nodes[h];
+        let node = h.free();
+        self.head = node.next;
+        self@order = self@order.drop_first();
+        Some(node.val)
+    }
+}
+
+// `Node<()>` はリンクのフィールドを持つのでゼロサイズ型でなく、`Stack<()>` は書ける（#12）。
+// 単相化させるため、`T = ()` で使う関数を置く（ビルドで prelude のコンパイル時の検査を通る）。
+pub fn unit_stack() -> Option<()> {
+    let mut s = Stack::<()>::new();
+    s.push(());
+    s.push(());
+    s.pop()
+}

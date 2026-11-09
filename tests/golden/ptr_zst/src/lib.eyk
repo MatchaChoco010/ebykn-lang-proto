@@ -1,0 +1,40 @@
+// E0517：`Ptr<T>` の `T` に、確実にゼロサイズ型と分かる型を使う（#12）。
+pub struct Unit;
+pub struct Ghost {} spec { n: nat }
+pub struct Wrap<T> { x: T }
+
+pub fn unit_value() {
+    let p = Ptr::new(());
+    let _ = p.free();
+}
+
+pub fn unit_struct(p: Ptr<Unit>) uses p@ {
+    leak p@;
+}
+
+pub fn erased_only() -> (q: Ptr<Ghost>) gives q@ {
+    let q = Ptr::<Ghost>::empty();
+    q
+}
+
+pub fn substituted(p: Ptr<Wrap<()>>) uses p@ {
+    leak p@;
+}
+
+// 列挙子が一つの列挙（`struct Vertex;` の列挙の形）。
+pub enum Vertex { V }
+
+pub fn vertex(p: Ptr<Vertex>) uses p@ {
+    leak p@;
+}
+
+// ジェネリックな `T` は判定しない（ビルドで止まる）。`Cell<()>` は使える。
+pub fn generic<T>(v: T) {
+    let p = Ptr::new(v);
+    let _ = p.free();
+}
+
+pub fn cell() {
+    let c = Cell::new(());
+    leak c@;
+}

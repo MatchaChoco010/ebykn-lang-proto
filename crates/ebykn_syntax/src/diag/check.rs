@@ -486,6 +486,12 @@ pub enum CheckMsg {
         field: String,
     },
 
+    // E0517
+    /// `Ptr<T>` の `T` がゼロサイズ型（#12）。`ty` は書かれた `T`。
+    PtrZeroSized {
+        ty: String,
+    },
+
     // W0601
     RefinementNested {
         ty: String,
@@ -536,6 +542,7 @@ impl CheckMsg {
             MethodCallUses { .. } => Code::E0514,
             SelfErasedWithoutSelf => Code::E0515,
             AssignOwnsField { .. } => Code::E0516,
+            PtrZeroSized { .. } => Code::E0517,
             RefinementNested { .. } => Code::W0601,
         }
     }
@@ -919,6 +926,13 @@ impl CheckMsg {
             (OldFinalArg, Ja) => {
                 "`old(..)` / `final(..)` を付けられるのは、`&mut` の引数（`self`、`x`）、`uses &mut p@` の権限（`p@`、`*p`）、それらの消去フィールド（`self@f`）だけです。引数に付けて、フィールドは外で読みます（例：`old(self.len)` ではなく `old(self).len`）".into()
             }
+
+            (PtrZeroSized { ty }, En) => format!(
+                "`{ty}` is a zero-sized type, so it cannot be the target of `Ptr`: every allocation of a zero-sized type has the same address and cannot be told apart; use `Cell<{ty}>` if you need distinct identities"
+            ),
+            (PtrZeroSized { ty }, Ja) => format!(
+                "`{ty}` はゼロサイズ型なので `Ptr` の指す先にできません。ゼロサイズ型の確保はどれも同じアドレスになり、互いを区別できません。識別が要るなら `Cell<{ty}>` を使ってください"
+            ),
 
             (RefinementNested { ty }, En) => format!(
                 "the invariant of `{ty}` is not added to contracts at this position; only `T`, `&T`, `&mut T`, `Option<T>` and `Result<T, E>` are expanded"
