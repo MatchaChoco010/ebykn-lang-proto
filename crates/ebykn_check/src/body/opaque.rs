@@ -292,16 +292,19 @@ impl Walker<'_> {
         self.local.globs.iter().find_map(|g| {
             let mut head = g.clone();
             head.push(first.clone());
+            // 解決できなくても、glob の行き先に定義があるかもしれない名前は、glob から来たとみなす（外の glob
+            // の例外に落とさない）。
             (self
                 .cx
                 .index
                 .resolve_exact(self.cx.module, false, &head, self.cx.self_ty)
-                != Resolved::Unknown)
-                .then(|| {
-                    let mut sub = g.clone();
-                    sub.extend(segs.iter().cloned());
-                    sub
-                })
+                != Resolved::Unknown
+                || self.cx.index.may_define(self.cx.module, &head))
+            .then(|| {
+                let mut sub = g.clone();
+                sub.extend(segs.iter().cloned());
+                sub
+            })
         })
     }
 

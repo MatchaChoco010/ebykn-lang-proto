@@ -948,6 +948,15 @@ fn positive_facts_do_not_leak() {
             "use h0::tgt::*;\n",
             "use std::collections::*; let q = mk3(1); 0",
         ),
+        // 本体の glob の先が深い鎖のとき、その名前を外の glob の例外に落とさない。
+        (
+            "pub mod mh { pub use crate::h0::tgt::*; }\n",
+            "use crate::mh::*; use std::collections::*; let q = mk3(1); 0",
+        ),
+        (
+            "pub mod mh { pub use crate::h0::tgt::*; }\n",
+            "use crate::mh as mm; let q = mm::mk3(1); 0",
+        ),
     ] {
         let (_, lines) = run(&format!(
             "{PRELUDE}{chain}{uses}pub fn f() -> u64 {{ {body} }}\n"

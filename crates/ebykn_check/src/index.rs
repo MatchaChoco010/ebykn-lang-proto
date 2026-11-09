@@ -1060,6 +1060,11 @@ impl Index {
         })
     }
 
+    /// パスの名前を、クレートの中で定義しているかもしれないか（見つからないと言えないもの。打ち切りを含む）。
+    pub fn may_define(&self, module: &[String], segs: &[String]) -> bool {
+        !matches!(self.find_ext(module, segs, true, 0), Ext::NotFound)
+    }
+
     /// パスの行き先が外（根が [`Index::is_external_root`] の名前）と分かるか（`use` の別名もたどる）。
     pub fn is_external_path(&self, module: &[String], segs: &[String]) -> bool {
         matches!(self.find_ext(module, segs, true, 0), Ext::External(p)
