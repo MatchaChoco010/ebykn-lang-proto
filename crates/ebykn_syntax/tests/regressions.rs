@@ -18,9 +18,10 @@ fn hidden_verifier_and_proof_attributes_are_rejected() {
         rejects(src, e0102);
     }
     rejects("fn f() { #[r#trigger] x }", "`#[trigger]` is proof syntax");
+    // `cfg_attr` の中の証明の属性は `.eykp` でも書けないので、証明ファイルへは案内しない（#86）。
     rejects(
         "fn f() { #[cfg_attr(all(), trigger)] x }",
-        "`#[trigger]` is proof syntax",
+        "`#[trigger]` cannot be written here",
     );
     rejects(
         "#[verus::internal(spec)] fn f() {}",
@@ -72,14 +73,25 @@ fn proof_syntax_inside_other_macros_is_rejected() {
     for (src, want) in [
         (
             "vec![{ proof { assume(false); } 1u64 }]",
-            "`proof { .. }` is proof syntax",
+            "`proof { .. }` cannot be written in code that Ebykn does not read",
         ),
         (
             "println!(\"{}\", assume(false))",
             "`assume(..)` is Verus syntax",
         ),
         ("vec![admit()]", "`admit(..)` is Verus syntax"),
-        ("vec![assert(x)]", "`assert(..)` is proof syntax"),
+        (
+            "vec![assert(x)]",
+            "`assert(..)` cannot be written in code that Ebykn does not read",
+        ),
+        (
+            "vec![{ assert x; 1 }]",
+            "`assert` cannot be written in code that Ebykn does not read",
+        ),
+        (
+            "vec![{ spec let y = 1; y }]",
+            "`spec let` cannot be written in code that Ebykn does not read",
+        ),
         (
             "vec![forall|i: int| i > 0]",
             "`forall|x| ..` is Verus syntax",
@@ -97,7 +109,8 @@ fn proof_syntax_inside_other_macros_is_rejected() {
             "`let ghost / let tracked` is Verus syntax",
         ),
         ("vec![#[verifier::truncate] (x as u8)]", "E0102"),
-        ("vec![#[trigger] x]", "`#[trigger]` is proof syntax"),
+        // 中を読まないマクロの引数の中は、`.eykp` でも書けない（#86）。
+        ("vec![#[trigger] x]", "`#[trigger]` cannot be written here"),
         ("vec![verus!{}]", "`verus!` is Verus syntax"),
     ] {
         rejects(&format!("fn f() {{ {src}; }}"), want);
@@ -116,10 +129,14 @@ fn proof_calls_are_rejected_in_any_expression_position() {
         "fn f() ensures assert(false) { }",
         "fn f() { let y = reveal(g); }",
         "fn f() { let y = hide(g); }",
-        "fn f() { let y = reveal_with_fuel(g, 2); }",
     ] {
         rejects(src, "is proof syntax");
     }
+    // `reveal_with_fuel` は `.eykp` にも書けない Verus の書き方（#86）。
+    rejects(
+        "fn f() { let y = reveal_with_fuel(g, 2); }",
+        "in Ebykn write `reveal(f, n)`",
+    );
     for src in [
         "fn f() { let y = assume(false); }",
         "fn f() -> bool = assume(false);",
@@ -220,12 +237,17 @@ fn nested_items_parse_in_linear_time() {
     assert!(d[0].contains("E0101"));
 }
 
-/// パターンの `@name` / `@..` に付いた属性は残す。
+/// パターンの `@name` に付いた属性は残す。`@..` の前の属性は、rustc が `..` の前の属性を拒否するので
+/// E0001（#95）。
 #[test]
 fn attributes_on_erased_field_patterns_are_kept() {
     assert_eq!(
-        e("let S { a, #[cfg(x)] @r, #[cfg(y)] @.. } = s;"),
-        "(let S { a, #[cfg] @r, #[cfg] @.. } s)"
+        e("let S { a, #[cfg(x)] @r, @.. } = s;"),
+        "(let S { a, #[cfg] @r, @.. } s)"
+    );
+    rejects(
+        "fn f() { let S { a, #[cfg(y)] @.. } = s; }",
+        "an attribute cannot be written on `@..` in a struct pattern",
     );
 }
 
@@ -459,12 +481,18 @@ fn each_opaque_scan_form_is_rejected() {
         "fn f() { vec![{ exec fn p() {} 1 }] }",
         "`exec fn` is Verus syntax",
     );
-    rejects("fn f() { vec![reveal(g)] }", "`reveal(..)` is proof syntax");
+    rejects(
+        "fn f() { vec![reveal(g)] }",
+        "`reveal(..)` cannot be written in code that Ebykn does not read",
+    );
     rejects(
         "fn f() { vec![reveal_with_fuel(g, 1)] }",
-        "`reveal_with_fuel(..)` is proof syntax",
+        "in Ebykn write `reveal(f, n)`",
     );
-    rejects("fn f() { vec![hide(g)] }", "`hide(..)` is proof syntax");
+    rejects(
+        "fn f() { vec![hide(g)] }",
+        "`hide(..)` cannot be written in code that Ebykn does not read",
+    );
     rejects(
         "fn f() { vec![assume_(x)] }",
         "`assume_(..)` is Verus syntax",

@@ -93,25 +93,47 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 * 根拠：#14。値を返す `peek_front` のような関数を素直に書ける。
 * 状態：作者が決めた。
 
+### Rust の版の予約語は `r#` を付けて名前にする
+
+`Ebykn.toml` の `edition` で予約語になる名前（今は Rust 2024 の `gen`。`crates/ebykn_syntax/src/reserved.rs` の `EDITION_KEYWORDS`）を `r#` なしで名前に使うと、`E0001` です。診断は `r#gen` と書くよう案内します。`r#gen` は書き下しでも `r#gen` のままです。
+
+- 生成する `build/verus/` は `Ebykn.toml` の `edition`（既定は `2024`）でビルドするので、`r#` のない `gen` は生成コードの構文エラーになります。rustc の edition 2024 と同じく、書いた所で拒否します。
+- 書いた所とは、識別子の位置すべてです（関数・変数・引数・フィールド・型・モジュールの名前、パス、マクロの引数の中）。トークン列で判定するので、`stringify!(gen)` のように Rust 2024 でも書ける形も拒否します。
+- `edition` がその版より前（`2021` など）なら、名前に使えます。数として読めない `edition` は、予約語とみなします。
+- 構文解析器（syn）が自分で予約語として拒否する名前（`async`、`await`、`dyn`、`try` など）は、表に入れません。
+
+* 元の仕様：§4 は Ebykn のキーワードを挙げるだけで、Rust の版の予約語を定めていない。
+* 根拠：#104。
+* 状態：基準で決めた。
+
 ### `.eyk` の証明構文
 
-`.eyk` では、次を証明構文として拒否します。今は `E0001` で、`.eykp` を実装する M3 で `E0303` に置き換えます。
+`.eyk` では、次を証明構文として `E0303` で拒否します（`.eykp` では §5.7 の証明構文として読む）。文言は、証明ファイル（`proof/*.eykp`）に書くよう案内します。
 
-- 文の先頭の `assert`（`assert!` は除く）、`proof { }`、`spec let`。
-- 式のどの位置でも、裸のパスの呼び出し `assert(..)`・`reveal(..)`・`reveal_with_fuel(..)`・`hide(..)`。
-- `assume(..)`・`admit(..)`。Ebykn にない Verus の関数として拒否し、`unchecked` を案内します。
+- 文の先頭の `assert`（`assert!` は除く）、`proof { }`、`spec let`、`reveal(..)`、`hide(..)`。
+- 式のどの位置でも、裸のパスの呼び出し `assert(..)`・`reveal(..)`・`hide(..)`。
+- §5.7 の書ける位置にある証明の属性、`lemma fn` の本体と `by(mode)`、`lemma group`、`use lemmas`、`=~=`。
+
+`.eykp` でも書けないものは、`.eyk` でも証明ファイルへ案内せず、`.eykp` と同じ `E0001` にします。案内に従って `.eykp` に移しても通らないからです。
+
+- `reveal_with_fuel(..)`：Verus の書き方として、`reveal(f, n)` を案内します。
+- `assume(..)`・`admit(..)`：Ebykn にない Verus の関数として拒否します（文言は「Verus の書き方で、書けません」。クレートの中に同じ名前の関数があれば、パスで呼べると案内します）。
+- 書けない位置の証明の属性と引数の崩れた属性、`fn` / `spec fn` の `by(..)`、証明器の名前の誤り、`unchecked lemma fn` と trait の `lemma fn` の本体、モジュールの直下でない `lemma group`、空の `lemma group`、`pub use lemmas`（§5.7「証明構文の位置」）。
+
+`.eyk` が `E0303` でまるごと拒否したコード（`proof { }`、`assert ..`、`lemma fn` の本体など）と、読めなかった項目の中は読まないので、中の証明の属性に「ここには書けない」を重ねません。
+- マクロの引数など、Ebykn が中を読まないコードの中の証明構文（`proof { }`、`assert`、`spec let`、`assert(..)`・`reveal(..)`・`hide(..)`）。文言は「Ebykn が読まないコードの中には書けない」です。
 
 パス付きの呼び出し（`m::assume(x)`）は、クレートの中の定義に解決するときだけ利用者の関数として読みます（§5「`.eyk` では Verus の構文を拒否する」。`std::hint::assume(true)` は `E0001`）。メソッドは利用者のメソッドとして読みます。
 
 * 元の仕様：§4 は `assert`・`reveal`・`hide` を `.eykp` でだけキーワードとするので、`.eyk` では識別子になる。
-* 根拠：#7（PR #15）。Verus に渡すと証明の構文として読まれ、`.eyk` に証明を書けてしまう（設計ノート §4.7）。
+* 根拠：#7（PR #15）、#64。Verus に渡すと証明の構文として読まれ、`.eyk` に証明を書けてしまう（設計ノート §4.7）。
 * 状態：基準で決めた。
 
 ## §5 文法
 
 ### `.eyk` では Verus の構文を拒否する
 
-構文解析器（`vendor/verus_syn` のフォーク）は Verus の構文も受理しますが、`.eyk` ではそれを `E0001` で拒否します。Ebykn での書き方があれば、診断で示します（`forall|x|` → `forall x: T, P`、`proof fn` → `lemma fn`、`&&&` → `and { }` など。一覧は `crates/ebykn_syntax/tests/` の拒否の例）。
+構文解析器（`vendor/verus_syn` のフォーク）は Verus の構文も受理しますが、`.eyk` ではそれを `E0001` で拒否します。`.eykp` でも同じです。`.eykp` の証明は §5.7 の Ebykn の形（`assert forall x in r, P by { }`、`spec let`、`use lemmas` など）で書き、Verus の形（`forall|x|`、`let ghost`、`broadcast use`、`reveal_with_fuel`）、`proof fn`、`assume` / `admit` は拒否します。診断の文言は、そのファイルの拡張子（`.eyk` / `.eykp`）を名指します。Ebykn での書き方があれば、診断で示します（`forall|x|` → `forall x: T, P`、`proof fn` → `lemma fn`、`&&&` → `and { }` など。一覧は `crates/ebykn_syntax/tests/` の拒否の例）。
 
 - 比較演算子の連鎖（`a < b < c`）も、syn と Rust が受理しないので拒否します。
 - 属性は、`#[verifier::..]`（`E0102`）に加えて `#[verus::..]` も拒否します。どちらも `r#`、先頭の `::`、`cfg_attr(条件, ..)` の中まで見ます。
@@ -120,7 +142,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - Verus の句・証明・モード変換の組み込み関数（`crates/ebykn_syntax/src/reserved.rs` の `VERUS_BUILTIN_CALLS`）、証明の構文の関数、Verus のマクロ、`Invariant` / `View` の名前は、綴りによらずパスの最後の名前で判定します。裸の名前の呼び出しと、先頭が `::` のパスは `E0001` です。そのほかのパス（`crate::` / `self::` / `super::`、モジュール経由、改名する `use`）は、クレートの中の定義に解決するときだけ通します。診断は、同じ名前の自分の関数を `crate::..::requires(..)` のパスで呼べることを案内します。裸の名前を値として参照する形（`let r = requires;`、`(requires)(..)`）は、ローカル変数でなければ `E0001` です。中を読まないマクロの引数の中は名前解決しないので、どの綴りの呼び出しも拒否します。値を求めるだけの仕様の関数（`equal`、`imply`、`add` など）と、Ebykn が使う `old` は表に入れません。`crates/ebykn_check/tests/reserved.rs` が、表のすべての名前について綴りを総当たりで試します。
 
 * 元の仕様：§5 は「Rust の文法（syn が受理する範囲）を土台」とし、Verus の構文の扱いを定めていない。
-* 根拠：#7（PR #15）、#16（PR #20）。設計ノート §3.2「同じ概念を複数の形で書けるようにしない」。黙って受理すると、書き下しで Verus の意味になる（glob の `use vstd::prelude::*;` の下では、本体の `requires(x == 0);` が黙って事前条件になる）。
+* 根拠：#7（PR #15）、#16（PR #20）、#64（`.eykp`）。設計ノート §3.2「同じ概念を複数の形で書けるようにしない」、§9「`admit` / `assume` は文法上書けない」。黙って受理すると、書き下しで Verus の意味になる（glob の `use vstd::prelude::*;` の下では、本体の `requires(x == 0);` が黙って事前条件になる）。
 * 状態：基準で決めた。
 
 ### マクロ
@@ -155,7 +177,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - 属性は `#[path]`、`#[macro_use]`（`cfg_attr` の中を含む）を拒否し、`#[verus_verify]` / `#[verus_spec]` はパスの最後の名前で拒否します。
 - vstd のマクロの引数は Ebykn の式として読みます。std のマクロの引数と、中を読まない Rust の式・型・項目・where 句・境界・属性の値はトークン列のまま持ち、証明と Verus の構文に当たる形（`proof { }`、`assert(`・`reveal(`・`reveal_with_fuel(`・`hide(`・`assume(`・`admit(`・`assume_(`、`forall|`・`exists|`・`choose|`、`let ghost` / `let tracked`、`proof fn` / `exec fn`）と、呼べないマクロの呼び出しを字句的に探して拒否します。`fn` の直後の名前は宣言なので見ません。`&&&` / `|||` は探しません。
 - std のマクロの引数の中に権限の操作（Γ・R の名前への `*X`・`X@`・`X.free()`、`self@`、`take` / `put` / `borrow`、`leak X@`、`uses` / `gives` を持つ関数の呼び出し、`Ptr::new` などの権限を作る呼び出し）があれば `E0003` です。引数の中の属性（`#[..]`、`#![..]`）も、`cfg` に限らず `E0003` です。
-- `cfg!`（`std::cfg!` / `core::cfg!` を含む）と、関数の中に付けた `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は `E0003` です。関数の中とは、文・式・`let`・match の腕・構造体リテラルの欄・構造体パターンの欄・引数・本体の中の項目と、本体の中で定義した構造体・列挙の欄と列挙子です。項目に付ける `#[cfg]` は通します（Verus が見なかった項目は `verify` で `unknown`、同じパスの重複は `E0003`）。
+- `cfg!`（`std::cfg!` / `core::cfg!` を含む）と、関数の中に付けた `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は `E0003` です。関数の中とは、文・式・`let`・match の腕・構造体リテラルの欄・構造体パターンの欄（`@x` を含む）・引数・クロージャの引数・本体の中の項目と、本体の中で定義した構造体・列挙の欄と列挙子です。Ebykn が中を読む項目（`fn`、`struct`、`enum`、`trait`、`impl`、`type`、`const`。impl の中の `type` を含む）のジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。項目の中でも本体の中でも）も `E0003` です。検査は cfg を評価せずに引数の並びを読むためです。`union` や trait の中の `type` / `const` のように、中を読まずに Rust のまま渡す項目のジェネリクスの引数は通します（rustc が `verify` と素のビルドで同じに評価する）。cfg でない属性は書き下しに残します。構造体パターンの `..` と `@..` の前には、rustc と同じく属性を書けません（`E0001`）。書き下しは `..` に属性を付けられないためです（#95）。項目に付ける `#[cfg]` は通します（Verus が見なかった項目は `verify` で `unknown`、同じパスの重複は `E0003`）。
 - `env!` / `option_env!` / `file!`（`std::` / `core::` から始まるパスを含む）は、`unchecked fn` の本体の外では、どこに書いても `E0003` です。値が要るなら `unchecked fn` で包みます。`unchecked fn` の本体の中の入れ子の `fn` では、その `fn` 自身が `unchecked` かどうかで決め直します。
 - `line!` / `column!` / `module_path!` / `include_str!` / `include_bytes!` は、Verus の実行と素のビルドで同じ値になるので通します。ただし生成コードの位置とモジュールを指すので、`include_str!` で読むファイルは `build/verus/src/` から見たパス（`"../../../src/data.txt"` など）で書きます。
 - 残る抜け道（#16）：外のクレートが vstd の項目を再公開する経路（`use foo::admit;`）、外のクレートからの glob の `use`（`use foo::*;`）。外のクレートの手続きマクロ（`#[derive(..)]`、属性のマクロ）は、項目に付けたものを前提の一覧に出し、ほかの位置のものを拒否します（下の「依存クレートの derive と属性マクロ」）。項目に付けた手続きマクロが健全な証明（`proof!{ reveal(..) }` など）を持ち込む経路は残ります（#16 の判断の案 X / 案 Y）。
@@ -237,6 +259,24 @@ into_graph(a, b, uses g)                                         // 移動
 
 * 元の仕様：`LoopClause*`（順序も回数も自由）。
 * 根拠：#7（PR #15）。match の腕の本体はフォーク（Verus の規則）がループを先に読む。
+* 状態：基準で決めた。
+
+### §5.7 証明構文の位置
+
+- 証明の文（`proof { }`、`assert`、`spec let`、`reveal`、`hide`）は文の位置にだけ書けます。式の位置（`f(proof { .. })`）に書くと `E0001` です。マクロの引数の中（`vec![{ proof { } 1 }]`）は Ebykn が読まないので、文の形でも `E0001` です。証明の文には属性を付けられません（`E0001`）。
+- `ProofAttr` は、次の位置にだけ書けます。ほかの位置（ファイルや `mod` の先頭の内部属性、文・構造体・フィールドの属性、`cfg_attr` の中、マクロの引数の中など）は `E0001` です。
+  - `#[trigger]`：式に付ける。
+  - `#![trigger e, ..]` / `#![auto]`：量化子の束縛子の後の `,` と本体のあいだに書く（`forall x: T, #![trigger f(x)] P`、`assert forall x: T, #![auto] P by { }`）。`#![trigger]` の引数は Ebykn の式として読み（`self@nodes[p]` などを書き下すため）、一つ以上を要します。
+  - `#[opaque]`・`#[memoize]`：`spec fn` に付ける。
+  - `#[rlimit(n)]`・`#[spinoff_prover]`：`fn` と `lemma fn` に付ける（Verus が検証する関数。`unchecked fn` / `unchecked lemma fn` には付けられない）。
+  - 項目の属性は、関数の本体の中の項目（`fn f() { #[opaque] spec fn g() -> int = 1; }`）にも同じ規則で付けられる。
+- 引数の形：`#[rlimit(n)]` の `n` は整数のリテラル、ほかの外部属性は引数を持ちません。崩れた形（`#[rlimit(x)]`、`#[opaque(1)]`、`#[trigger(x)]`）は `E0001` で、正しい形を示します。
+- `lemma group` はモジュールの直下にだけ書けます（Verus の `broadcast group` と同じ）。ブロックや `impl` の中では `E0001` です。補題を一つ以上要します。
+- `spec let` は初期値（`= e`）を要し、`let-else` の形は書けません（§5.7 の `"spec" "let" Pat "=" Expr ";"`）。
+- `by(mode)` は一つの `lemma fn` に一つだけです。
+
+* 元の仕様：§5.7 は文法だけで、`ProofAttr` の位置と引数、`lemma group` を置ける場所、式の位置の証明構文を定めていない。§5.1 の `Item` は `LemmaGroup` をどの項目の位置にも置ける。
+* 根拠：#64（PR #86 のレビュー）。`ProofAttr` の位置は Verus の属性（`verifier::opaque` など）が付く項目に合わせた。式の位置の証明構文は、Verus に渡すと式として読まれ、`.eyk` の剥がし（§6.1）と書き下しの両方で扱いが一つに決まらない。`#![trigger]` の引数をトークン列のまま渡すと、Ebykn の式（`x@f`、領域添字）が書き下されない。
 * 状態：基準で決めた。
 
 ## §6 静的検査
@@ -335,7 +375,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 - `spec fn` の可視性：`pub` でない `spec fn` は、`closed` の有無によらず `spec fn` とだけ書きます（`open` を付けない）。純粋関数の spec 側も同じです。Verus は `pub` でない `open spec fn` を拒否します。
 - 純粋関数（`fn f(..) -> T = e;`）：戻り値の型が整数の基本型なら、spec 側の本体を `(e) as T` で包みます。spec 側では整数の算術が `int` になり、同じ式を写すと型が合わないからです。それ以外（引数の位置の算術など）は Verus のエラーに任せます。
-- 関数単位の `by(m)`：`.eykp` が入る M3 からの規則です。書き下しは署名の直後（`requires` の前）に出します。`ensures` の後に置くと Verus の構文エラーです。今の `.eyk` では、`by(m)` は証明の構文として拒否します。
+- 関数単位の `by(m)`：`.eykp` が入る M3 からの規則です。書き下しは署名の直後（`requires` の前）に出します。`ensures` の後に置くと Verus の構文エラーです。`.eyk` では、`by(m)` は証明の構文として拒否します（`E0303`）。
 - 利用者の `impl Drop`：std の `Drop` の impl の `fn drop` に、書き下しが `opens_invariants none` と `no_unwind` を足します。Verus はこの 2 つのない `Drop` の実装を拒否し、利用者は `.eyk` にどちらも書けないためです。std の `Drop` は、裸の `Drop`、`std::ops::Drop` / `core::ops::Drop`、`std::prelude::<版>::Drop` と、`use` の別名・glob の `use`・`pub use` の再公開でそれを指すパスです。クレートで定義した同じ名前のトレイトには、glob の `use` の先で見えるものも含めて何も足しません。
   - `drop` の本体は検証します。`drop` は何も前提にしません（`requires` を持てず、型の不変条件も前提にしない）。`unchecked fn drop` は、ほかの `unchecked` と同じく前提の一覧に出ます。
   - `drop` の本体から呼べるのは、`opens_invariants none` の関数だけです。利用者の `fn` は `.eyk` に `opens_invariants` を書けず、Verus の既定の `opens_invariants any` になるので、`drop` から呼ぶと `callee may open invariants that caller cannot` で失敗します（`no_panic` を付けても同じ）。vstd の `Vec::new` などや、`assert!`、`unwrap()`、添字、`panic!` も同じエラーになります。今の `drop` に書けるのは、フィールドへの単純な書き込みのような、関数を呼ばない本体です。扱いは判断待ちです（#94）。
@@ -467,6 +507,19 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#69（PR #93 のレビュー）。
 * 状態：基準で決めた。
 
+### `ebykn build` は検証しない
+
+`--verified` なしの `build` は、`check` のあと `cargo verus build -- --no-verify` でビルドします。検証の結果によらずビルドし、検証に失敗する項目があっても止まりません。止まるのは、`check` の失敗と、ビルドそのものの失敗（生成コードのコンパイルエラーなど）だけです。
+
+- 成功したら、標準エラーに、作った実行ファイルの場所（ライブラリだけのクレートなら `build/verus/target/debug`）と、検証していないことを出します。ビルドできたことを verified と取り違えないためです。
+- 検証は `ebykn verify` で行います。全項目が verified / unchecked であることをビルドの条件にする `--verified` は、`status` と一緒に M5 で実装します（今は `E0003`）。
+- 生成コードは、Verus なしの cargo ではなく `cargo verus build` でビルドします。§9 の表の経路を保ち、prelude のコンパイル時の検査（#12）を利用者の経路で効かせるためです。
+- golden の各ケースで、`ebykn build` が Verus なしの cargo と同じ期待（`expected/build-error.txt` があればその行で失敗、なければ成功）になることを確かめます（`cargo xtask golden-verify`）。`check` で止まるケース（`tests/golden/stopped/`。Verus が対応しない std の関数を呼ぶ）だけは、`expected/ebykn-build-error.txt` で `ebykn build` の失敗を期待します。`failed` の項目を持つ `tests/golden/stack/` も、`ebykn build` が通ります。
+
+* 元の仕様：§9 の表は `build` を「`check` ＋ `cargo verus build`」とし、`--verified` を「全項目が verified / unchecked でなければ 1」とする。`cargo verus build` は既定で検証するので、`--verified` なしでも検証の失敗で止まっていた。
+* 根拠：#80。`--verified` の条件を `--verified` なしの `build` には課さないと読み、設計ノート §1.3 の「検証なしでもビルドできること」と現行仕様 §1.3（`build/verus/` は Verus なしの cargo でもビルドできる）に合わせる。
+* 状態：基準で決めた。
+
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
 Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。どの関数が失敗したかは JSON になく、標準エラーの診断（位置つき）にだけ出ます。そのため、失敗した関数は診断の位置から決めます（上の `failed`）。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。
@@ -483,7 +536,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 
 | コード | 内容 | 元の仕様 | 根拠 | 状態 |
 | --- | --- | --- | --- | --- |
-| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、`.eyk` の証明構文（M3 で `E0303` に置き換える）、性質ファイルだけの構文も、文言を分けて `E0001` | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
+| `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文も、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
 | `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |

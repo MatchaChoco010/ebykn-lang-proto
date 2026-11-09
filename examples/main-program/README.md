@@ -1,6 +1,6 @@
 # main-program：ebykn build で実行できるプログラム
 
-`src/main.eyk` をクレートルートにしたプロジェクトです。検証したプログラムを `ebykn build` で実行ファイルにし、実行できることを確かめられます。
+`src/main.eyk` をクレートルートにしたプロジェクトです。`ebykn verify` で検証したプログラムを `ebykn build` で実行ファイルにし、実行できることを確かめられます。
 
 結果の表示は、検証しない `unchecked fn show` に置きました。検証される関数の本体に `println!` を書くと、固定した Verus が「not supported」で拒否するためです（#54）。`show` は Verus が検証しないので、`ebykn verify` は `show` を証明なしの前提として出します。`.eyk` でのマクロの扱いは #53 で判断を待っています。
 
@@ -16,7 +16,7 @@
 
 - クレートルートが `src/main.eyk` のプロジェクト（実行ファイルのクレート）。
 - `unchecked fn`：検証しない関数。`ebykn verify` は `unchecked` の状態で出し、標準エラーの最後に証明なしの前提として一覧にする。
-- `ebykn build`：検査と書き下しのあと、`cargo verus build` で検証して実行ファイルを作る。実行ファイルは `build/verus/target/debug/main-program` にできます。
+- `ebykn build`：検査と書き下しのあと、`cargo verus build` で、検証せずに実行ファイルを作る（検証に失敗した関数があってもビルドする）。実行ファイルは `build/verus/target/debug/main-program` にできます。検証は `ebykn verify` で行います。
 
 ## 打つコマンドと期待する出力
 
@@ -28,6 +28,7 @@ verified main-program::main
 results 2 verified, 0 errors
 ebykn: 1 item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus; macro: items made by a derive or attribute macro of a dependency, not verified by Verus): main-program::show (unchecked)
 $ ebykn build
+ebykn: built `build/verus/target/debug/main-program` without verifying it; run `ebykn verify` to verify (`build --verified` comes in M5)
 $ echo $?
 0
 $ ./build/verus/target/debug/main-program
@@ -36,7 +37,7 @@ $ echo $?
 0
 ```
 
-`ebykn build` は、成功すると何も出しません。
+`ebykn build` は、成功すると、作った実行ファイルの場所と、検証していないことを標準エラーに出します。
 
 ## 試してみること
 

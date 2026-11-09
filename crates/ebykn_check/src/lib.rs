@@ -132,6 +132,8 @@ pub fn check_items(
             | ItemKind::TypeAlias(_)
             | ItemKind::Mod(_)
             | ItemKind::Use(_)
+            | ItemKind::LemmaGroup(_)
+            | ItemKind::UseLemmas(_)
             | ItemKind::Rust(_) => {}
         }
     }
@@ -296,6 +298,9 @@ fn check_lemma_fn(
     let mut w = Walker::new(logic_cx(index, module, self_ty, &f.sig), diags, facts);
     w.enter(&f.sig, &f.contract);
     w.contract(&f.contract);
+    if let Some(b) = &f.body {
+        w.logic_block(b);
+    }
 }
 
 fn check_impl(
@@ -383,8 +388,9 @@ fn check_impl(
             }
             ItemKind::Subset(_) => unimpl(diags, item.span, Unimpl::SubsetType),
             ItemKind::ImplSpec(_) => unimpl(diags, item.span, Unimpl::ImplSpec),
-            // 関連型と、項目の位置のマクロなど Rust の項目。
-            ItemKind::TypeAlias(_) | ItemKind::Rust(_) => {}
+            // 関連型と、項目の位置のマクロなど Rust の項目。`lemma group` は構文解析器が
+            // モジュールの外では診断にしている。
+            ItemKind::TypeAlias(_) | ItemKind::Rust(_) | ItemKind::LemmaGroup(_) => {}
             // impl の中に書けない項目（構文解析器は作らないが、来たら黙って通さない）。
             ItemKind::Struct(_)
             | ItemKind::Enum(_)
@@ -392,7 +398,8 @@ fn check_impl(
             | ItemKind::Impl(_)
             | ItemKind::Mod(_)
             | ItemKind::Static(_)
-            | ItemKind::Use(_) => diags.push(
+            | ItemKind::Use(_)
+            | ItemKind::UseLemmas(_) => diags.push(
                 item.span,
                 Message::NotAllowedHere {
                     written: "this item in `impl`".into(),

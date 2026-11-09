@@ -189,6 +189,17 @@ impl<'a> Cx<'a> {
     }
 }
 
+/// `.eykp` だけの構文（仕様 §5.7）。書き下しの入力は `.eyk` の AST だけで、`parse_eyk` は証明構文を
+/// AST に入れない（E0303 にする）ので、ここには来ない。`.eykp` の書き下しは #67 で足す。
+pub(crate) fn eykp_only(what: &str) -> ! {
+    unreachable!("{what} は .eykp にだけ現れる（.eykp の書き下しは #67）")
+}
+
+/// 属性の並び（各属性の後に空白）。どの位置の属性も、書き下しで落とさない（#95）。
+pub(crate) fn attrs(a: &[ast::Attr]) -> String {
+    a.iter().map(|x| attr(x) + " ").collect()
+}
+
 /// 属性を書き出す。
 pub(crate) fn attr(a: &ast::Attr) -> String {
     let path = a

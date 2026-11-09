@@ -138,7 +138,11 @@ impl Walker<'_, '_> {
                     w.expr(e);
                 }
             }),
-            ItemKind::LemmaFn(f) => self.func(&f.sig, &f.contract, |_| {}),
+            ItemKind::LemmaFn(f) => self.func(&f.sig, &f.contract, |w| {
+                if let Some(b) = &f.body {
+                    w.block(b);
+                }
+            }),
             ItemKind::Struct(s) => self.with_generics(&s.generics, |w| {
                 w.fields(&s.fields);
                 for sec in [&s.owns, &s.spec].into_iter().flatten() {
@@ -209,7 +213,11 @@ impl Walker<'_, '_> {
                 self.expr(&s.expr);
             }
             // インラインの `mod` の中は [`Project::for_each_module`] が別のモジュールとしてたどる。
-            ItemKind::Mod(_) | ItemKind::Use(_) | ItemKind::Rust(_) => {}
+            ItemKind::Mod(_)
+            | ItemKind::Use(_)
+            | ItemKind::LemmaGroup(_)
+            | ItemKind::UseLemmas(_)
+            | ItemKind::Rust(_) => {}
         }
     }
 
@@ -259,7 +267,7 @@ impl Walker<'_, '_> {
                         }
                     }
                 }
-                ast::ClauseKind::Gives(_) | ast::ClauseKind::NoPanic => {}
+                ast::ClauseKind::Gives(_) | ast::ClauseKind::NoPanic | ast::ClauseKind::By(_) => {}
                 ast::ClauseKind::Requires(es)
                 | ast::ClauseKind::Ensures(es)
                 | ast::ClauseKind::Decreases(es) => {
@@ -482,6 +490,66 @@ impl Walker<'_, '_> {
                 self.expr(target);
                 self.expr(value);
             }
+            StmtKind::Proof(p) => self.proof(p),
+        }
+    }
+
+    fn proof(&mut self, p: &ast::ProofStmt) {
+        use ast::{AssertBy, ProofStmt};
+        match p {
+            ProofStmt::Block(b) => self.block(b),
+            ProofStmt::Assert { expr, by } => {
+                self.expr(expr);
+                match by {
+                    Some(AssertBy::Block(b)) => self.block(b),
+                    Some(AssertBy::Prover { requires, .. }) => self.exprs(requires),
+                    None => {}
+                }
+            }
+            ProofStmt::AssertForall {
+                binders,
+                triggers,
+                body,
+                by,
+            } => {
+                self.binders(binders);
+                self.triggers(triggers);
+                self.expr(body);
+                self.block(by);
+            }
+            ProofStmt::SpecLet(l) => {
+                self.pat(&l.pat);
+                if let Some(t) = &l.ty {
+                    self.ty(t);
+                }
+                if let Some(e) = &l.init {
+                    self.expr(e);
+                }
+            }
+            ProofStmt::Reveal { fuel, .. } => {
+                if let Some(e) = fuel {
+                    self.expr(e);
+                }
+            }
+            ProofStmt::Hide(_) => {}
+        }
+    }
+
+    fn binders(&mut self, binders: &[ast::Binder]) {
+        for b in binders {
+            match &b.kind {
+                ast::BinderKind::Typed(t) => self.ty(t),
+                ast::BinderKind::In(x) => self.expr(x),
+                ast::BinderKind::Bare => {}
+            }
+        }
+    }
+
+    fn triggers(&mut self, triggers: &[ast::Trigger]) {
+        for t in triggers {
+            if let ast::Trigger::Exprs { exprs, .. } = t {
+                self.exprs(exprs);
+            }
         }
     }
 
@@ -618,14 +686,14 @@ impl Walker<'_, '_> {
                     self.expr(b);
                 }
             }
-            ExprKind::Quant { binders, body, .. } => {
-                for b in binders {
-                    match &b.kind {
-                        ast::BinderKind::Typed(t) => self.ty(t),
-                        ast::BinderKind::In(x) => self.expr(x),
-                        ast::BinderKind::Bare => {}
-                    }
-                }
+            ExprKind::Quant {
+                binders,
+                triggers,
+                body,
+                ..
+            } => {
+                self.binders(binders);
+                self.triggers(triggers);
                 self.expr(body);
             }
             ExprKind::AndOr { exprs, .. } => self.exprs(exprs),

@@ -5,7 +5,7 @@
 
 mod expr;
 
-pub(super) use expr::{block, expr, pat};
+pub(super) use expr::{attr_name, block, expr, pat};
 
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -216,26 +216,47 @@ pub(super) fn vis(v: &syn::Visibility) -> ast::Vis {
 }
 
 pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
-    let params = g
+    let params: Vec<ast::GenericParam> = g
         .params
         .iter()
         .map(|p| match p {
             syn::GenericParam::Lifetime(l) => ast::GenericParam::Lifetime {
+                attrs: attrs(&l.attrs),
                 lifetime: lifetime(&l.lifetime),
                 bounds: (!l.bounds.is_empty()).then(|| scanned(&l.bounds)),
             },
             syn::GenericParam::Type(t) => ast::GenericParam::Type {
+                attrs: attrs(&t.attrs),
                 ident: ident(&t.ident),
                 bounds: (!t.bounds.is_empty()).then(|| scanned(&t.bounds)),
                 default: t.default.as_ref().map(ty),
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
+                attrs: attrs(&c.attrs),
                 ident: ident(&c.ident),
                 ty: ty(&c.ty),
                 default: c.default.clone().map(expr),
             },
         })
         .collect();
+    // ジェネリクスの引数の `#[cfg]`：検査は cfg を評価せずに引数の並びを読む（#95）。
+    for p in &params {
+        let (ast::GenericParam::Lifetime { attrs, .. }
+        | ast::GenericParam::Type { attrs, .. }
+        | ast::GenericParam::Const { attrs, .. }) = p;
+        // 診断は cfg の属性を指す（`<#[allow(unused)] #[cfg(x)] T>` の `allow` ではない）。
+        if let Some(a) = attrs
+            .iter()
+            .find(|a| ast::has_cfg(std::slice::from_ref(*a)))
+        {
+            push(
+                a.span,
+                Message::Check(crate::diag::CheckMsg::Unimplemented(
+                    crate::diag::Unimpl::CfgOnGenericParam,
+                )),
+            );
+        }
+    }
     ast::Generics {
         params,
         span: g.lt_token.map(|lt| {

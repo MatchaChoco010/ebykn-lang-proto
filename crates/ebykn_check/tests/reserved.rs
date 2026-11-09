@@ -13,13 +13,20 @@ fn fill(t: &str, name: &str) -> String {
     t.replace("NAME", name)
 }
 
-/// 少なくとも一つ E0001 が出る（ほかのコードが混ざってもよい）。
+/// 拒否されることを確かめる（ほかのコードが混ざってもよい）。証明の構文の関数は E0303（`.eyk` の
+/// 証明構文）。ただし `reveal_with_fuel`（Verus の書き方）と、`reveal::<T>(..)` のように構文解析器
+/// （Verus の構文）が読めない綴りは E0001 になる。
 #[track_caller]
-fn rejected(src: &str) {
+fn rejected(src: &str, kind: ReservedKind) {
+    let want: &[&str] = if kind == ReservedKind::ProofCall {
+        &["E0303", "E0001"]
+    } else {
+        &["E0001"]
+    };
     let c = codes(src);
     assert!(
-        c.iter().any(|c| c == "E0001"),
-        "拒否されない: {c:?}\n---\n{src}"
+        c.iter().any(|c| want.contains(&c.as_str())),
+        "{want:?} で拒否されない: {c:?}\n---\n{src}"
     );
 }
 
@@ -120,7 +127,7 @@ fn every_reserved_name_is_rejected_in_every_spelling() {
             } else {
                 fill(t, name)
             };
-            rejected(&src);
+            rejected(&src, kind);
             tried += 1;
         }
     }
@@ -160,4 +167,87 @@ fn the_message_points_to_the_crate_path() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("`crate::..::returns`"), "{}", lines[0]);
     accepts("pub fn returns(x: bool) {}\npub fn f(x: bool) { crate::returns(x); }");
+}
+
+// ---- 版の予約語（#104） ----
+
+/// 版の予約語（`gen` など）を名前に使う綴り。どれも `r#` がなければ拒否し、`r#` があれば通す。
+const EDITION_SPELLINGS: &[&str] = &[
+    "pub fn NAME() {}",
+    "pub fn f() { let NAME = 1u64; }",
+    "pub fn f(NAME: u64) {}",
+    "pub struct NAME {}",
+    "pub struct S { pub NAME: u64 }",
+    "pub struct S { pub NAME: u64 }\npub fn f(s: S) -> u64 { s.NAME }",
+    "mod NAME {}",
+    "pub fn NAME() {}\npub fn f() { crate::NAME(); }",
+    "pub fn NAME() {}\nuse crate::NAME as g;",
+    "pub fn f(x: u64) { println!(\"{}\", NAME); }",
+    "pub enum E { NAME }",
+    "pub const NAME: u64 = 1;",
+];
+
+/// 版の予約語を `r#` なしで書いたときの、ちょうど一つの診断。
+#[track_caller]
+fn rejected_as_edition_keyword(src: &str, name: &str, since: u32) {
+    let (_, lines) = run(src);
+    let want = format!("`{name}` is a reserved keyword in Rust {since}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("E0001") && l.contains(&want)),
+        "版の予約語として拒否されない: {lines:?}\n---\n{src}"
+    );
+}
+
+#[test]
+fn edition_keywords_are_rejected_without_raw_prefix() {
+    use ebykn_syntax::reserved::EDITION_KEYWORDS;
+    let mut tried = 0;
+    for (name, since) in EDITION_KEYWORDS {
+        for t in EDITION_SPELLINGS {
+            rejected_as_edition_keyword(&fill(t, name), name, *since);
+            // `r#` を付ければ通る（`run` は版 2024 のプロジェクト）。
+            let raw = fill(t, &format!("r#{name}"));
+            let (_, lines) = run(&raw);
+            assert!(
+                !lines.iter().any(|l| l.contains("reserved keyword")),
+                "{lines:?}\n---\n{raw}"
+            );
+            tried += 1;
+        }
+    }
+    assert!(tried >= EDITION_SPELLINGS.len(), "{tried}");
+}
+
+/// 版の予約語は、`Ebykn.toml` の `edition` がその版より前なら名前に使える。
+#[test]
+fn edition_keywords_are_names_in_earlier_editions() {
+    let root = std::env::temp_dir().join(format!("ebykn-edition-{}", std::process::id()));
+    let write = |edition: &str| {
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Ebykn.toml"),
+            format!(
+                "[package]\nname = \"e\"\nversion = \"0.1.0\"\nedition = \"{edition}\"\n\n[verus]\nrelease = \"x\"\ncommit = \"y\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.eyk"), "pub fn gen() {}\n").unwrap();
+        let (p, diags) = ebykn_check::project::load(&root);
+        diags
+            .iter()
+            .map(|d| d.render(p.file(d.span.file), ebykn_syntax::diag::Lang::En))
+            .filter(|l| l.contains("reserved keyword"))
+            .count()
+    };
+    let in_2021 = write("2021");
+    let in_2024 = write("2024");
+    let unknown = write("next");
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(in_2021, 0);
+    assert_eq!(in_2024, 1);
+    // 数として読めない版は、予約語とみなす。
+    assert_eq!(unknown, 1);
 }

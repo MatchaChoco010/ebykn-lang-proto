@@ -390,6 +390,7 @@ impl Index {
                 ItemKind::Mod(m) => (&m.ident, DefKind::Module),
                 ItemKind::Const(c) => (&c.ident, DefKind::Other),
                 ItemKind::Static(s) => (&s.ident, DefKind::Other),
+                ItemKind::LemmaGroup(g) => (&g.ident, DefKind::Other),
                 ItemKind::Use(t) => {
                     scope.imports.extend(parse_use(&t.tokens));
                     continue;
@@ -1129,17 +1130,7 @@ pub fn has_repr(attrs: &[ast::Attr]) -> bool {
     })
 }
 
-/// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む）。
+/// 属性に `#[cfg(..)]` があるか（[`ast::has_cfg`]）。
 pub fn has_cfg(attrs: &[ast::Attr]) -> bool {
-    fn mentions_cfg(ts: &TokenStream) -> bool {
-        ts.clone().into_iter().any(|t| match t {
-            TokenTree::Ident(i) => ebykn_syntax::macros::token_is_name(&i, "cfg"),
-            TokenTree::Group(g) => mentions_cfg(&g.stream()),
-            _ => false,
-        })
-    }
-    // 名前は raw の綴り（`#[r#cfg]`）も同じに比べる（#122）。
-    attrs
-        .iter()
-        .any(|a| a.is_builtin("cfg") || a.is_builtin("cfg_attr") && mentions_cfg(&a.args))
+    ast::has_cfg(attrs)
 }

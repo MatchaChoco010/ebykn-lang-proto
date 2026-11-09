@@ -190,6 +190,10 @@ impl Cx<'_> {
     }
 
     pub fn pat(&self, p: &ast::Pat) -> String {
+        crate::attrs(&p.attrs) + &self.pat_kind(p)
+    }
+
+    fn pat_kind(&self, p: &ast::Pat) -> String {
         match &p.kind {
             PatKind::Ident {
                 by_ref,
@@ -248,24 +252,34 @@ impl Cx<'_> {
                 for f in fields {
                     match f {
                         FieldPat::Field {
+                            attrs,
                             member,
                             pat,
                             shorthand,
                             ..
                         } => {
+                            let a = crate::attrs(attrs);
                             if *shorthand {
-                                parts.push(self.pat(pat));
+                                parts.push(format!("{a}{}", self.pat(pat)));
                             } else {
-                                parts.push(format!("{}: {}", member_str(member), self.pat(pat)));
+                                parts.push(format!("{a}{}: {}", member_str(member), self.pat(pat)));
                             }
                         }
-                        FieldPat::Erased { ident: i, .. } => {
+                        FieldPat::Erased { attrs, ident: i } => {
                             let wrap = match self.facts.erased.get(&SpanKey::from(i.span)) {
                                 Some(ErasedKind::Owns) => "Tracked",
                                 _ => "Ghost",
                             };
-                            parts.push(format!("{}: {wrap}({})", ident(i), ident(i)));
+                            parts.push(format!(
+                                "{}{}: {wrap}({})",
+                                crate::attrs(attrs),
+                                ident(i),
+                                ident(i)
+                            ));
                         }
+                        // `@..` は Rust の `..` に畳む。`..` の前には属性を書けない（Verus が
+                        // 「expected identifier」で拒む）。パターンに付けて意味を持つ属性は
+                        // `cfg` / `cfg_attr(.., cfg(..))` だけで、それは検査が E0003 にする（#95）。
                         FieldPat::ErasedRest { .. } => erased_rest = true,
                     }
                 }
@@ -473,8 +487,14 @@ impl Cx<'_> {
             ExprKind::Quant {
                 kind,
                 binders,
+                triggers,
                 body,
-            } => self.quant(*kind, binders, body),
+            } => {
+                if !triggers.is_empty() {
+                    crate::eykp_only("#![trigger ..]");
+                }
+                self.quant(*kind, binders, body)
+            }
             ExprKind::AndOr { kind, exprs } => {
                 let op = match kind {
                     AndOrKind::And => " && ",
@@ -1132,6 +1152,7 @@ impl Cx<'_> {
             }
             // `leak p@;` は何も出さない（§7.3）。
             StmtKind::Leak(_) => String::new(),
+            StmtKind::Proof(_) => crate::eykp_only("証明の文"),
             StmtKind::SpecAssign { target, value } => {
                 let ExprKind::Erased { base, field } = &target.kind else {
                     return String::new();
@@ -1301,5 +1322,6 @@ fn binop(op: BinOp) -> &'static str {
         ShrAssign => ">>=",
         Implies => "==>",
         Iff => "<==>",
+        ExtEq => "=~=",
     }
 }

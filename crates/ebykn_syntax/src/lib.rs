@@ -1,6 +1,6 @@
 //! 字句・構文・AST（仕様 §4、§5）と、構文の段階の診断（仕様 §10.1）。
 //!
-//! 入口は [`parse_eyk`]。`.eyk` を読んで [`ast::File`] と診断を返す。
+//! 入口は [`parse_eyk`] と [`parse_eykp`]。`.eyk` / `.eykp` を読んで [`ast::File`] と診断を返す。
 
 // AST の列挙は節点の大きさがまちまちで、箱に入れると使う側が読みにくくなる。
 #![allow(clippy::large_enum_variant)]
@@ -12,7 +12,7 @@ mod parse;
 pub mod reserved;
 pub mod span;
 
-pub use parse::{Parsed, parse_eyk};
+pub use parse::{Parsed, parse_eyk, parse_eykp};
 pub use reserved::VERUS_BUILTIN_CALLS;
 
 /// `.eyk` で呼べるマクロ（#16 の既定）。std のマクロと、vstd の仕様用のマクロ。

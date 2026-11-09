@@ -200,6 +200,8 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
         ),
         // `use` と Rust の項目のトークン列は、可視性と属性を含む。
         ItemKind::Use(tk) | ItemKind::Rust(tk) => (tk.tokens.to_string(), None),
+        ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
+        ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
         // 部分集合型と `impl spec` は検査が E0003 にする。`mod` と `impl` は [`item_pieces`]。
         ItemKind::Subset(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) | ItemKind::Impl(_) => {
             (String::new(), None)
@@ -230,6 +232,8 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
             return;
         }
         ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) => return,
+        ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
+        ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
     };
     cx.note_macros(&item.attrs, || cx.item_path(&name.name));
 }
@@ -298,8 +302,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
         .params
         .iter()
         .map(|p| match p {
-            GenericParam::Lifetime { lifetime, bounds } => format!(
-                "'{}{}",
+            GenericParam::Lifetime {
+                attrs,
+                lifetime,
+                bounds,
+            } => format!(
+                "{}'{}{}",
+                crate::attrs(attrs),
                 lifetime.name,
                 bounds
                     .as_ref()
@@ -307,11 +316,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
                     .unwrap_or_default()
             ),
             GenericParam::Type {
+                attrs,
                 ident: i,
                 bounds,
                 default,
             } => format!(
-                "{}{}{}",
+                "{}{}{}{}",
+                crate::attrs(attrs),
                 ident(i),
                 bounds
                     .as_ref()
@@ -323,11 +334,13 @@ pub(crate) fn generics(cx: &Cx, g: &ast::Generics) -> String {
                     .unwrap_or_default()
             ),
             GenericParam::Const {
+                attrs,
                 ident: i,
                 ty,
                 default,
             } => format!(
-                "const {}: {}{}",
+                "{}const {}: {}{}",
+                crate::attrs(attrs),
                 ident(i),
                 cx.ty(ty),
                 default
@@ -856,6 +869,16 @@ fn spec_fn_text(cx: &Cx, a: &str, v: &Vis, f: &ast::SpecFn) -> String {
 }
 
 fn lemma_text(cx: &Cx, a: &str, v: &str, f: &ast::LemmaFn, name: &str) -> String {
+    if f.body.is_some() {
+        crate::eykp_only("lemma fn の本体");
+    }
+    if f.contract
+        .clauses
+        .iter()
+        .any(|c| matches!(c.kind, ast::ClauseKind::By(_)))
+    {
+        crate::eykp_only("by(..)");
+    }
     let mut c = fn_cx(cx, &f.sig, &f.contract);
     let sig = sig_text(&mut c, &f.sig, &f.contract, &FnExpansion::default());
     if f.unchecked.is_some() {
