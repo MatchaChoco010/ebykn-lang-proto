@@ -1,0 +1,7 @@
+/// `x` の 2 倍。
+pub fn double(x: u32) -> (r: u32)
+    requires x <= 1000,
+    ensures r == 2 * x,
+{
+    2 * x
+}

@@ -178,10 +178,12 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | --- | --- |
 | `cargo xtask precommit` | `cargo fmt --check` と全ゲート。pre-commit フックが呼ぶ。速く保つ |
 | `cargo xtask ci` | `cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、全ゲート。PR の前に通す |
-| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` |
+| `cargo xtask gates` | 全ゲート。個別には `check-file-size` / `check-md-links` / `check-md-tables` / `check-book` / `check-gate-tests` / `check-verus-pin` / `check-prelude-exports` / `check-examples` |
 | `cargo xtask verus-install` | 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）を `~/.cache/ebykn/verus/<版>/` に入れ、sha256 を確かめ、Verus が要求する toolchain を rustup で入れる |
 | `cargo xtask verus-verify` | `ebykn_prelude` と §6.2 の参照モデル（`formal/linearity`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする。参照モデルは、定理（`xtask/src/verus.rs` の `REQUIRED`）が検証されたことを名前で確かめる |
 | `cargo xtask golden-verify` | golden の各ケース（`tests/golden/*/expected/status.txt` のあるもの）に `ebykn verify` をかけて期待と比べ、書き出した `build/verus/` を Verus なしの cargo でもビルドする。`expected/build-error.txt` のあるケースは、素の cargo と `ebykn build` の両方がその行を出して失敗することを期待する。続けて、Verus が要るので `#[ignore]` にしたテスト（`xtask/src/golden.rs` の `IGNORED`）を走らせる |
+| `cargo xtask examples-verify` | `examples/` の各例を `target/examples/` に写し、README の ` ```console ` のコマンドを実行して、出力を README と比べる |
+| `cargo xtask playground` | `ebykn` をビルドし、`examples/` を git が追跡しない `playground/` に写す。すでにあるファイルは上書きしない |
 | `cargo xtask verus-probes` | 設計ノート §7.2 の前提を確かめるプローブ（`tests/verus-probes/`）を走らせ、各ファイルの先頭の期待と比べる |
 | `cargo xtask formal-oracle` | 参照モデルから判定の表を作り直し、コミットされた表（`formal/oracle/`）と比べる |
 | `cargo xtask formal-oracle-write` | 参照モデルから判定の表を作り直し、`formal/oracle/` に書く。モデルを変えたら作り直してコミットする |
@@ -230,6 +232,10 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 - 種別のない ` ```eyk ` と、言語のないフェンスは拒否する。
 - `ebykn` が例を実行できるのは M2 から。それまで `check-book` は形だけを検査し、実行していない数を出力に出す。
 - `skip` は意図して実行しない例（未実装の構文など）だけに使い、追跡 Issue を付ける。テストが壊れたからといって `skip` に移さない。
+
+## 例のプロジェクト
+
+`examples/` は、作者がすぐ試せる Ebykn のプロジェクトです（使い方は [examples/README.md](examples/README.md)）。機能が増えたら、それを示す例を `examples/` に足します。README の ` ```console ` のブロックは `examples-verify` が CI で実行するので、期待する出力は実際に動かして書きます。
 
 ## dogfooding
 

@@ -3,6 +3,7 @@
 mod fetch;
 mod gates;
 mod golden;
+mod playground;
 #[cfg(test)]
 mod testutil;
 mod verus;
@@ -25,6 +26,7 @@ const USAGE: &str = "\
   check-gate-tests  各ゲートに失敗を主張するテスト（fails_*）がある
   check-verus-pin   固定した Verus の値が読め、Verus のクレートが固定した vstd を使う
   check-prelude-exports  ebykn_prelude が vstd を許した名前のほかに再公開しない
+  check-examples    examples/ の各例に Ebykn.toml と README があり、README の ```console を読める
 
   verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
   verus-verify      ebykn_prelude と §6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
@@ -32,6 +34,9 @@ const USAGE: &str = "\
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
   formal-oracle     §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ と比べる
   formal-oracle-write  §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ に書く
+  examples-verify   examples/ の各例で README の ```console のコマンドを実行し、出力を比べる
+
+  playground        ebykn をビルドし、examples/ を playground/ に写す（あるファイルは上書きしない）
 ";
 
 /// 整形の検査。`--all` は path 依存（取り込んだ `vendor/`）まで含めるので付けない。
@@ -63,6 +68,13 @@ fn main() -> ExitCode {
         "verus-install" => verus::install(&root()),
         "verus-verify" => verus::verify(&root()),
         "formal-oracle-write" => gates::formal_oracle::write(&root()),
+        "playground" => match list_files(&root()) {
+            Ok(files) => playground::run(&root(), &files),
+            Err(e) => {
+                eprintln!("error: {e}");
+                false
+            }
+        },
         "golden-verify" => match list_files(&root()) {
             Ok(files) => golden::verify(&root(), &files),
             Err(e) => {
