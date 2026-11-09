@@ -340,10 +340,10 @@ impl Unimpl {
                 "権限を操作する（`take`、`put`、`leak`、`free`、権限を消費する・返す呼び出し、仕様の代入 `x@f = e`）か、ブロックを抜ける（`return`、`break`、`continue`）文・式（配列とタプルの要素、引数など）・構造体リテラルの欄に付けた `#[cfg]` と、代入・二項演算・型変換の文と `take` / `put` / `leak` / 仕様の代入に付けた属性は、まだ扱えません。§6 の検査が、コンパイルされないコードを見てしまうためです（代入・二項演算・型変換の文の属性は、安定版の Rust でも書けない）。条件付きのコードは別の関数に分けます"
             }
             (Unimpl::ExprAttr, Lang::En) => {
-                "an attribute on this expression is not supported, because stable Rust accepts attributes on expressions only at the start of a statement, on the tail expression of a block, on array and tuple elements and on call and method arguments, and never on a range expression (elsewhere it is `attributes on expressions are experimental`, so the build without Verus fails); move the attribute to the statement, or wrap the expression in parentheses (`#[..] (0..a)`)"
+                "an attribute on this expression is not supported, because stable Rust accepts attributes on expressions only at the start of a statement, on the tail expression of a block, on array and tuple elements and on call and method arguments, and never on a range expression (elsewhere it is `attributes on expressions are experimental`, so the build without Verus fails); move the attribute to the statement, or, for a range expression, wrap it in parentheses (`#[..] (0..a)`)"
             }
             (Unimpl::ExprAttr, Lang::Ja) => {
-                "この式の属性は扱えません。安定版の Rust が式の属性を許すのは、文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数だけです（範囲の式は除く）。ほかの位置では「attributes on expressions are experimental」になり、Verus なしのビルドが落ちるためです。属性は文に付けるか、式を括弧で囲みます（`#[..] (0..a)`）"
+                "この式の属性は扱えません。安定版の Rust が式の属性を許すのは、文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数だけです（範囲の式は除く）。ほかの位置では「attributes on expressions are experimental」になり、Verus なしのビルドが落ちるためです。属性は文に付けます。範囲の式なら、括弧で囲みます（`#[..] (0..a)`）"
             }
             (Unimpl::AttrInMacro, Lang::En) => {
                 "attributes other than `cfg`, `cfg_attr` and lint attributes (`allow`, `warn`, `deny`, `forbid`, `expect`) are not supported yet inside the arguments of this macro, because Ebykn does not read them (a derive or attribute macro there could generate code that is not checked); move the code out of the macro"

@@ -49,6 +49,8 @@ const CONTEXTS: &[&str] = &[
     "vec![vec!{$A $E}]",
     "vec![{ vec!{$A $E}; 1u8 }]",
     "vec![format!{\"{:?}\", $A $E}]",
+    // where 句の述語（`名前: 型` が欄と同じに見える。PR #140 の再確認。式の形によらず属性の位置で決まる）
+    "vec![{ fn q<T, U>() where T: Clone, $A U: Copy {} $E }]",
 ];
 
 /// 式の形。`a: u32`、`b: bool`、`s: S<u32>`、`let mut x = 0u32` が使える。
@@ -154,7 +156,7 @@ fn rustc_errors(fragments: &[String], edition: &str) -> BTreeMap<usize, Vec<Stri
         src.push('\n');
     }
     std::fs::write(&file, &src).unwrap();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let rustc = rustc_of_toolchain();
     let out = Command::new(rustc)
         .args([
             "--edition",
@@ -191,10 +193,39 @@ fn rustc_errors(fragments: &[String], edition: &str) -> BTreeMap<usize, Vec<Stri
     errors
 }
 
+/// 使う rustc。`RUSTC` か PATH の rustc が、`rust-toolchain.toml` の版であることを確かめる（別の版の rustc と
+/// 突き合わせると、安定版の Rust の判定と食い違いうる）。
+fn rustc_of_toolchain() -> std::ffi::OsString {
+    let toml = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../rust-toolchain.toml"
+    ))
+    .expect("rust-toolchain.toml を読めない");
+    let channel = toml
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("channel"))
+        .and_then(|r| r.trim().strip_prefix('='))
+        .map(|r| r.trim().trim_matches('"').to_string())
+        .expect("rust-toolchain.toml に channel がない");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let out = Command::new(&rustc)
+        .arg("--version")
+        .output()
+        .expect("rustc を起動できない");
+    let version = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        version.starts_with(&format!("rustc {channel} ")),
+        "rustc の版が rust-toolchain.toml（{channel}）と違う: {version:?}（{rustc:?}）"
+    );
+    rustc
+}
+
 /// 属性の誤りか（ほかの誤りは、断片が壊れている）。
 fn attribute_error(msg: &str) -> bool {
     msg.contains("attributes on expressions are experimental")
         || msg.contains("attributes are not allowed on")
+        || msg.contains("attributes in `where` clause are unstable")
+        || msg.contains("attributes are not supported in `where` clauses")
 }
 
 #[test]

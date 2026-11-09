@@ -65,7 +65,7 @@ fn misplaced(ts: &TokenStream, cx: AttrCx) -> bool {
             AttrCx::Elements => punct(tts.get(prev), ',') || punct(tts.get(prev), ';'),
             AttrCx::Brace => {
                 punct(tts.get(prev), ';')
-                    || punct(tts.get(prev), ',')
+                    || (punct(tts.get(prev), ',') && !in_where_clause(&tts[..prev]))
                     || group(tts.get(prev), Delimiter::Brace)
             }
             AttrCx::Other => false,
@@ -114,6 +114,16 @@ fn misplaced(ts: &TokenStream, cx: AttrCx) -> bool {
         }
         _ => false,
     })
+}
+
+/// `t` の末尾が、`{ .. }` の中の今の文（直前の `;` か `{ .. }` の後から）の `where` 句の中か。`where` 句の
+/// 述語の属性は、安定版の Rust が拒否する（`attributes in `where` clause are unstable`、E0658）。`名前: 型` の
+/// 形が構造体の欄と同じに見えるので、`,` の後でも許さない（PR #140 の再確認）。
+fn in_where_clause(t: &[TokenTree]) -> bool {
+    t.iter()
+        .rev()
+        .take_while(|x| !punct(Some(x), ';') && !group(Some(x), Delimiter::Brace))
+        .any(|x| ident(Some(x), &["where"]))
 }
 
 /// `{ .. }` の中の文と項目の頭のキーワード（属性は文か項目に付く）。`const { .. }` と `unsafe { .. }` は
