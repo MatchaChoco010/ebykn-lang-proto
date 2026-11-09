@@ -9,22 +9,22 @@ verus! {
 
 pub struct Node { pub val: u64, pub next: Option < Ptr < Node >>, }
 
-pub fn set_val(p: Ptr < Node >, v: u64, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Node >>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn set_val(p: Ptr < Node >, v: u64, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Node >>)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
 ensures final(__eyk_perm_p).value().val == v, final(__eyk_perm_p).is_init(), final(__eyk_perm_p).pptr() == p, {
     p.borrow_mut(Tracked(&mut *__eyk_perm_p)).val = v;
 }
 
-pub fn get_val(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked <&PointsTo < Node >>) -> u64
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn get_val(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked <&PointsTo < Node >>) -> u64
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(), { (*p.read(Tracked(&*__eyk_perm_p))).val }
 
-pub fn mk(v: u64) -> (__eyk_ret:(Ptr < Node >, Tracked < PointsTo < Node >>))
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn mk(v: u64) -> (__eyk_ret:(Ptr < Node >, Tracked < PointsTo < Node >>))
 ensures __eyk_ret.1@.is_init(), (__eyk_ret.1@.value()).val == v, __eyk_ret.1@.pptr() == __eyk_ret.0, {
     let (q, Tracked(__eyk_perm_q)) = Ptr::new(Node { val: v, next: None });
     (q, Tracked(__eyk_perm_q))
 }
 
-pub fn use_it() -> u64 {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn use_it() -> u64 {
     let (q, Tracked(__eyk_perm_q)) = mk(3);
     set_val(q, 4, Tracked(&mut __eyk_perm_q));
     let x = get_val(q, Tracked(&__eyk_perm_q));
@@ -36,7 +36,7 @@ pub fn use_it() -> u64 {
 requires x < 100,
 ensures __eyk_r == __eyk_spec_double(x), { x *2 } pub open spec fn __eyk_spec_double(x: u32) -> u32 { (x *2) as u32 }
 
-#[verifier::exec_allows_no_decreases_clause] pub fn attrs_kept <#[allow(unused)] T > (n: Node) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn attrs_kept <#[allow(unused)] T > (n: Node) -> (r: u64)
 requires n.val < 10,
 ensures r == n.val + 1, {
     let Node { #[allow(unused)] val,.. } = n;
@@ -63,13 +63,13 @@ impl View for Pool {
 }
 
 impl Pool {
-    pub fn new() -> Self {
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn new() -> Self {
         Pool {
             len: 0, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty())
         }
     }
 
-    fn add(&mut self, v: u64) -> (p: Ptr < Node >)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn add(&mut self, v: u64) -> (p: Ptr < Node >)
     ensures final(self).__eyk_erased_nodes@.contains(p), final(self).__eyk_erased_nodes@.index(p).val == v, final(self)@ == old(self)@.push(p), final(self).__eyk_erased_order@.len() == old(self).__eyk_erased_order@.len() + 1, {
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
         proof {
@@ -81,7 +81,7 @@ impl Pool {
         p
     }
 
-    fn bump(&mut self, p: Ptr < Node >)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn bump(&mut self, p: Ptr < Node >)
     requires old(self).__eyk_erased_nodes@.contains(p), {
         {
             let tracked __eyk_perm_p = self.__eyk_erased_nodes.borrow_mut().remove(p);
@@ -98,7 +98,7 @@ impl Pool {
         }
     }
 
-    fn peek(&self, p: Ptr < Node >) -> u64
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn peek(&self, p: Ptr < Node >) -> u64
     requires self.__eyk_erased_nodes@.contains(p), {
         {
             let tracked __eyk_perm_p = self.__eyk_erased_nodes.borrow().borrow(p);
@@ -108,7 +108,7 @@ impl Pool {
 
 }
 
-pub fn with_region(p: Ptr < Node >, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn with_region(p: Ptr < Node >, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
 requires old(r).contains(p),
 ensures final(r).contains(p), final(r).index(p) == old(r).index(p), {
     let tracked __eyk_perm_p = r.remove(p);
@@ -117,7 +117,7 @@ ensures final(r).contains(p), final(r).index(p) == old(r).index(p), {
     }
 }
 
-pub fn bump(x: &mut u64) -> u64
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn bump(x: &mut u64) -> u64
 requires *old(x) < 100,
 returns *old(x), {
     let y = *x;
@@ -127,13 +127,13 @@ returns *old(x), {
 
 pub open spec fn same(y: u64) -> u64 { y }
 
-pub fn set3(x: &mut u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn set3(x: &mut u64)
 requires *x <= 9,
 ensures *final(x) == 3, same(*final(x)) == 3, matches!(*old(x), 0..= 9), {
     *x = 3;
 }
 
-pub fn total(v: Vec < u64 >) -> u64 {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn total(v: Vec < u64 >) -> u64 {
     let mut s: u64 = 0;
     let mut i = 0;
     while i < v.len()
@@ -155,7 +155,7 @@ pub open spec fn some_pos(s: Seq < int >) -> bool { (exists | x | s.contains(x) 
 pub struct Bag { __eyk_erased_items: Tracked < Region < Ptr < Node >>>, }
 
 impl Bag {
-    fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
     ensures (forall | q | r.contains(q) ==> b.__eyk_erased_items@.contains(q)), {
         let tracked mut r = r;
         let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
@@ -167,12 +167,12 @@ impl Bag {
 
 }
 
-pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
     let tracked mut items = items;
     Bag { __eyk_erased_items: Tracked(items) }
 }
 
-#[verifier::exec_allows_no_decreases_clause] fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
 ensures v == 1, {
     let tracked mut __eyk_perm_p = __eyk_perm_p;
@@ -181,7 +181,7 @@ ensures v == 1, {
     n.val
 }
 
-#[verifier::exec_allows_no_decreases_clause] fn set_and_put(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn set_and_put(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(), __eyk_perm_p.pptr() == p,
 ensures final(r).contains(p), final(r).index(p).val == 2, {
     let tracked mut __eyk_perm_p = __eyk_perm_p;

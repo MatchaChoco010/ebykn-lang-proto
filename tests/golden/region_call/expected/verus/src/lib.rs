@@ -9,7 +9,7 @@ verus! {
 
 pub struct Node { pub val: u64, }
 
-fn alloc(v: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>) -> (p: Ptr < Node >)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn alloc(v: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>) -> (p: Ptr < Node >)
 ensures final(r).contains(p), final(r).index(p).val == v, (forall | q | old(r).contains(q) ==> final(r).contains(q) && final(r).index(q) == old(r).index(q)), {
     let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v });
     proof {
@@ -18,7 +18,7 @@ ensures final(r).contains(p), final(r).index(p).val == v, (forall | q | old(r).c
     p
 }
 
-fn set(p: Ptr < Node >, v: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn set(p: Ptr < Node >, v: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
 requires old(r).contains(p),
 ensures final(r).index(p).val == v, (forall | q | old(r).contains(q) ==> final(r).contains(q)), {
     {
@@ -36,7 +36,7 @@ ensures final(r).index(p).val == v, (forall | q | old(r).contains(q) ==> final(r
     }
 }
 
-fn get(p: Ptr < Node >, Tracked(r): Tracked <&Region < Ptr < Node >>>) -> (v: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn get(p: Ptr < Node >, Tracked(r): Tracked <&Region < Ptr < Node >>>) -> (v: u64)
 requires r.contains(p),
 ensures v == r.index(p).val, {
     {
@@ -57,7 +57,7 @@ impl Pair {
 }
 
 impl Pair {
-    pub fn new(x: u64, y: u64) -> (__eyk_r: Self)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn new(x: u64, y: u64) -> (__eyk_r: Self)
     ensures __eyk_r.invariant(), {
         let tracked mut r: Region < Ptr < Node >> = Region::empty();
         let a = alloc(x, Tracked(&mut r));
@@ -65,16 +65,16 @@ impl Pair {
         Pair { a, b, __eyk_erased_nodes: Tracked(r) }
     }
 
-    pub fn set_a(&mut self, v: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn set_a(&mut self, v: u64)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
         set(self.a, v, Tracked(self.__eyk_erased_nodes.borrow_mut()));
     }
 
-    pub fn get_b(&self) -> u64
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn get_b(&self) -> u64
     requires self.invariant(), { get(self.b, Tracked(self.__eyk_erased_nodes.borrow())) }
 
-    pub fn set_a_wrong(&mut self, v: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn set_a_wrong(&mut self, v: u64)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
         let tracked mut r: Region < Ptr < Node >> = Region::empty();
@@ -91,14 +91,14 @@ impl Single {
 }
 
 impl Single {
-    pub fn new(x: u64) -> (__eyk_r: Self)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn new(x: u64) -> (__eyk_r: Self)
     ensures __eyk_r.invariant(), {
         let tracked mut items: Region < Ptr < Node >> = Region::empty();
         let p = alloc(x, Tracked(&mut items));
         Single { p, __eyk_erased_items: Tracked(items) }
     }
 
-    pub fn set(&mut self, v: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn set(&mut self, v: u64)
     requires old(self).invariant(),
     ensures final(self).invariant(), {
         set(self.p, v, Tracked(self.__eyk_erased_items.borrow_mut()));
@@ -106,7 +106,7 @@ impl Single {
 
 }
 
-fn fill(n: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn fill(n: u64, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
 ensures (forall | q | old(r).contains(q) ==> final(r).contains(q) && final(r).index(q) == old(r).index(q)),
 decreases n, {
     if n > 0 {
@@ -115,7 +115,7 @@ decreases n, {
     }
 }
 
-fn sum(p: Ptr < Node >, k: u64, Tracked(r): Tracked <&Region < Ptr < Node >>>) -> (s: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn sum(p: Ptr < Node >, k: u64, Tracked(r): Tracked <&Region < Ptr < Node >>>) -> (s: u64)
 requires r.contains(p), r.index(p).val < 100, k < 100,
 ensures s <= k *100,
 decreases k, {
@@ -125,7 +125,7 @@ decreases k, {
     }
 }
 
-pub fn filled(n: u64) -> u64
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn filled(n: u64) -> u64
 requires n < 10, {
     let tracked mut r: Region < Ptr < Node >> = Region::empty();
     let p = alloc(7, Tracked(&mut r));
@@ -133,7 +133,7 @@ requires n < 10, {
     sum(p, 3, Tracked(&r))
 }
 
-fn transfer(p: Ptr < Node >, Tracked(to): Tracked <&mut Region < Ptr < Node >>>, Tracked(from): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn transfer(p: Ptr < Node >, Tracked(to): Tracked <&mut Region < Ptr < Node >>>, Tracked(from): Tracked <&mut Region < Ptr < Node >>>)
 requires old(from).contains(p),
 ensures final(to).contains(p), final(to).index(p) == old(from).index(p), {
     let tracked __eyk_perm_p = from.remove(p);
@@ -155,7 +155,7 @@ impl Graph {
 
 }
 
-fn vertex(Tracked(g): Tracked <&mut Region < Ptr < Vertex >>>) -> (p: Ptr < Vertex >)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn vertex(Tracked(g): Tracked <&mut Region < Ptr < Vertex >>>) -> (p: Ptr < Vertex >)
 ensures final(g).contains(p), final(g).index(p).out == 0, (forall | q | old(g).contains(q) ==> final(g).contains(q) && final(g).index(q) == old(g).index(q)), {
     let (p, Tracked(__eyk_perm_p)) = Ptr::new(Vertex { out: 0 });
     proof {
@@ -164,7 +164,7 @@ ensures final(g).contains(p), final(g).index(p).out == 0, (forall | q | old(g).c
     p
 }
 
-fn connect(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked <&mut Region < Ptr < Vertex >>>)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn connect(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked <&mut Region < Ptr < Vertex >>>)
 requires old(g).contains(a), old(g).contains(b), old(g).index(a).out < 100,
 ensures final(g).index(a).out == old(g).index(a).out + 1, (forall | q | old(g).contains(q) ==> final(g).contains(q) && (q != a ==> final(g).index(q) == old(g).index(q))), {
     {
@@ -182,7 +182,7 @@ ensures final(g).index(a).out == old(g).index(a).out + 1, (forall | q | old(g).c
     }
 }
 
-fn out_degree(a: Ptr < Vertex >, Tracked(g): Tracked <&Region < Ptr < Vertex >>>) -> (n: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn out_degree(a: Ptr < Vertex >, Tracked(g): Tracked <&Region < Ptr < Vertex >>>) -> (n: u64)
 requires g.contains(a),
 ensures n == g.index(a).out, {
     {
@@ -191,14 +191,14 @@ ensures n == g.index(a).out, {
     }
 }
 
-fn into_graph(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked < Region < Ptr < Vertex >>>) -> (__eyk_r: Graph)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn into_graph(a: Ptr < Vertex >, b: Ptr < Vertex >, Tracked(g): Tracked < Region < Ptr < Vertex >>>) -> (__eyk_r: Graph)
 requires g.contains(a), g.contains(b),
 ensures __eyk_r.invariant(), {
     let tracked mut g = g;
     Graph { a, b, __eyk_erased_verts: Tracked(g) }
 }
 
-pub fn triangle() -> (__eyk_r: Graph)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn triangle() -> (__eyk_r: Graph)
 ensures __eyk_r.invariant(), {
     let tracked mut g: Region < Ptr < Vertex >> = Region::empty();
     let a = vertex(Tracked(&mut g));
@@ -211,7 +211,7 @@ ensures __eyk_r.invariant(), {
     into_graph(a, b, Tracked(g))
 }
 
-pub fn moved_between() -> u64 {
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn moved_between() -> u64 {
     let tracked mut x: Region < Ptr < Node >> = Region::empty();
     let tracked mut y: Region < Ptr < Node >> = Region::empty();
     let p = alloc(5, Tracked(&mut x));

@@ -36,6 +36,8 @@ impl<T> Stack<T> {
 }
 
 impl<T> Stack<T> {
+    #[verifier::exec_allows_no_decreases_clause]
+    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
     pub fn new() -> (__eyk_r: Self)
         ensures
             __eyk_r.invariant(),
@@ -43,6 +45,8 @@ impl<T> Stack<T> {
         Stack { head: None, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty()) }
     }
 
+    #[verifier::exec_allows_no_decreases_clause]
+    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
     pub fn push(&mut self, v: T)
         requires
             old(self).invariant(),
@@ -59,6 +63,8 @@ impl<T> Stack<T> {
         }
     }
 
+    #[verifier::exec_allows_no_decreases_clause]
+    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
     pub fn pop(&mut self) -> Option<T>
         requires
             old(self).invariant(),
