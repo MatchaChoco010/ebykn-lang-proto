@@ -141,9 +141,32 @@ jobs:
       # §6.2 の参照モデル（formal/linearity）から判定の表を作り直し、formal/oracle/ と比べる。
       - run: cargo xtask formal-oracle
 
+  # 報告スライドの道具（xtask/src/slides.rs で固定した Typst とフォント）で、スキルの見本を組む。
+  # はみ出し・空のページ・折り返したコードの行・リンクの数は slides-build が検査する。
+  slides:
+    runs-on: ubuntu-latest
+    env:
+      # xtask は XDG_CACHE_HOME を優先する。キャッシュするパスと食い違わないよう明示する。
+      XDG_CACHE_HOME: /home/runner/.cache
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # 固定値は slides.rs にあるので、その中身を鍵にする。取得したものの sha256 は slides-install と slides-build が毎回確かめる。
+      - name: 報告スライドの道具のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.XDG_CACHE_HOME }}/ebykn/typst
+            ${{ env.XDG_CACHE_HOME }}/ebykn/fonts
+          key: slides-${{ hashFiles('xtask/src/slides.rs') }}
+      - run: cargo xtask slides-install
+      - run: mkdir -p target/reports && cp -r .claude/skills/ebykn-report-slides/example target/reports/example
+      - run: cargo xtask slides-build target/reports/example
+
   # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
   ci-required:
-    needs: [fmt, clippy, test, gates, book, verus]
+    needs: [fmt, clippy, test, gates, book, verus, slides]
     if: always()
     runs-on: ubuntu-latest
     steps:

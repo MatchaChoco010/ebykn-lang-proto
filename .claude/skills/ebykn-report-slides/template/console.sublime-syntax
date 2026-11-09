@@ -1,0 +1,21 @@
+%YAML 1.2
+---
+# コマンドとその出力の色分け。`$ ` で始まる行がコマンド、それ以外が出力。
+# 省いた行の印（`…`）と、error / warning / ok の行頭を目立たせる。
+name: Console
+scope: source.console
+
+contexts:
+  main:
+    - match: '^(\$) (.*)$'
+      captures:
+        1: comment.line.prompt.console
+        2: keyword.other.command.console
+    - match: '^\s*….*$'
+      scope: comment.line.omitted.console
+    - match: '^\s*(error|FAIL|failed|E[0-9]{4})\b.*$'
+      scope: markup.deleted.console
+    - match: '^\s*(warning)\b.*$'
+      scope: markup.changed.console
+    - match: '^\s*(ok|test result: ok|verification results::)\b.*$'
+      scope: markup.inserted.console

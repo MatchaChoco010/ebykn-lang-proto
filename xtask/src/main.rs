@@ -4,6 +4,7 @@ mod fetch;
 mod gates;
 mod golden;
 mod playground;
+mod slides;
 #[cfg(test)]
 mod testutil;
 mod verus;
@@ -37,6 +38,9 @@ const USAGE: &str = "\
   examples-verify   examples/ の各例で README の ```console のコマンドを実行し、出力を比べる
 
   playground        ebykn をビルドし、examples/ を playground/ に写す（あるファイルは上書きしない）
+
+  slides-install    報告スライドの道具（固定した Typst とフォント）をキャッシュに入れる（一時的なエラーは再試行）
+  slides-build <ディレクトリ>  <ディレクトリ>/slides.typ を slides.pdf に組み、はみ出し・空のページ・密度・見出し・リンクを検査する
 ";
 
 /// 整形の検査。`--all` は path 依存（取り込んだ `vendor/`）まで含めるので付けない。
@@ -45,6 +49,11 @@ const FMT_CHECK: &[&str] = &["fmt", "--check"];
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [cmd, dir] = args.as_slice()
+        && cmd == "slides-build"
+    {
+        return exit(slides::build(&root(), dir));
+    }
     let [cmd] = args.as_slice() else {
         eprint!("{USAGE}");
         return ExitCode::from(2);
@@ -82,6 +91,7 @@ fn main() -> ExitCode {
                 false
             }
         },
+        "slides-install" => slides::install(),
         name => match gates::ALL
             .iter()
             .chain(gates::VERUS)
@@ -94,6 +104,10 @@ fn main() -> ExitCode {
             }
         },
     };
+    exit(ok)
+}
+
+fn exit(ok: bool) -> ExitCode {
     if ok {
         ExitCode::SUCCESS
     } else {

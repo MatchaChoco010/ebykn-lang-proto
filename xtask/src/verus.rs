@@ -200,7 +200,7 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
-fn sha256_of(file: &Path) -> Result<String, String> {
+pub fn sha256_of(file: &Path) -> Result<String, String> {
     let out = Command::new("sha256sum")
         .arg(file)
         .output()
