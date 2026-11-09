@@ -1,0 +1,80 @@
+// 利用者の `impl Drop`（#61）。書き下しは std の `Drop` の `fn drop` に `opens_invariants none` と
+// `no_unwind` を足す。`drop` の本体は検証される（`Overflow::drop` は失敗する）。
+
+pub struct Guard { pub a: u64 }
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.a = 0;
+    }
+}
+
+// パスで書いた std の `Drop`。
+pub struct Full { pub a: u64 }
+
+impl core::ops::Drop for Full {
+    fn drop(&mut self) {}
+}
+
+// `owns` を持つ型の `Drop`。`drop` は型の不変条件を前提にできないので、権限を使って解放はできない。
+pub struct Owner { p: Ptr<u64> } owns { cells: Region<Ptr<u64>> }
+
+impl Drop for Owner {
+    fn drop(&mut self) {}
+}
+
+// `drop` の本体の算術のあふれは検証で見つかる。
+pub struct Overflow { pub a: u64 }
+
+impl Drop for Overflow {
+    fn drop(&mut self) {
+        self.a = self.a + 1;
+    }
+}
+
+// `drop` からクレートの関数を呼ぶと失敗する（`opens_invariants none` の `drop` は、`opens_invariants` を
+// 書けない利用者の関数を呼べない）。Verus の診断の `-->` は、ファイルの中で先に出る `helper` の署名を
+// 指すが、失敗したのは `Calls::drop` で、`helper` ではない（PR #76 のレビューの B1）。
+pub fn helper(x: u64) -> u64 no_panic {
+    x
+}
+
+pub struct Calls { pub a: u64 }
+
+impl Drop for Calls {
+    fn drop(&mut self) {
+        self.a = helper(self.a);
+    }
+}
+
+mod m {
+    // `use` の別名で書いた std の `Drop`。
+    use std::ops::Drop as Finalize;
+
+    pub struct Aliased { pub a: u8 }
+
+    impl Finalize for Aliased {
+        fn drop(&mut self) {
+            self.a = 1;
+        }
+    }
+
+    // クレートで定義した同じ名前のトレイトは std の `Drop` ではないので、何も足さない。
+    pub trait Drop {
+        fn drop(&mut self);
+    }
+
+    pub struct Local { pub a: u8 }
+
+    impl Drop for Local {
+        fn drop(&mut self) {}
+    }
+}
+
+/// スコープの終わりで `drop` が暗黙に呼ばれる。
+pub fn scope_end() -> (r: u64)
+    ensures r == 1,
+{
+    let g = Guard { a: 1 };
+    g.a
+}

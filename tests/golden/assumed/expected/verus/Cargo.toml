@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "assumed"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vstd = "=0.0.0-2026-11-01-0251"
+ebykn_prelude = { path = "../../../../../crates/ebykn_prelude" }
+
+[package.metadata.verus]
+verify = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

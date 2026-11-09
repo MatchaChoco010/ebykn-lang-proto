@@ -1,0 +1,182 @@
+name: CI
+
+# develop への push は、リリースを切る前に develop の先頭が緑であることを確かめるため（ebykn-release スキル）。
+# develop は strict なので PR の CI は develop の先頭との組み合わせを試しているが、マージしたあとの先頭そのものも確かめる。
+# release は develop のコミットそのものなので足さない。
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MDBOOK_VERSION: 0.5.4
+  # mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz の sha256。版を上げたら書き換える。
+  MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      # --all は path 依存（vendor/）まで整形の検査に含めるので付けない。
+      - run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask gates
+
+  book:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # 取得した tar.gz を版と sha256 を鍵にして置く。キャッシュは成功したジョブでだけ保存される。
+      - name: mdBook のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mdbook/${{ env.MDBOOK_VERSION }}
+          key: mdbook-${{ env.MDBOOK_VERSION }}-${{ env.MDBOOK_SHA256 }}
+      # 一時的なエラーで再試行し、取れなければ何が取れなかったかを示して失敗する。
+      # - curl --retry：408・429・500・502・503・504・時間切れ・名前解決の失敗と、接続の拒否を 10 秒おきに 4 回まで。
+      #   --retry-max-time で、サーバーの Retry-After が長くても再試行を 120 秒で打ち切る。
+      # - 外側のループ：curl --retry が再試行しない 18（途中で切れた転送）・35（TLS）・52（空の応答）・56（接続のリセット）を、
+      #   10 秒おきに 3 回まで。404 などは再試行しない。
+      # - --connect-timeout と --speed-limit/--speed-time は xtask/src/fetch.rs の CURL_ARGS と同じ。止まった転送を待ち続けない。
+      # - --no-progress-meter は進捗だけを消し、curl の再試行の警告（Will retry）はログに残す。
+      # sha256 はキャッシュから戻したものも毎回確かめる。
+      - name: Install mdBook ${{ env.MDBOOK_VERSION }}
+        run: |
+          dir="$HOME/.cache/mdbook/$MDBOOK_VERSION"
+          tgz="$dir/mdbook.tar.gz"
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p "$dir" "$HOME/.local/bin"
+          if [ ! -f "$tgz" ]; then
+            for n in 1 2 3; do
+              rc=0
+              curl --no-progress-meter -fL --retry 4 --retry-delay 10 --retry-max-time 120 --retry-connrefused \
+                --connect-timeout 30 --speed-limit 1024 --speed-time 60 -o "$tgz.part" "$url" || rc=$?
+              case "$rc" in
+                18|35|52|56) ;;
+                *) break ;;
+              esac
+              if [ "$n" -lt 3 ]; then
+                echo "::warning::curl の終了コード $rc。10 秒後にやり直します（$((n + 1))/3）"
+                sleep 10
+              fi
+            done
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::mdBook ${MDBOOK_VERSION} を取得できません（$url、curl の終了コード $rc）"
+              exit 1
+            fi
+            mv "$tgz.part" "$tgz"
+          fi
+          if ! echo "${MDBOOK_SHA256}  $tgz" | sha256sum -c --quiet -; then
+            echo "::error::mdBook ${MDBOOK_VERSION} の sha256 が固定値 ${MDBOOK_SHA256} と違います（実際 $(sha256sum "$tgz" | cut -d' ' -f1)）"
+            exit 1
+          fi
+          tar -xzf "$tgz" -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: mdbook --version
+      - run: mdbook build book
+
+  # 固定した Verus（ルートの Cargo.toml の [workspace.metadata.verus]）で prelude・§6.2 の参照モデル・golden・例・プローブを検証する。
+  verus:
+    runs-on: ubuntu-latest
+    env:
+      # xtask は XDG_CACHE_HOME を優先する。キャッシュするパスと食い違わないよう明示する。
+      XDG_CACHE_HOME: /home/runner/.cache
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - name: 固定値を読む
+        id: pin
+        run: |
+          meta=$(cargo metadata --format-version 1 --no-deps)
+          echo "version=$(echo "$meta" | jq -r .metadata.verus.version)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(echo "$meta" | jq -r .metadata.verus.sha256)" >> "$GITHUB_OUTPUT"
+      - name: Verus のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.XDG_CACHE_HOME }}/ebykn/verus/${{ steps.pin.outputs.version }}
+          key: verus-${{ steps.pin.outputs.sha256 }}
+      # vstd などの crates.io の依存。ビルド成果物（数百 MB）は復元と再ビルドの時間が変わらないので入れない。
+      - name: crates.io の依存のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: verus-registry-${{ steps.pin.outputs.sha256 }}
+      - run: cargo xtask verus-install
+      - run: cargo xtask verus-verify
+      - run: cargo xtask golden-verify
+      # examples/ の各例で README の ```console のコマンドを実行し、出力を README と比べる。
+      - run: cargo xtask examples-verify
+      - run: cargo xtask verus-probes
+      # §6.2 の参照モデル（formal/linearity）から判定の表を作り直し、formal/oracle/ と比べる。
+      - run: cargo xtask formal-oracle
+
+  # 報告スライドの道具（xtask/src/slides/pin.rs で固定した Typst とフォント）で、スキルの見本を組む。
+  # はみ出し・密度・見出し・リンクの数は slides-build が検査する。slides-selftest は、見本を 1 か所ずつ壊して
+  # 組み、その検査が本物のテンプレートで失敗できることを確かめる。
+  slides:
+    runs-on: ubuntu-latest
+    env:
+      # xtask は XDG_CACHE_HOME を優先する。キャッシュするパスと食い違わないよう明示する。
+      XDG_CACHE_HOME: /home/runner/.cache
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # 固定値だけを置いた pin.rs を鍵にする（xtask のほかの変更では取り直さない）。
+      # 取得したものの sha256 は slides-install と slides-build が毎回確かめる。
+      - name: 報告スライドの道具のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.XDG_CACHE_HOME }}/ebykn/typst
+            ${{ env.XDG_CACHE_HOME }}/ebykn/fonts
+          key: slides-${{ hashFiles('xtask/src/slides/pin.rs') }}
+      - run: cargo xtask slides-install
+      # target/ は rust-cache が前回の実行から戻すので、前回の写しを消してから写す（残っていると cp -r が中に入れ子で写す）。
+      - run: rm -rf target/reports/example && mkdir -p target/reports && cp -r .claude/skills/ebykn-report-slides/example target/reports/example
+      - run: cargo xtask slides-build target/reports/example
+      - run: cargo xtask slides-selftest
+
+  # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
+  ci-required:
+    needs: [fmt, clippy, test, gates, book, verus, slides]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 全ジョブの成功を確かめる
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'to_entries | all(.value.result == "success")' > /dev/null

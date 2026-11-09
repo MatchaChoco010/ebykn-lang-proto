@@ -1,0 +1,110 @@
+---
+name: ebykn-pr
+description: ebykn-lang-proto で PR を作る手順。ゲートを通し、日本語の本文を yomiyasu（--doc-type pr）で推敲してから develop へ gh pr create し、CI が緑になるまで見届ける。PR を作るとき、PR 本文を書くときに使う。
+---
+
+# PR を作る
+
+前提：作業は orca のワークツリーで行い、1 つの Issue に 1 つの PR にする（AGENTS.md）。ワークツリーの元は `origin/develop`、ワークツリー名は `<種類>-<Issue 番号>-<短い名前>`。
+
+## 0. ブランチ名を変える
+
+orca はブランチ名に `<GitHub ユーザー名>/` を付けるので、作業の最初に `feature/<Issue 番号>-<短い名前>` に変える。
+
+```bash
+git log -1 --oneline; git log -1 --oneline origin/develop   # 元が origin/develop か確かめる
+git branch -m feature/<Issue 番号>-<短い名前>
+```
+
+`main`・`release`・`develop` には直接コミットしない。
+
+## 1. ゲートを通す
+
+```bash
+ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtask ci
+```
+
+重い処理は AGENTS.md の「マシンの資源」のとおり、`ebykn-limited` の下で 1 つずつ走らせる。変えたクレートだけを確かめるとき（`ebykn-limited cargo test -p <クレート>`）も同じ。`cargo xtask ci` は PR の前に 1 回通せば足りる。
+
+落ちたら直す。ゲートを外したり、テストを `#[ignore]` にしたりして通さない。
+
+## 2. 本文を書く
+
+日本語で書き、ファイルに保存する（例：scratchpad の `pr-body.md`）。結論を先に書き、次を入れる。
+
+- 変更点。指示にないファイルを足したら、何のファイルかを書く。
+- 確認したこと（実行したコマンドと結果）。
+- 決めた既定と理由（あれば）。`OPEN.md` や `needs review` の Issue に記録したものは番号を挙げる。`docs/current-spec.md` を変えたら、変えた項目を挙げる。
+- 関連 Issue。`Closes #N` で紐づける。閉じない Issue は閉じる動詞の後に `#N` を書かない。
+
+本文は、リリースの報告スライドを作るときにも読まれる。何を直したか・足したか、なぜ必要だったかを、文脈を知らない人にも分かるように書く。
+
+## 3. yomiyasu で推敲する（必須）
+
+`yomiyasu:yomiyasu` スキルを呼び、PR 向けの設定 `--doc-type pr` で推敲する。スキルの手順どおり lint → 書き直し → `run --final <ファイル> --doc-type pr` → `verify` まで通す。verify を通した最終稿は、そのあと変えない。
+
+## 4. PR を作る
+
+ベースは `develop`。
+
+```bash
+git push -u origin feature/<Issue 番号>-<短い名前>
+gh pr create --base develop --head feature/<Issue 番号>-<短い名前> --title "<日本語の題>" --body-file <最終稿>
+gh pr view <番号> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'
+```
+
+既定のブランチは `develop` なので `--base` を省いても `develop` に向くが、明示する。本文の `Closes #N` の Issue が `closingIssuesReferences` に載っていることを確かめる。載っていなければ、本文の書き方（閉じる動詞と `#N` のあいだ）を直して `gh pr edit` する。
+
+## 5. CI を見届ける
+
+```bash
+gh pr checks <番号> --watch
+```
+
+`ci-required` が緑になるまで、落ちたら直して push する。
+
+`develop` の ruleset は strict で、PR の head が `develop` の先頭に追いついていなければ、緑でもマージできない（AGENTS.md の「作業の場所」）。
+
+- `develop` と衝突したら（`mergeStateStatus` が `DIRTY`）、`develop` に rebase して push し直す（feature ブランチなので `--force-with-lease` でよい）。push のたびに CI が走り直すので、もう一度 `gh pr checks <番号> --watch` で `ci-required` が緑になるまで見届けてから報告する。前の緑は、新しい head には効かない。
+- 衝突がなく、`develop` に遅れているだけなら、ワーカーは何もしなくてよい。マージのときに、コーディネーターが update-branch で追いつかせる（下の 6）。
+- コーディネーターが update-branch をしたあとで直しを頼まれたら、リモートの feature ブランチに `develop` を取り込んだマージのコミットが足されている。手元を `git pull --ff-only` で合わせてから直すか、今の `develop` に rebase して `--force-with-lease` で push する。そのマージのコミットを含まず、今の `develop` に rebase してもいないブランチを push すると、追いつかせたのが取り消され、PR は `BEHIND` に戻り、予約した自動マージは知らせなしで待ち続ける。
+
+## 6. マージしない
+
+ワーカーは PR をマージしない。PR の URL と CI の結果を報告して終える。
+
+マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（取り込みのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。自動マージを予約したあとでワーカーに PR を戻すときは、コーディネーターが先に予約を外す（下）。詳しくは AGENTS.md の「マージ」。
+
+コーディネーターは、PR の head を `develop` の先頭に追いつかせてから、自動マージを予約する。
+
+```bash
+pr=<PR 番号>
+gh pr view "$pr" --json mergeStateStatus,headRefOid   # BEHIND：develop に遅れている。DIRTY：衝突がある
+gh pr update-branch "$pr"             # BEHIND のときだけ打つ。DIRTY ならワーカーに rebase を頼む
+gh pr view "$pr" --json headRefOid --jq .headRefOid   # update-branch は非同期。最初の headRefOid から変わるまで打ち直す
+gh pr merge "$pr" --squash --auto     # 取り込みのコミットを含む PR は --merge --auto
+gh pr checks "$pr" --watch            # update-branch のあとの CI
+gh pr view "$pr" --json state --jq .state   # MERGED になってから片付ける
+```
+
+- 衝突（`DIRTY`）の PR は、update-branch に頼らず、ワーカーに `develop` への rebase を頼む。
+- update-branch は、GitHub がマージのコミットを作るのを待たずに戻る。head が変わる前に `gh pr checks --watch` を打つと、古い head の緑を見て終わることがある。`headRefOid` が変わってから見る。
+- 自動マージを予約したあとでワーカーに PR を戻すとき（レビューの指摘の直しや rebase を頼むとき）は、先に予約を外す。どのエージェントも同じアカウントなので、予約したままワーカーが直しを push すると、GitHub は予約を外さず、`ci-required` が緑になった時点で再レビューなしにマージする。
+
+```bash
+gh pr merge "$pr" --disable-auto      # ワーカーに戻す前に。再レビューで指摘が残っていなければ、上の手順で予約し直す
+```
+
+- 自動マージは、`ci-required` が緑で、head が `develop` の先頭に追いついているときに GitHub が行う。待つあいだに `develop` が進むと、もう一度 update-branch が要る。
+- マージした head のブランチは GitHub が消す。コーディネーターはリモートのブランチを消さない。状態が `MERGED` になる前にブランチを消すと、PR が閉じてしまう。
+
+マージしたら、コーディネーターは PR の `closingIssuesReferences` の Issue が閉じたかを確かめ、閉じていなければコメントして閉じる。
+
+```bash
+pr=<PR 番号>
+gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' \
+  | while read -r n; do
+      [ "$(gh issue view "$n" --json state --jq .state)" = CLOSED ] \
+        || gh issue close "$n" --comment "PR #$pr で develop に入った"
+    done
+```

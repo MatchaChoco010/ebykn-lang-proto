@@ -1,0 +1,9 @@
+// 剥がし一致（仕様 §6.1）。proof/lib.eykp は一致し、proof/a.eykp は契約を、proof/b.eykp はループの句を変えている。
+mod a;
+mod b;
+
+pub spec fn double(x: int) -> int = x + x;
+
+lemma fn double_pos(x: int)
+    requires x > 0
+    ensures double(x) > 0;

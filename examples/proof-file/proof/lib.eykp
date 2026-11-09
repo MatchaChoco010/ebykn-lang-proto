@@ -1,0 +1,17 @@
+pub spec fn double(x: int) -> int = x + x;
+
+/// `double` は単調に増える。証明は `proof/lib.eykp` に書く。
+lemma fn double_monotonic(a: int, b: int)
+    requires a <= b
+    ensures double(a) <= double(b)
+{
+    assert a + a <= b + b;
+}
+
+pub fn twice(x: u32) -> (r: u32)
+    requires x <= 1000
+    ensures r == double(x as int)
+{
+    assert x + x <= 2000;
+    x + x
+}

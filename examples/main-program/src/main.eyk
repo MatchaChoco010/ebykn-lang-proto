@@ -1,0 +1,20 @@
+/// `x` の 2 倍。
+fn double(x: u32) -> (r: u32)
+    requires x <= 1000,
+    ensures r == 2 * x,
+{
+    2 * x
+}
+
+/// 結果を表示する。検証される関数の本体の `println!` は Verus が拒否するので、
+/// 検証しない `unchecked fn` に切り出す（#54、#53）。
+unchecked fn show(y: u32) {
+    println!("double(21) = {}", y);
+}
+
+fn main() {
+    let y = double(21);
+    // 検証で y == 42 が示されるので、実行してもこの assert! は外れない。
+    assert!(y == 42);
+    show(y);
+}

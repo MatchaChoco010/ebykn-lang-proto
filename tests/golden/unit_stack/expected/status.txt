@@ -1,0 +1,6 @@
+verified unit_stack::Stack::invariant
+verified unit_stack::Stack::new
+failed unit_stack::Stack::push
+failed unit_stack::Stack::pop
+verified unit_stack::unit_stack
+results 2 verified, 2 errors

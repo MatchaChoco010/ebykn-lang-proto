@@ -1,0 +1,165 @@
+// 書き下し（仕様 §7.3、§7.2）の形を一通り使う例。stack にない形（`*p` の読み書き、`uses &mut p@` /
+// `uses &p@`、`gives`、`borrow` / `borrow mut`、領域変数、純粋関数、本体のない `lemma fn`、
+// `unchecked fn`、`impl View`、ループ句、量化子、`ensures` と `returns` の `final(..)` / `old(..)`）を書き下し、生成した
+// Verus がそのまま検証を通ることを CI で確かめる（`expected/status.txt`）。`ensures` の `&mut` 引数は
+// `final(..)`（呼び出しの後）か `old(..)`（入口）で書く（#10）。
+pub struct Node { pub val: u64, pub next: Option<Ptr<Node>> }
+
+pub fn set_val(p: Ptr<Node>, v: u64) uses &mut p@
+    requires p@.is_init(),
+    ensures final(*p).val == v, final(p@).is_init(),
+{
+    (*p).val = v;
+}
+
+pub fn get_val(p: Ptr<Node>) -> u64 uses &p@
+    requires p@.is_init(),
+{
+    (*p).val
+}
+
+pub fn mk(v: u64) -> (q: Ptr<Node>) gives q@
+    ensures q@.is_init(), (*q).val == v,
+{
+    let q = Ptr::new(Node { val: v, next: None });
+    q
+}
+
+pub fn use_it() -> u64 {
+    let q = mk(3);
+    set_val(q, 4);
+    let x = get_val(q);
+    let n = q.free();
+    x
+}
+
+pub fn double(x: u32) -> u32 requires x < 100, = x * 2;
+
+// ジェネリクスの引数・クロージャの引数・構造体パターンの欄の属性は、書き下しに残す（#95）。
+pub fn attrs_kept<#[allow(unused)] T>(n: Node) -> (r: u64)
+    requires n.val < 10,
+    ensures r == n.val + 1,
+{
+    let Node { #[allow(unused)] val, .. } = n;
+    let c = |#[allow(unused)] a: u64| -> (b: u64) requires a < 10, ensures b == a + 1, { a + 1 };
+    c(val)
+}
+
+lemma fn helper(x: u64) ensures x + 0 == x;
+
+unchecked fn ffi(x: u64) -> u64 { x }
+
+pub struct Pool { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl View for Pool {
+    type V = Seq<Ptr<Node>>;
+    closed spec fn view(&self) -> Seq<Ptr<Node>> = self@order;
+}
+
+impl Pool {
+    pub fn new() -> Self { Pool { len: 0, @nodes: Region::empty(), @order: Seq::empty() } }
+
+    fn add(&mut self, v: u64) -> (p: Ptr<Node>)
+        ensures final(self)@nodes.contains(p), final(self)@nodes[p].val == v,
+            final(self).view() == old(self).view().push(p),
+            final(self@order).len() == old(self@order).len() + 1,
+    {
+        let p = Ptr::new(Node { val: v, next: None });
+        put self@nodes[p];
+        self@order = self@order.push(p);
+        p
+    }
+
+    fn bump(&mut self, p: Ptr<Node>)
+        requires old(self)@nodes.contains(p),
+    {
+        borrow mut self@nodes[p] { (*p).val = 0; }
+    }
+
+    fn peek(&self, p: Ptr<Node>) -> u64
+        requires self@nodes.contains(p),
+    {
+        borrow self@nodes[p] { (*p).val }
+    }
+
+}
+
+pub fn with_region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires old(r).contains(p),
+    ensures final(r).contains(p), final(r)[p] == old(r)[p],
+{
+    take r[p];
+    put r[p];
+}
+
+pub fn bump(x: &mut u64) -> u64
+    requires *old(x) < 100,
+    returns *old(x)
+{
+    let y = *x;
+    *x = y + 1;
+    y
+}
+
+pub spec fn same(y: u64) -> u64 = y;
+
+// 事後の値は参照を外して `*final(x)` と書く（`final(x)` のままでは Verus が拒む）。中を読まない
+// マクロの引数の中では `final(..)` を書けないので、入口の値は `old(..)`、事後の値はマクロの外で書く。
+pub fn set3(x: &mut u64)
+    requires *x <= 9,
+    ensures *final(x) == 3, same(*final(x)) == 3, matches!(*old(x), 0..=9),
+{
+    *x = 3;
+}
+
+pub fn total(v: Vec<u64>) -> u64 {
+    let mut s: u64 = 0;
+    let mut i = 0;
+    while i < v.len()
+        invariant i <= v.len(),
+        decreases v.len() - i,
+    {
+        s = if s < 1000 { s + 1 } else { s };
+        i = i + 1;
+    }
+    s
+}
+
+pub fn quant(s: Seq<u64>) -> bool = true;
+pub spec fn all_pos(s: Seq<int>) -> bool = forall i in 0..s.len(), s[i] > 0;
+pub spec fn some_pos(s: Seq<int>) -> bool = exists x in s, or { x == 1, x == 2 };
+
+// 値で受けた領域は持っているので変更できる（#90）。本体の先頭で `mut` に束縛し直す。
+pub struct Bag { } owns { items: Region<Ptr<Node>> }
+
+impl Bag {
+    fn with_node(v: u64) -> (b: Bag) uses r: Region<Ptr<Node>>
+        ensures forall q in r, b@items.contains(q),
+    {
+        let p = Ptr::new(Node { val: v, next: None });
+        put r[p];
+        Bag { @items: r }
+    }
+}
+
+pub fn wrap(n: u64) -> Bag uses items: Region<Ptr<Node>> {
+    Bag { @items: items }
+}
+
+// 移動で受けた権限も持っているので、指す値に書き込める（#102）。本体の先頭で `mut` に束縛し直す。
+fn set_owned(p: Ptr<Node>) -> (v: u64) uses p@
+    requires p@.is_init(),
+    ensures v == 1,
+{
+    (*p).val = 1;
+    let n = p.free();
+    n.val
+}
+
+fn set_and_put(p: Ptr<Node>) uses p@, r: &mut Region<Ptr<Node>>
+    requires p@.is_init(), p@.pptr() == p,
+    ensures final(r).contains(p), final(r)[p].val == 2,
+{
+    (*p).val = 2;
+    put r[p];
+}

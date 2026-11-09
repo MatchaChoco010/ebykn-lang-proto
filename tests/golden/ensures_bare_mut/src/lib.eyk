@@ -1,0 +1,73 @@
+// `ensures` の `&mut` 引数は `final(..)`（呼び出しの後）か `old(..)`（入口）で書く（#10 の決定）。
+// 裸で書いたものは E0004。`requires` の裸の `x` は入口の値なので通す（Verus と同じ）。
+pub struct Node { pub val: u64 }
+
+pub struct Log { len: u64 } owns { nodes: Region<Ptr<Node>> } spec { order: Seq<Ptr<Node>> }
+
+impl View for Log {
+    type V = Seq<Ptr<Node>>;
+    closed spec fn view(&self) -> Seq<Ptr<Node>> = self@order;
+}
+
+impl Log {
+    // 付録 A.1 の形（裸の `self` を事後の値と読む）は拒む。
+    fn push(&mut self, p: Ptr<Node>)
+        requires self.len < 10,
+        ensures self.view() == old(self).view().push(p),
+    { }
+
+    // 消去フィールドと領域添字の `self` も同じ。
+    fn erased(&mut self, p: Ptr<Node>)
+        ensures self@order.len() > 0, self@nodes[p].val == 0,
+    { }
+
+    // `final(..)` / `old(..)` の下は通す。
+    fn ok(&mut self, p: Ptr<Node>)
+        ensures final(self).view() == old(self).view().push(p), final(self)@nodes[p].val == 0,
+            old(self@order).len() <= final(self@order).len(),
+    { }
+}
+
+pub fn set(x: &mut u64, p: Ptr<Node>) uses &mut p@
+    requires *x == 0, p@.is_init(),
+    ensures *x == 1, p@.is_init(), (*p).val == 1,
+{ }
+
+// 束縛し直した `&mut` 引数の名前は、その中では束縛した値を指すので通す。
+pub fn rebind(x: &mut u64, s: Seq<u64>)
+    ensures forall x: u64, x >= 0, s.map(|i: int, x: u64| x) == s,
+{ }
+
+// 権限を持つ名前を束縛し直した中の `p@` / `*p` は、`old` / `final` の下でも E0507（書き下しは外側の
+// `p` の権限を指す）。
+pub fn rebound(p: Ptr<Node>, s: Seq<Ptr<Node>>) uses &mut p@
+    requires p@.is_init(), s.contains(p), (*p).val == 0,
+    ensures final(p@).is_init(), forall p in s, p@ == old(p@),
+{ }
+
+spec fn get(y: &mut u64) -> u64 = *y;
+
+// `returns` も事後条件。
+pub fn ret(x: &mut u64) -> u64
+    requires *x == 3,
+    returns get(x)
+{ 3 }
+
+// 中を読まないマクロの引数に参照を丸ごと渡す形。マクロの引数の中では `old(..)` は書けるが、
+// `final(..)` は Verus が受け付けないので、事後の値は条件をマクロの外で書く。
+pub fn in_macro(x: &mut u64)
+    ensures matches!(get(x), 3), matches!(get(final(x)), 3),
+        matches!(get(old(x)), 3), *final(x) == 3,
+{ }
+
+// `old(..)` / `final(..)` は `&mut` の引数そのものに付ける（`old(self).len` と書く）。
+impl Log {
+    fn field(&mut self)
+        ensures final(self.len) == old(self).len,
+    { }
+}
+
+pub fn region(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    requires r.contains(p),
+    ensures r.contains(p), r[p].val == 0,
+{ }

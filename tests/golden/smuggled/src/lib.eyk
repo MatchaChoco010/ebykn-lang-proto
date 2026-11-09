@@ -1,0 +1,16 @@
+// #37 の再現（#16 の調査）。このままなら verify は成功する（Ebykn が出した前提の unchecked と本体のない
+// 補題だけ）。`crates/ebykn/tests/no_cheating.rs` が、書き下した Verus の a / b / c に、`.eyk` の検査を
+// 通らない経路（依存クレート dep のマクロ、`include!`、マクロが出す入れ子の `verus!`）から
+// `assume(false)` を差し込み、`--no-cheating` の照合で verify が失敗することを確かめる。
+
+unchecked fn liar(x: u64) -> (r: u64) ensures r == 7, { x }
+pub fn caller(x: u64) -> (r: u64) ensures r == 7, { liar(x) }
+
+lemma fn helper(x: u64) ensures x + 0 == x;
+
+#[test]
+fn t() {}
+
+pub fn a() -> (r: u32) ensures r == 1, { 1 }
+pub fn b() -> (r: u32) ensures r == 1, { 1 }
+pub fn c() -> (r: u32) ensures r == 1, { 1 }

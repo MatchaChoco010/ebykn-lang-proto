@@ -1,0 +1,13 @@
+[package]
+name = "ebykn_lower"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+ebykn_check = { path = "../ebykn_check" }
+ebykn_syntax = { path = "../ebykn_syntax" }
+proc-macro2 = { version = "1.0.101", default-features = false, features = ["span-locations"] }
+
+[dev-dependencies]
+proc-macro2 = { version = "1.0.101", default-features = false }

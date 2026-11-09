@@ -1,0 +1,9 @@
+// Verus が検証の前に止まったとき（#43）。`ebykn check` は通るが、生成した Verus は Verus が対応しない
+// std の関数（`std::process::id`）を呼ぶので、Verus は検証まで進まない。エラーのない `ok1` も verified
+// にせず unknown にする。`unchecked` は証明なしの前提のまま出す。
+
+pub fn ok1(x: u64) -> u64 requires x < 10, { x }
+
+pub fn bad() -> u32 { std::process::id() }
+
+unchecked fn pid() -> u32 { std::process::id() }

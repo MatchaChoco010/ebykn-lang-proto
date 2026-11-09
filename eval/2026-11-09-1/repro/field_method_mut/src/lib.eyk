@@ -1,0 +1,8 @@
+// borrow mut の中で、権限の指す値のフィールドに &mut self のメソッドを呼ぶ。
+pub struct N { pub out: Vec<u64> }
+
+pub fn push_one(p: Ptr<N>, x: u64) uses &mut p@
+    requires p@.is_init(),
+{
+    (*p).out.push(x);
+}

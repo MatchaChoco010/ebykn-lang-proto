@@ -1,0 +1,21 @@
+// 権限の規則（仕様 §6.2）の誤りを、わざと 2 つ入れた版。直した版は ../linearity-fixed/。
+
+pub struct Node { pub val: u64 }
+
+/// `v` を入れた節点を作り、値を読んでから解放する……つもりで、解放し忘れる（E0505）。
+pub fn read_then_free(v: u64) -> (r: u64)
+    ensures r == v,
+{
+    let p = Ptr::new(Node { val: v });
+    (*p).val
+}
+
+/// `v` を入れた節点を作り、1 回だけ解放する……つもりで、2 回解放する（E0504）。
+pub fn free_once(v: u64) -> (r: u64)
+    ensures r == v,
+{
+    let p = Ptr::new(Node { val: v });
+    let n = p.free();
+    let m = p.free();
+    n.val
+}

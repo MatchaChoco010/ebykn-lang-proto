@@ -1,0 +1,2 @@
+proof/a.eykp:2:18: E0304: stripping the proofs from this file does not give its source in `fn inc`: here it has `1000`, but `src/a.eyk:2:18` has `100`; the proof file may change only proofs, not the code or the contracts (run `ebykn sync` to bring changes of `src/` into the proof file)
+proof/b.eykp:5:5: E0305: the loop clause `decreases n - i` of the source (`src/b.eyk:7:19`) is missing here or out of order; the proof file may only add `invariant` / `decreases` clauses to a loop, keeping the source's clauses in the same order

@@ -1,0 +1,9 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+# 判定の表の .eyk の断片を M1 の構文解析器で読むテスト（gates/formal_oracle.rs）。
+ebykn_syntax = { path = "../crates/ebykn_syntax" }

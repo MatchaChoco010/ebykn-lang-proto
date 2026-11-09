@@ -1,0 +1,57 @@
+// 拒否リスト（`crates/ebykn_syntax/src/denylist.rs`、#27）の各項目。Verus が検証するコードと配るコードを
+// 食い違わせるか、Ebykn が読まないコードを取り込むので、どれも E0001 になる。総当たりは
+// `crates/ebykn_check/tests/denylist.rs`。
+
+// Verus が自分で設定する cfg（#16 の調査）。Verus は 0 を返すと検証し、素のビルドは 1 を返す。
+pub fn f1() -> (r: u32) ensures r == 0, { if cfg!(verus_keep_ghost) { 0 } else { 1 } }
+
+pub fn f2() -> (r: u32) ensures r == 0, { let mut x = 0u32; #[cfg(not(verus_keep_ghost_body))] { x = 1; } x }
+
+#[cfg(verus_only)]
+pub fn f3() -> (r: u32) ensures r == 0, { 0 }
+
+// cfg_attr の条件も見る（Verus のときだけ属性が付く）。
+#[cfg_attr(verus_verify_core, inline)]
+pub fn f4() {}
+
+// マクロの引数の中、述語の入れ子の中も見る。
+pub fn f5() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(all(not(verus_no_vstd)))] 1u32, 0]; v.len() }
+
+// 検証（dev）では有効、release のビルドでは無効。
+pub fn f6() -> (r: u32) ensures r == 0, { if cfg!(debug_assertions) { 0 } else { 1 } }
+
+// パニックの戦略は、根になるクレートのプロファイルで決まる（PR #59 のレビュー）。
+pub fn f7() -> (r: u32) ensures r == 0, { if cfg!(panic = "abort") { 0 } else { 1 } }
+
+// std の展開の中で `cfg(debug_assertions)` に届く（PR #59 のレビュー）。release の利用側では引数が実行されない。
+fn bump(x: &mut u32) -> (b: bool) requires *old(x) < 10, ensures *final(x) == *old(x) + 1, b == true, { *x = *x + 1; true }
+
+pub fn d1() -> (r: u32) ensures r == 1, { let mut x: u32 = 0; debug_assert!(bump(&mut x)); x }
+
+pub fn d2() -> (r: usize) ensures r == 1, { let mut v: Vec<u32> = Vec::new(); v.push(1); v.push(2); debug_assert_eq!(v.pop(), Some(2)); v.len() }
+
+pub fn d3() -> (r: usize) ensures r == 1, { let mut v: Vec<u32> = Vec::new(); v.push(1); v.push(2); debug_assert_ne!(v.pop(), None); v.len() }
+
+// 読むファイルが、Verus の実行とビルドで違いうる（PR #59 のレビュー）。
+pub fn i1() -> (r: u32) ensures r == 0, { if include_bytes!("/proc/self/cmdline").len() > 1600 { 0 } else { 1 } }
+
+pub fn i2() -> usize { include_str!("/proc/self/environ").len() }
+
+// コンパイル時の環境変数（PR #26 の 4 回目の確認）と `file!` は、Verus の実行と素のビルドで値が違いうる。
+pub fn h8() -> (r: u32) ensures r == 0, { if option_env!("CARGO_TERM_COLOR").is_some() { 0 } else { 1 } }
+
+pub static NAME: &str = env!("CARGO_PKG_NAME");
+
+pub fn path_len() -> usize { file!().len() }
+
+// Ebykn が読まないコードを取り込む（#16 の調査）。
+pub fn smuggle() -> (r: u32) ensures r == 1, { include!("../../../smuggled.in"); 0 }
+
+// `unchecked fn` の本体では、`include!` のほかの拒否リストのマクロを許す（証明なしの前提として一覧に出る）。
+unchecked fn color() -> Option<&'static str> { option_env!("CARGO_TERM_COLOR") }
+
+unchecked fn data() -> usize { include_bytes!("data.bin").len() + include_str!("data.txt").len() }
+
+unchecked fn checked_bump() -> u32 { let mut x: u32 = 0; debug_assert!(bump(&mut x)); x }
+
+unchecked fn included() -> u32 { include!("x.in") }

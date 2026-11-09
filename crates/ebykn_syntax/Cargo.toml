@@ -1,0 +1,14 @@
+[package]
+name = "ebykn_syntax"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# 構文解析器は OPEN-1 の既定どおり verus_syn のフォーク（vendor/、AGENTS.md「外部から取り込むコード」）。
+# `printing` は外さない。フォークの手入れ（`EBYKN:`）のうち、文の属性を Ebykn の式のトークンに戻す直し
+# （vendor/verus_syn/src/stmt.rs）はこの feature の下にあり、外すと `#[cfg] x@f = e;` の属性が黙って落ちる。
+# crates/ebykn_check/tests/cfg_stmt.rs の仕様の代入の位置が、落ちれば失敗する。
+verus_syn = { path = "../../vendor/verus_syn", default-features = false, features = ["full", "parsing", "printing", "clone-impls"] }
+proc-macro2 = { version = "1.0.101", default-features = false, features = ["span-locations"] }
+quote = { version = "1.0.35", default-features = false }

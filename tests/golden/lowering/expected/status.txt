@@ -1,0 +1,26 @@
+verified lowering::set_val
+verified lowering::get_val
+verified lowering::mk
+verified lowering::use_it
+verified lowering::double
+verified lowering::attrs_kept
+admit lowering::helper
+unchecked lowering::ffi
+verified lowering::Pool::view
+verified lowering::Pool::new
+verified lowering::Pool::add
+verified lowering::Pool::bump
+verified lowering::Pool::peek
+verified lowering::with_region
+verified lowering::bump
+verified lowering::same
+verified lowering::set3
+verified lowering::total
+verified lowering::quant
+verified lowering::all_pos
+verified lowering::some_pos
+verified lowering::Bag::with_node
+verified lowering::wrap
+verified lowering::set_owned
+verified lowering::set_and_put
+results 21 verified, 0 errors

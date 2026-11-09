@@ -1,0 +1,128 @@
+// 親ポインタ付きの木（設計ノート §1.2）。子は「最初の子と次の兄弟」でつなぎ、各ノードが親を指す。
+// Rust なら Rc<RefCell<Node>> と Weak の親、または添字のアリーナで書く形を、Ptr と Region で書く。
+
+pub struct TNode {
+    pub val: u64,
+    parent: Option<Ptr<TNode>>,
+    first_child: Option<Ptr<TNode>>,
+    next_sibling: Option<Ptr<TNode>>,
+}
+
+pub struct Tree { root: Ptr<TNode> } owns { nodes: Region<Ptr<TNode>> }
+
+impl Tree {
+    /// `o` が None か、木の中のノードを指す。
+    pub closed spec fn in_tree(&self, o: Option<Ptr<TNode>>) -> bool = match o {
+        Some(q) => self@nodes.contains(q),
+        None => true,
+    };
+
+    pub closed spec fn has(&self, n: Ptr<TNode>) -> bool = self@nodes.contains(n);
+}
+
+impl Invariant for Tree {
+    closed spec fn invariant(&self) -> bool = and {
+        self@nodes.contains(self.root),
+        forall p in self@nodes, and {
+            self.in_tree(self@nodes[p].parent),
+            self.in_tree(self@nodes[p].first_child),
+            self.in_tree(self@nodes[p].next_sibling),
+        },
+    };
+}
+
+impl Tree {
+    pub fn new(v: u64) -> Self {
+        let r = Ptr::new(TNode { val: v, parent: None, first_child: None, next_sibling: None });
+        let mut nodes: Region<Ptr<TNode>> = Region::empty();
+        put nodes[r];
+        Tree { root: r, @nodes: nodes }
+    }
+
+    pub fn root(&self) -> (r: Ptr<TNode>)
+        ensures self.has(r),
+    {
+        self.root
+    }
+
+    /// `parent` の最初の子として `v` を足す。
+    pub fn add_child(&mut self, parent: Ptr<TNode>, v: u64) -> (c: Ptr<TNode>)
+        requires old(self).has(parent),
+        ensures final(self).has(c), final(self).has(parent),
+    {
+        let c = Ptr::new(TNode { val: v, parent: Some(parent), first_child: None, next_sibling: None });
+        let old_first = borrow mut self@nodes[parent] {
+            let f = (*parent).first_child;
+            (*parent).first_child = Some(c);
+            f
+        };
+        (*c).next_sibling = old_first;
+        put self@nodes[c];
+        c
+    }
+
+    pub fn value(&self, n: Ptr<TNode>) -> u64
+        requires self.has(n),
+    {
+        borrow self@nodes[n] { (*n).val }
+    }
+
+    pub fn parent(&self, n: Ptr<TNode>) -> (p: Option<Ptr<TNode>>)
+        requires self.has(n),
+        ensures self.in_tree(p),
+    {
+        borrow self@nodes[n] { (*n).parent }
+    }
+
+    /// 根からの深さ。親をたどる。
+    pub fn depth(&self, n: Ptr<TNode>) -> u64
+        requires self.has(n),
+    {
+        let mut cur = n;
+        let mut d: u64 = 0;
+        loop
+            invariant self.has(cur), self.invariant(),
+        {
+            let p = borrow self@nodes[cur] { (*cur).parent };
+            match p {
+                Some(q) => {
+                    cur = q;
+                    d = d.wrapping_add(1);
+                }
+                None => return d,
+            }
+        }
+    }
+
+    /// `n` の子の値の和。兄弟のリストをたどる。
+    pub fn children_sum(&self, n: Ptr<TNode>) -> u64
+        requires self.has(n),
+    {
+        let mut cur = borrow self@nodes[n] { (*n).first_child };
+        let mut s: u64 = 0;
+        while cur.is_some()
+            invariant self.in_tree(cur), self.invariant(),
+        {
+            let c = cur.unwrap();
+            let (v, next) = borrow self@nodes[c] { ((*c).val, (*c).next_sibling) };
+            s = s.wrapping_add(v);
+            cur = next;
+        }
+        s
+    }
+}
+
+unchecked fn main() {
+    let mut t = Tree::new(1);
+    let r = t.root();
+    let a = t.add_child(r, 2);
+    let b = t.add_child(r, 3);
+    let c = t.add_child(a, 4);
+    let d = t.add_child(c, 5);
+    println!("depth(d) = {}", t.depth(d));
+    println!("children_sum(root) = {}", t.children_sum(r));
+    // Ptr は実行時の == を持たないので、addr で比べる。
+    let pb = match t.parent(b) { Some(p) => p.addr() == r.addr(), None => false };
+    println!("parent(b) is root: {}", pb);
+    println!("value(c) = {}", t.value(c));
+}

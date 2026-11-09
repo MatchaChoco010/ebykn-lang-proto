@@ -1,0 +1,877 @@
+//! 固定した Verus の読み込み・導入・検証（`verus-install` / `verus-verify`）。
+//!
+//! 固定値はルートの `Cargo.toml` の `[workspace.metadata.verus]` に置く。Verus はリポジトリの外の
+//! キャッシュ（`$XDG_CACHE_HOME/ebykn/verus/<版>/`、無ければ `~/.cache/ebykn/verus/<版>/`）に入れる。
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::fetch;
+
+/// Verus で検証するクレート（prelude、§6.2 の参照モデル）。`verus-verify` は各クレートを Verus で検証し、
+/// Verus なしの cargo でもビルドする。vstd に依存するクレートは、ここに載せるか golden の期待
+/// （`tests/golden/<名前>/expected/verus`。`golden-verify` が `ebykn verify` の結果を `expected/status.txt` と
+/// 比べる）にし、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
+pub const CRATES: &[&str] = &["crates/ebykn_prelude", "formal/linearity"];
+
+/// リリースの zip を展開してできるディレクトリ。
+const UNPACKED: &str = "verus-x86-linux";
+/// 展開が終わったことを示す印。中身は確かめた sha256。
+const MARKER: &str = ".sha256";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pin {
+    pub release: String,
+    pub version: String,
+    pub commit: String,
+    pub asset: String,
+    pub sha256: String,
+    pub toolchain: String,
+    pub vstd: String,
+}
+
+const KEYS: &[&str] = &[
+    "release",
+    "version",
+    "commit",
+    "asset",
+    "sha256",
+    "toolchain",
+    "vstd",
+];
+const SECTION: &str = "[workspace.metadata.verus]";
+
+/// ルートの `Cargo.toml` の `[workspace.metadata.verus]` を読む。読めない行・足りない鍵・重複は失敗にする。
+pub fn read_pin(cargo_toml: &str) -> Result<Pin, String> {
+    let mut lines = cargo_toml.lines().enumerate();
+    if !lines.any(|(_, l)| l.trim() == SECTION) {
+        return Err(format!("Cargo.toml に {SECTION} がありません"));
+    }
+    let mut found: Vec<(&str, String)> = Vec::new();
+    for (i, line) in lines {
+        let t = line.trim();
+        if t.starts_with('[') {
+            break;
+        }
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let parsed = t.split_once('=').and_then(|(k, v)| {
+            let v = v.trim();
+            let v = v.strip_prefix('"')?.strip_suffix('"')?;
+            (!v.contains('"')).then(|| (k.trim(), v.to_string()))
+        });
+        let Some((k, v)) = parsed else {
+            return Err(format!(
+                "Cargo.toml:{}: {SECTION} の行を読めません: {t}",
+                i + 1
+            ));
+        };
+        let Some(&key) = KEYS.iter().find(|&&x| x == k) else {
+            return Err(format!("Cargo.toml:{}: {SECTION} に未知の鍵 {k}", i + 1));
+        };
+        if found.iter().any(|(x, _)| *x == key) {
+            return Err(format!("Cargo.toml:{}: {SECTION} の {k} が重複", i + 1));
+        }
+        found.push((key, v));
+    }
+    let get = |k: &str| {
+        found
+            .iter()
+            .find(|(x, _)| *x == k)
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| format!("{SECTION} に {k} がありません"))
+    };
+    let pin = Pin {
+        release: get("release")?,
+        version: get("version")?,
+        commit: get("commit")?,
+        asset: get("asset")?,
+        sha256: get("sha256")?,
+        toolchain: get("toolchain")?,
+        vstd: get("vstd")?,
+    };
+    let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex(&pin.sha256, 64) {
+        return Err(format!("{SECTION} の sha256 が 16 進 64 桁ではありません"));
+    }
+    if !hex(&pin.commit, 40) {
+        return Err(format!("{SECTION} の commit が 16 進 40 桁ではありません"));
+    }
+    if pin.release != format!("release/{}", pin.version) {
+        return Err(format!(
+            "{SECTION} の release（{}）と version（{}）が合いません",
+            pin.release, pin.version
+        ));
+    }
+    if !pin.asset.starts_with(&format!("verus-{}-", pin.version)) {
+        return Err(format!(
+            "{SECTION} の asset（{}）が version（{}）の資産ではありません",
+            pin.asset, pin.version
+        ));
+    }
+    if !pin
+        .commit
+        .starts_with(pin.version.rsplit('.').next().unwrap_or_default())
+    {
+        return Err(format!(
+            "{SECTION} の commit（{}）が version（{}）の末尾と合いません",
+            pin.commit, pin.version
+        ));
+    }
+    Ok(pin)
+}
+
+pub fn root_pin(root: &Path) -> Result<Pin, String> {
+    let text = std::fs::read_to_string(root.join("Cargo.toml"))
+        .map_err(|e| format!("Cargo.toml を読めません: {e}"))?;
+    read_pin(&text)
+}
+
+fn cache_dir(pin: &Pin) -> Result<PathBuf, String> {
+    let base = match std::env::var_os("XDG_CACHE_HOME") {
+        Some(d) if !d.is_empty() => PathBuf::from(d),
+        _ => PathBuf::from(std::env::var_os("HOME").ok_or("HOME も XDG_CACHE_HOME もありません")?)
+            .join(".cache"),
+    };
+    Ok(base.join("ebykn").join("verus").join(&pin.version))
+}
+
+/// 導入済みの Verus のディレクトリ（`verus` と `cargo-verus` がある）。
+///
+/// 印の sha256 が固定値と違うとき、`verus --version` の版・コミット・toolchain が固定値と合わないとき
+/// （キャッシュの中身が差し替わった、toolchain が入っていない）は失敗にする。
+pub fn installed(pin: &Pin) -> Result<PathBuf, String> {
+    let bin = unpacked(pin)?;
+    let out = Command::new(bin.join("verus"))
+        .args(["--version", "--output-json"])
+        .env("RUSTUP_TOOLCHAIN", &pin.toolchain)
+        .output()
+        .map_err(|e| format!("verus を起動できません: {e}"))?;
+    check_version(&String::from_utf8_lossy(&out.stdout), pin)?;
+    Ok(bin)
+}
+
+/// `verus --version --output-json` の出力が固定値の版・コミット・toolchain を含む。
+fn check_version(text: &str, pin: &Pin) -> Result<(), String> {
+    for (key, want) in [
+        ("version", &pin.version),
+        ("commit", &pin.commit),
+        ("toolchain", &pin.toolchain),
+    ] {
+        let line = format!("\"{key}\": \"{want}");
+        if !text.contains(&line) {
+            return Err(format!(
+                "verus --version の {key} が固定値 {want} ではありません。`cargo xtask verus-install` で入れ直してください:\n{text}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 展開済みの Verus のディレクトリ。印の sha256 が固定値と違えば失敗にする。
+fn unpacked(pin: &Pin) -> Result<PathBuf, String> {
+    let dir = cache_dir(pin)?;
+    let marker = std::fs::read_to_string(dir.join(MARKER)).unwrap_or_default();
+    let bin = dir.join(UNPACKED);
+    if marker.trim() != pin.sha256 || !bin.join("verus").is_file() {
+        return Err(format!(
+            "固定した Verus（{}）が {} にありません。`cargo xtask verus-install` で導入してください",
+            pin.release,
+            dir.display()
+        ));
+    }
+    Ok(bin)
+}
+
+fn run(cmd: &mut Command) -> Result<(), String> {
+    eprintln!("$ {cmd:?}");
+    let status = cmd
+        .status()
+        .map_err(|e| format!("{:?} を起動できません: {e}", cmd.get_program()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{:?} が失敗しました（{status}）",
+            cmd.get_program()
+        ))
+    }
+}
+
+/// 固定したリリースの資産を `download` で `zip` に取り、sha256 を固定値と比べる。
+fn fetch_asset(
+    pin: &Pin,
+    zip: &Path,
+    download: impl FnOnce(&str, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = format!(
+        "https://github.com/verus-lang/verus/releases/download/{}/{}",
+        pin.release, pin.asset
+    );
+    download(&url, zip)?;
+    fetch::check_sha256(&pin.asset, &fetch::sha256_of(zip)?, &pin.sha256)
+}
+
+/// 固定した Verus をキャッシュに入れ、Verus が要求する toolchain を rustup で入れる。
+pub fn install(root: &Path) -> bool {
+    match try_install(root) {
+        Ok(dir) => {
+            eprintln!("ok: verus-install: {}", dir.display());
+            true
+        }
+        Err(e) => {
+            eprintln!("error: verus-install: {e}");
+            false
+        }
+    }
+}
+
+fn try_install(root: &Path) -> Result<PathBuf, String> {
+    let pin = root_pin(root)?;
+    let dir = cache_dir(&pin)?;
+    if unpacked(&pin).is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let zip = dir.join(&pin.asset);
+        let what = format!("Verus {}", pin.release);
+        if let Err(e) = fetch_asset(&pin, &zip, |url, dest| fetch::download(&what, url, dest)) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        run(Command::new("unzip")
+            .args(["-q", "-o"])
+            .arg(&zip)
+            .arg("-d")
+            .arg(&dir))?;
+        std::fs::remove_file(&zip).map_err(|e| format!("{}: {e}", zip.display()))?;
+        std::fs::write(dir.join(MARKER), format!("{}\n", pin.sha256))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    run(Command::new("rustup").args([
+        "toolchain",
+        "install",
+        &pin.toolchain,
+        "--profile",
+        "minimal",
+    ]))?;
+    installed(&pin)
+}
+
+/// cargo を子として呼ぶとき、xtask を起動した cargo の環境を引き継がない。
+pub fn clean_cargo(cmd: &mut Command) -> &mut Command {
+    for var in [
+        "CARGO",
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTUP_TOOLCHAIN",
+        "CARGO_TARGET_DIR",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
+/// `Cargo.toml` の `[package]` の `name`。
+fn package_name(dir: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(dir.join("Cargo.toml"))
+        .map_err(|e| format!("Cargo.toml を読めません: {e}"))?;
+    let mut in_package = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_package = t == "[package]";
+            continue;
+        }
+        if let Some(v) = t
+            .strip_prefix("name = \"")
+            .and_then(|v| v.strip_suffix('"'))
+            && in_package
+        {
+            return Ok(v.to_string());
+        }
+    }
+    Err("Cargo.toml の [package] に name がありません".to_string())
+}
+
+/// 検証されたことを名前で確かめる関数。クレートごとに、定理を消したり `#[verifier::external]` で
+/// 外したりすると `verus-verify` が落ちるようにする（件数だけでは、減っても 1 件以上なら通る）。
+pub const REQUIRED: &[(&str, &[&str])] = &[(
+    "formal/linearity",
+    &[
+        "ebykn_formal_linearity::sound::theorem_soundness",
+        "ebykn_formal_linearity::sound::theorem_consumed_at_most_once",
+        "ebykn_formal_linearity::sound::theorem_no_use_after_consume",
+        "ebykn_formal_linearity::sound::theorem_borrowed_not_consumed",
+        "ebykn_formal_linearity::sound::theorem_no_write_to_shared",
+        "ebykn_formal_linearity::sound::theorem_only_gives_left",
+    ],
+)];
+
+pub fn required(krate: &str) -> &'static [&'static str] {
+    REQUIRED
+        .iter()
+        .find(|(k, _)| *k == krate)
+        .map(|(_, names)| *names)
+        .unwrap_or(&[])
+}
+
+/// `--output-json` の出力（標準出力）から読んだ検証の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonResults {
+    pub verified: u64,
+    pub errors: u64,
+    pub success: bool,
+    /// `func-details` の鍵。Verus が検証した関数（失敗した関数も含む。M0 の実測）の名前。
+    pub funcs: Vec<String>,
+}
+
+/// `--output-json` の出力を読む。`verification-results` と `func-details` が一つずつなければ失敗にする。
+pub fn read_json(text: &str) -> Result<JsonResults, String> {
+    const RESULTS: &str = "\"verification-results\": {";
+    const FUNCS: &str = "\"func-details\": {";
+    if text.matches(RESULTS).count() != 1 || text.matches(FUNCS).count() != 1 {
+        return Err(
+            "--output-json の出力に verification-results と func-details が一つずつありません"
+                .to_string(),
+        );
+    }
+    let section = &text[text.find(RESULTS).unwrap()..];
+    let section = &section[..section
+        .find('}')
+        .ok_or("verification-results が閉じていません")?];
+    let field = |name: &str| -> Result<String, String> {
+        let key = format!("\"{name}\": ");
+        let at = section
+            .find(&key)
+            .ok_or_else(|| format!("verification-results に {name} がありません"))?;
+        Ok(section[at + key.len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect())
+    };
+    let num = |name: &str| -> Result<u64, String> {
+        let v = field(name)?;
+        v.parse()
+            .map_err(|_| format!("verification-results の {name} を読めません: {v}"))
+    };
+    let success = match field("success")?.as_str() {
+        "true" => true,
+        "false" => false,
+        v => return Err(format!("verification-results の success を読めません: {v}")),
+    };
+    let mut funcs = Vec::new();
+    let mut closed = false;
+    for line in text[text.find(FUNCS).unwrap()..].lines().skip(1) {
+        // 中身は 4 字以上の字下げ。それより浅い最初の行が閉じ括弧でなければ読めない。
+        if !line.starts_with("    ") {
+            closed = line.trim_start().starts_with('}');
+            break;
+        }
+        if let Some(name) = line
+            .strip_prefix("    \"")
+            .and_then(|l| l.strip_suffix("\": {"))
+        {
+            funcs.push(name.to_string());
+        }
+    }
+    if !closed {
+        return Err("func-details が閉じていません".to_string());
+    }
+    Ok(JsonResults {
+        verified: num("verified")?,
+        errors: num("errors")?,
+        success,
+        funcs,
+    })
+}
+
+/// `cargo verus` の結果を判定する。JSON の結果があり、0 errors で、1 件以上を検証し、終了コードが 0 で、
+/// `required` の関数がすべて検証されたときだけ通す。
+pub fn judge(
+    results: Result<JsonResults, String>,
+    exit_ok: bool,
+    required: &[&str],
+) -> Result<u64, String> {
+    let r = results?;
+    if r.errors > 0 || !r.success {
+        return Err(format!("{} verified, {} errors", r.verified, r.errors));
+    }
+    if r.verified == 0 {
+        return Err("何も検証していません（0 verified）".to_string());
+    }
+    if !exit_ok {
+        return Err("0 errors なのに終了コードが 0 ではありません".to_string());
+    }
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|n| !r.funcs.iter().any(|f| f == *n))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "検証された関数に {} がありません（消したか、検証の対象から外した）",
+            missing.join(", ")
+        ));
+    }
+    Ok(r.verified)
+}
+
+/// `verification results:: N verified, M errors` の N と M。
+pub fn results_line(text: &str) -> Option<(u64, u64)> {
+    let mut last = None;
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("verification results:: ") else {
+            continue;
+        };
+        let (v, e) = rest.split_once(" verified, ")?;
+        let e = e.strip_suffix(" errors")?;
+        last = Some((v.parse().ok()?, e.parse().ok()?));
+    }
+    last
+}
+
+/// `verus-verify` が一つのクレートについて順に呼ぶ cargo。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// 前回の成果物が残っていると cargo が Verus を呼ばず、結果が出ない。対象のクレートだけ消す。
+    Clean,
+    /// 固定した Verus で検証する。
+    Verify,
+    /// Verus なしの cargo（リポジトリの toolchain）でビルドする（OPEN-11）。
+    Plain,
+}
+
+/// 各段階の cargo の引数。どれも `--locked` を付け、追跡している `Cargo.lock` を書き換えさせない
+/// （`cargo clean -p` も依存を解決するので、付けないと lock を作り直す）。
+fn verify_steps(root: &Path, name: &str) -> Vec<(Step, Vec<OsString>)> {
+    let os = |xs: &[&str]| xs.iter().map(OsString::from).collect::<Vec<_>>();
+    let with = |mut a: Vec<OsString>, p: PathBuf, rest: &[&str]| {
+        a.push(p.into_os_string());
+        a.extend(os(rest));
+        a
+    };
+    vec![
+        // `cargo verus focus` は target-dir の下の verus-partial に成果物を置く。
+        (
+            Step::Clean,
+            with(
+                os(&["clean", "--quiet", "--locked", "-p", name, "--target-dir"]),
+                root.join("target/verus"),
+                &[],
+            ),
+        ),
+        (
+            Step::Clean,
+            with(
+                os(&["clean", "--quiet", "--locked", "-p", name, "--target-dir"]),
+                root.join("target/verus/verus-partial"),
+                &[],
+            ),
+        ),
+        (
+            Step::Verify,
+            with(
+                os(&["verus", "focus", "--locked", "--target-dir"]),
+                root.join("target/verus"),
+                &[
+                    "--",
+                    "--no-cheating",
+                    "--triggers-mode",
+                    "silent",
+                    "--output-json",
+                ],
+            ),
+        ),
+        (
+            Step::Plain,
+            with(
+                os(&["build", "--quiet", "--locked", "--target-dir"]),
+                root.join("target/verus-plain"),
+                &[],
+            ),
+        ),
+    ]
+}
+
+/// cargo の呼び出しはここでだけ作る（`verify_steps` を通らない呼び出しを作らない。テストが数える）。
+fn cargo_command(args: &[OsString], dir: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
+    clean_cargo(&mut cmd).args(args).current_dir(dir);
+    cmd
+}
+
+/// 各クレートを固定した Verus で検証し（`--no-cheating`）、Verus なしの cargo でもビルドする（OPEN-11）。
+pub fn verify(root: &Path) -> bool {
+    let pin = match root_pin(root).and_then(|p| installed(&p).map(|b| (p, b))) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("error: verus-verify: {e}");
+            return false;
+        }
+    };
+    let (pin, bin) = pin;
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("PATH を組み立てられる");
+    let mut ok = true;
+    'crates: for krate in CRATES {
+        let dir = root.join(krate);
+        let name = match package_name(&dir) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("error: verus-verify: {krate}: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        for (step, args) in verify_steps(root, &name) {
+            let mut cmd = cargo_command(&args, &dir);
+            if step != Step::Plain {
+                cmd.env("RUSTUP_TOOLCHAIN", &pin.toolchain);
+            }
+            match step {
+                Step::Clean => {
+                    if let Err(e) = run(&mut cmd) {
+                        eprintln!("error: verus-verify: {krate}: {e}");
+                        ok = false;
+                        continue 'crates;
+                    }
+                }
+                Step::Verify => {
+                    cmd.env("PATH", &path);
+                    eprintln!("$ (cd {krate} && cargo {})", join(&args));
+                    let out = match cmd.output() {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("error: verus-verify: cargo を起動できません: {e}");
+                            return false;
+                        }
+                    };
+                    // 標準出力は JSON（関数の一覧が長い）なので出さない。診断は標準エラーに出る。
+                    eprint!("{}", String::from_utf8_lossy(&out.stderr));
+                    let json = read_json(&String::from_utf8_lossy(&out.stdout));
+                    let need = required(krate);
+                    match judge(json, out.status.success(), need) {
+                        Ok(n) => eprintln!(
+                            "ok: verus-verify: {krate}: {n} verified, 0 errors{}",
+                            if need.is_empty() {
+                                String::new()
+                            } else {
+                                format!("（定理 {} 個を名前で確認）", need.len())
+                            }
+                        ),
+                        Err(e) => {
+                            eprintln!(
+                                "error: verus-verify: {krate}: 検証が通りません（{e}、終了 {}）",
+                                out.status
+                            );
+                            ok = false;
+                            continue 'crates;
+                        }
+                    }
+                }
+                Step::Plain => match run(&mut cmd) {
+                    Ok(()) => eprintln!("ok: verus-verify: {krate}: Verus なしの cargo build"),
+                    Err(e) => {
+                        eprintln!(
+                            "error: verus-verify: {krate}: Verus なしでビルドできません: {e}"
+                        );
+                        ok = false;
+                    }
+                },
+            }
+        }
+    }
+    ok
+}
+
+fn join(args: &[OsString]) -> String {
+    args.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::*;
+
+    #[test]
+    fn reads_the_real_pin() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        assert!(pin.release.starts_with("release/"));
+    }
+
+    #[test]
+    fn rejects_a_wrong_sha256_length() {
+        let broken = mutate(&real("Cargo.toml"), "sha256 = \"", "sha256 = \"0");
+        assert!(read_pin(&broken).unwrap_err().contains("sha256"));
+    }
+
+    #[test]
+    fn rejects_a_missing_key() {
+        let src = real("Cargo.toml");
+        let line = src.lines().find(|l| l.starts_with("toolchain = ")).unwrap();
+        let broken = mutate(&src, &format!("{line}\n"), "");
+        assert!(read_pin(&broken).unwrap_err().contains("toolchain"));
+    }
+
+    #[test]
+    fn rejects_an_unreadable_line() {
+        let broken = mutate(&real("Cargo.toml"), "vstd = \"", "vstd = '");
+        assert!(read_pin(&broken).unwrap_err().contains("読めません"));
+    }
+
+    #[test]
+    fn rejects_a_release_that_does_not_match_the_version() {
+        let broken = mutate(
+            &real("Cargo.toml"),
+            "release = \"release/0.",
+            "release = \"release/1.",
+        );
+        assert!(read_pin(&broken).unwrap_err().contains("release"));
+    }
+
+    #[test]
+    fn fails_unless_every_cargo_step_is_locked() {
+        let steps = verify_steps(Path::new("/r"), "stack");
+        let kinds: Vec<Step> = steps.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, [Step::Clean, Step::Clean, Step::Verify, Step::Plain]);
+        for (kind, args) in &steps {
+            assert!(
+                args.iter().any(|a| a == "--locked"),
+                "{kind:?} に --locked がない: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fails_when_cargo_is_called_outside_cargo_command() {
+        // verify_steps を通らない cargo の呼び出しは --locked の検査をすり抜ける。
+        let src = real("xtask/src/verus.rs");
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
+        let needle = ["Command::new(", "\"cargo\")"].concat();
+        assert_eq!(
+            body.matches(needle.as_str()).count(),
+            1,
+            "cargo の呼び出しは cargo_command だけにする"
+        );
+    }
+
+    /// `--output-json` の出力と同じ形（M0 の実測、`json_output.rs` のプローブ）。
+    fn json(verified: u64, errors: u64, success: bool, funcs: &[&str]) -> String {
+        let mut t = String::from("{\n  \"func-details\": {\n");
+        for (i, f) in funcs.iter().enumerate() {
+            let comma = if i + 1 < funcs.len() { "," } else { "" };
+            t.push_str(&format!(
+                "    \"{f}\": {{\n      \"obligation_proof_notes\": [],\n      \"failed_proof_notes\": []\n    }}{comma}\n"
+            ));
+        }
+        t.push_str(&format!(
+            "  }},\n  \"verification-results\": {{\n    \"encountered-error\": false,\n    \"success\": {success},\n    \"verified\": {verified},\n    \"errors\": {errors},\n    \"is-verifying-entire-crate\": true\n  }}\n}}\n"
+        ));
+        t
+    }
+
+    const THM: &[&str] = &["k::thm_a", "k::thm_b"];
+
+    #[test]
+    fn fails_when_the_fetched_asset_is_not_the_pinned_one() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        let dir = std::env::temp_dir().join(format!("ebykn-xtask-asset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join(&pin.asset);
+        let mut asked = None;
+        let r = fetch_asset(&pin, &zip, |url, dest| {
+            asked = Some(url.to_string());
+            std::fs::write(dest, "途中で切れた zip").map_err(|e| e.to_string())
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = r.unwrap_err();
+        assert!(e.contains("sha256") && e.contains(&pin.asset), "{e}");
+        let url = asked.unwrap();
+        assert!(
+            url.ends_with(&format!("/{}/{}", pin.release, pin.asset)),
+            "{url}"
+        );
+        // 取得の失敗はそのまま返し、sha256 まで進まない。
+        let r = fetch_asset(&pin, &zip, |_, _| Err("取れない".to_string()));
+        assert_eq!(r, Err("取れない".to_string()));
+    }
+
+    #[test]
+    fn fails_when_try_install_fetches_outside_fetch_asset() {
+        // fetch_asset を通らない取得は sha256 の照合をすり抜ける。
+        let src = real("xtask/src/verus.rs");
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
+        assert!(
+            !body.contains("use crate::fetch::"),
+            "fetch の関数を名前だけで取り込まない（呼び出しを数えられなくなる）"
+        );
+        let call = "fetch::download(";
+        assert_eq!(
+            body.matches(call).count(),
+            1,
+            "fetch::download は try_install の中で fetch_asset に渡す閉包からだけ呼ぶ"
+        );
+        let at = body.find(call).unwrap();
+        let start = body[..at]
+            .rfind("fetch_asset(")
+            .expect("fetch::download の前に fetch_asset がない");
+        assert!(
+            !body[start..at].contains(';'),
+            "fetch::download が fetch_asset の引数の中にない: {}",
+            &body[start..at]
+        );
+        let f = body.find("fn try_install(").expect("try_install がない");
+        let end = f + body[f..].find("\n}\n").expect("try_install の終わりがない");
+        assert!(
+            (f..end).contains(&start),
+            "fetch_asset の呼び出しが try_install の中にない"
+        );
+    }
+
+    #[test]
+    fn passes_a_verified_crate() {
+        let j = json(5, 0, true, &["k::f", "k::thm_a", "k::thm_b"]);
+        assert_eq!(judge(read_json(&j), true, THM), Ok(5));
+        assert_eq!(judge(read_json(&j), true, &[]), Ok(5));
+    }
+
+    #[test]
+    fn fails_when_a_required_theorem_is_not_verified() {
+        let j = json(5, 0, true, &["k::f", "k::thm_a", "k::thm_b"]);
+        let broken = mutate(&j, "\"k::thm_b\"", "\"k::other\"");
+        assert!(
+            judge(read_json(&broken), true, THM)
+                .unwrap_err()
+                .contains("k::thm_b")
+        );
+    }
+
+    #[test]
+    fn fails_when_verification_has_errors() {
+        let j = json(4, 1, false, THM);
+        assert!(
+            judge(read_json(&j), false, THM)
+                .unwrap_err()
+                .contains("4 verified, 1 errors")
+        );
+        assert!(judge(read_json(&json(4, 1, true, THM)), true, THM).is_err());
+        assert!(judge(read_json(&json(4, 0, false, THM)), true, THM).is_err());
+    }
+
+    #[test]
+    fn fails_when_there_is_no_json() {
+        let text = "verification results:: 5 verified, 0 errors\n";
+        assert!(
+            judge(read_json(text), true, &[])
+                .unwrap_err()
+                .contains("一つずつ")
+        );
+    }
+
+    #[test]
+    fn fails_when_the_json_is_unreadable() {
+        let j = json(5, 0, true, THM);
+        let twice = format!("{j}{j}");
+        assert!(read_json(&twice).unwrap_err().contains("一つずつ"));
+        let bad = mutate(&j, "\"verified\": 5", "\"verified\": many");
+        assert!(read_json(&bad).unwrap_err().contains("verified"));
+        let open = mutate(
+            &j,
+            "  },\n  \"verification-results\"",
+            "\n  \"verification-results\"",
+        );
+        assert!(read_json(&open).unwrap_err().contains("閉じて"));
+    }
+
+    #[test]
+    fn fails_when_the_exit_code_is_not_zero() {
+        assert!(
+            judge(read_json(&json(5, 0, true, THM)), false, THM)
+                .unwrap_err()
+                .contains("終了コード")
+        );
+    }
+
+    #[test]
+    fn fails_when_nothing_is_verified() {
+        assert!(
+            judge(read_json(&json(0, 0, true, &[])), true, &[])
+                .unwrap_err()
+                .contains("0 verified")
+        );
+    }
+
+    /// 名前で確かめる定理は、検証の対象のクレートにあり、その定義がソースにある。
+    #[test]
+    fn required_theorems_exist_in_the_source() {
+        for (krate, names) in REQUIRED {
+            assert!(CRATES.contains(krate), "{krate} が CRATES にない");
+            let src: String = std::fs::read_dir(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .join(krate)
+                    .join("src"),
+            )
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap_or_default())
+            .collect();
+            for n in *names {
+                let short = n.rsplit("::").next().unwrap();
+                assert!(
+                    src.contains(&format!("pub proof fn {short}(")),
+                    "{n} の定義がない"
+                );
+            }
+        }
+    }
+
+    fn version_output(pin: &Pin) -> String {
+        format!(
+            "{{\n  \"verus\": {{\n    \"version\": \"{}\",\n    \"toolchain\": \"{} (overridden by environment variable RUSTUP_TOOLCHAIN)\",\n    \"commit\": \"{}\"\n  }}\n}}\n",
+            pin.version, pin.toolchain, pin.commit
+        )
+    }
+
+    #[test]
+    fn accepts_the_pinned_version() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        assert_eq!(check_version(&version_output(&pin), &pin), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_the_installed_verus_is_another_version() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        let other = mutate(&version_output(&pin), &pin.commit, &"0".repeat(40));
+        assert!(check_version(&other, &pin).unwrap_err().contains("commit"));
+        let tc = mutate(
+            &version_output(&pin),
+            &pin.toolchain,
+            "1.98.0-x86_64-unknown-linux-gnu",
+        );
+        assert!(check_version(&tc, &pin).unwrap_err().contains("toolchain"));
+    }
+
+    #[test]
+    fn parses_the_results_line() {
+        assert_eq!(
+            results_line("x\nverification results:: 24 verified, 0 errors\n"),
+            Some((24, 0))
+        );
+        assert_eq!(
+            results_line("verification results:: 3 verified, 2 errors"),
+            Some((3, 2))
+        );
+        assert_eq!(results_line("verification results:: many"), None);
+        assert_eq!(results_line(""), None);
+    }
+}
