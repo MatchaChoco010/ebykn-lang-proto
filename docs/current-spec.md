@@ -17,7 +17,7 @@
 | 基準で決めた | 元の仕様が定めていないか、書いたとおりには作れない点を、設計ノート §3.1・§3.2 の基準で決めた |
 | 実測で決めた | 固定した Verus（`release/0.2026.11.02.8bf68ee`）で確かめた事実で決まった。プローブは `OPEN.md` の「M0 の実測」にある |
 
-決まっていて `develop` にまだ入っていない項目には「実装中（PR #N）」を添え、今の `develop` の挙動を「今の develop」として併記します。PR がまだないものは Issue の番号を添えます。`develop` に入ったら、その PR で印と併記を消します。
+決まっていて `develop` にまだ入っていない項目には「実装中（PR #76）」を添え、今の `develop` の挙動を「今の develop」として併記します。PR がまだないものは Issue の番号を添えます。`develop` に入ったら、その PR で印と併記を消します。
 
 ## §1 段階 1 の範囲
 
@@ -314,7 +314,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 * 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。
 * 根拠：#17（PR #26）、#6（PR #13）、#61。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`。golden `tests/golden/drop`。
-* 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`impl Drop` は実装中（PR #N）。
+* 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`impl Drop` は実装中（PR #76）。
 
 ### §7.3 構造体と資源の書き下し
 
@@ -493,7 +493,7 @@ M3 の `.eykp` で示す義務は次のとおりです。
 
 | OPEN | 元の既定 | 結果 | 出所 | 状態 |
 | --- | --- | --- | --- | --- |
-| OPEN-3（ユーザー定義 `Drop`） | M0 で確かめ、対応がなければ `owns` を持つ型の `Drop` を E にする | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、E にしない。書き下しが std の `Drop` の `fn drop` に両方を足す（§7.2。実装中（PR #N））。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | #6（PR #13）、#61、`drop.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_tracked_field.rs` | 実測で決めた |
+| OPEN-3（ユーザー定義 `Drop`） | M0 で確かめ、対応がなければ `owns` を持つ型の `Drop` を E にする | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、E にしない。書き下しが std の `Drop` の `fn drop` に両方を足す（§7.2。実装中（PR #76））。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | #6（PR #13）、#61、`drop.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_tracked_field.rs` | 実測で決めた |
 | OPEN-4（`borrow mut` の書き下し） | `remove` ＋ `insert` | 既定どおり。`insert` は `proof { }` に入れる（§7.3） | #6（PR #13）、`tracked_field_forms.rs` | 実測で決めた |
 | OPEN-6（`by(mode)` の一覧） | §5.2 の 5 つ | 構文は 5 つを受け付け、使えないものは Verus のエラーに任せる。使えるのは場所で違う：`assert .. by(m)` は `bit_vector` / `nonlinear_arith` / `compute` / `compute_only`、関数単位の `by(m)` は `bit_vector` / `nonlinear_arith`。`integer_ring` は、Singular 付きでビルドした Verus でないと使えない | #6（PR #13）、`prover_modes.rs`、`prover_mode_*.rs` | 実測で決めた |
 | OPEN-7（Verus の結果の取り方） | JSON 出力があればそれ、なければ標準出力を解析 | §9.1 | #6（PR #13）、`json_output.rs`、`json_output_failure.rs` | 実測で決めた |
