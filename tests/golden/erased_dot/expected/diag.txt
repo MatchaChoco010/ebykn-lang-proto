@@ -1,5 +1,6 @@
 src/lib.eyk:19:35: E0404: `nodes` is an erased (`owns` / `spec`) field of `S` and cannot be written with `.`; write `self@nodes` or `x@nodes`
 src/lib.eyk:19:43: E0001: syntax error: `Tracked(..)` is Verus's ghost wrapper and cannot be written in `.eyk`; write ghost state as `owns` / `spec` fields (`self@f`) and region arguments as `uses r: Region<..>`
+src/lib.eyk:19:43: E0003: not implemented yet: permissions cannot be used inside this expression (such as `.await` or an async block, which Ebykn keeps as Rust tokens) yet, because Ebykn does not read it and the permission checks would not see the operation; do it with `let` before the expression
 src/lib.eyk:22:71: E0404: `nodes` is an erased (`owns` / `spec`) field of `S` and cannot be written with `.`; write `self@nodes` or `x@nodes`
 src/lib.eyk:22:89: E0404: `nodes` is an erased (`owns` / `spec`) field of `S` and cannot be written with `.`; write `self@nodes` or `x@nodes`
 src/lib.eyk:25:64: E0404: `order` is an erased (`owns` / `spec`) field of `S` and cannot be written with `.`; write `self@order` or `x@order`
