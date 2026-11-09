@@ -172,7 +172,7 @@ pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
     Bag { __eyk_erased_items: Tracked(items) }
 }
 
-fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)
+#[verifier::exec_allows_no_decreases_clause] fn set_owned(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>) -> (v: u64)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(),
 ensures v == 1, {
     let tracked mut __eyk_perm_p = __eyk_perm_p;
@@ -181,7 +181,7 @@ ensures v == 1, {
     n.val
 }
 
-fn set_and_put(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+#[verifier::exec_allows_no_decreases_clause] fn set_and_put(p: Ptr < Node >, Tracked(__eyk_perm_p): Tracked < PointsTo < Node >>, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
 requires __eyk_perm_p.pptr() == p, __eyk_perm_p.is_init(), __eyk_perm_p.pptr() == p,
 ensures final(r).contains(p), final(r).index(p).val == 2, {
     let tracked mut __eyk_perm_p = __eyk_perm_p;
