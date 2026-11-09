@@ -161,7 +161,8 @@ jobs:
             ${{ env.XDG_CACHE_HOME }}/ebykn/fonts
           key: slides-${{ hashFiles('xtask/src/slides.rs') }}
       - run: cargo xtask slides-install
-      - run: mkdir -p target/reports && cp -r .claude/skills/ebykn-report-slides/example target/reports/example
+      # target/ は rust-cache が前回の実行から戻すので、前回の写しを消してから写す（残っていると cp -r が中に入れ子で写す）。
+      - run: rm -rf target/reports/example && mkdir -p target/reports && cp -r .claude/skills/ebykn-report-slides/example target/reports/example
       - run: cargo xtask slides-build target/reports/example
 
   # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
