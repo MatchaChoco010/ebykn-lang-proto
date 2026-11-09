@@ -254,6 +254,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 
 - 言語の意味として判定できるものは `ebykn check` に入れる。
 - リポジトリの規則は `cargo xtask` のゲートにする。
+- 検証したコードと配るコードを食い違わせる書き方（cfg の名前、マクロ）は、`crates/ebykn_syntax/src/denylist.rs` の `DENYLIST` に、壊す理由と再現の例を添えて 1 項目足す（`crates/ebykn_check/tests/denylist.rs` の総当たりが自動で効く）。
 - Red → Green で、違反例と非違反例をテストに固定する。
 
 ## Ebykn Book

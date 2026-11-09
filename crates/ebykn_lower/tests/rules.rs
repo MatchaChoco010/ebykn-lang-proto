@@ -406,6 +406,8 @@ fn cargo_toml_has_panic_abort_and_rewrites_paths() {
             prelude_path: "../p",
         },
     );
+    // 上のディレクトリの Cargo のワークスペースに入らないよう、空の `[workspace]` を持つ（#78）。
+    assert!(t.starts_with("[workspace]\n\n[package]\n"), "{t}");
     for want in [
         "vstd = \"=0.0.0-x\"",
         "ebykn_prelude = { path = \"../p\" }",

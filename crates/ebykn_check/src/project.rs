@@ -80,6 +80,8 @@ pub struct Project {
     pub proofs: Vec<ProofFile>,
     /// クレートルートが `src/main.eyk` か。
     pub bin: bool,
+    /// 全ファイルの cfg の述語に書いた名前（[`ebykn_syntax::Parsed::cfg_uses`]）。
+    pub cfg_uses: std::collections::BTreeSet<String>,
 }
 
 impl Project {
@@ -167,6 +169,7 @@ pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
         asts: vec![None, Some(parsed.file)],
         deferred: vec![Vec::new(), parsed.deferred],
         parsed_ok: vec![false, parsed.diags.is_empty()],
+        cfg_uses: parsed.cfg_uses,
         modules: vec![FileModule {
             file: FileId(1),
             module: Vec::new(),
@@ -228,6 +231,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         modules: Vec::new(),
         proofs: Vec::new(),
         bin: false,
+        cfg_uses: Default::default(),
     };
     match &manifest_text {
         Ok(text) => p.manifest = read_manifest(&p.files[0], text, &mut diags),
@@ -434,6 +438,7 @@ fn parse_file(
     p.files.push(file);
     p.asts.push(Some(parsed.file));
     p.deferred.push(parsed.deferred);
+    p.cfg_uses.extend(parsed.cfg_uses);
     Some(id)
 }
 

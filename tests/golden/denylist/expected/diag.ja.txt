@@ -1,0 +1,17 @@
+src/lib.eyk:6:46: E0001: 構文エラー: `cfg!(..)` は `.eyk` に書けません（条件に `verus_keep_ghost` を使っている）。書けないのは、Verus がこの cfg を検証するときに自分で設定し、Verus なしのビルドでは設定されないので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:8:61: E0001: 構文エラー: `#[cfg(..)]` は `.eyk` に書けません（条件に `verus_keep_ghost_body` を使っている）。書けないのは、Verus がこの cfg を検証するときに自分で設定し、Verus なしのビルドでは設定されないので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:10:1: E0001: 構文エラー: `#[cfg(..)]` は `.eyk` に書けません（条件に `verus_only` を使っている）。書けないのは、Verus がこの cfg を検証するときに自分で設定し、Verus なしのビルドでは設定されないので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:14:1: E0001: 構文エラー: `#[cfg_attr(..)]` は `.eyk` に書けません（条件に `verus_verify_core` を使っている）。書けないのは、Verus がこの cfg を検証するときに自分で設定し、Verus なしのビルドでは設定されないので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:18:68: E0001: 構文エラー: `#[cfg(..)]` は `.eyk` に書けません（条件に `verus_no_vstd` を使っている）。書けないのは、Verus がこの cfg を検証するときに自分で設定し、Verus なしのビルドでは設定されないので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:21:46: E0001: 構文エラー: `cfg!(..)` は `.eyk` に書けません（条件に `debug_assertions` を使っている）。書けないのは、この cfg が検証（dev のプロファイル）では有効で、release のビルドでは無効なので、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:24:46: E0001: 構文エラー: `cfg!(..)` は `.eyk` に書けません（条件に `panic` を使っている）。書けないのは、パニックの戦略（`abort` / `unwind`）が根になるクレートのプロファイルで決まり（`build/verus/Cargo.toml` の `panic = "abort"` は、そのクレートが根のときだけ効く）、別のクレートから依存されると、Verus が検証するコードとビルドするコードが食い違うためです
+src/lib.eyk:29:63: E0001: 構文エラー: `debug_assert!` は `.eyk` に書けません。書けないのは、std の展開の中で `cfg(debug_assertions)` に届くので、引数が検証（dev のプロファイル）では実行され、release のビルドでは実行されないためです。どちらでも実行される `assert!` を使うか、それを使う関数を `unchecked fn` にします
+src/lib.eyk:31:101: E0001: 構文エラー: `debug_assert_eq!` は `.eyk` に書けません。書けないのは、std の展開の中で `cfg(debug_assertions)` に届くので、引数が検証（dev のプロファイル）では実行され、release のビルドでは実行されないためです。どちらでも実行される `assert!` を使うか、それを使う関数を `unchecked fn` にします
+src/lib.eyk:33:101: E0001: 構文エラー: `debug_assert_ne!` は `.eyk` に書けません。書けないのは、std の展開の中で `cfg(debug_assertions)` に届くので、引数が検証（dev のプロファイル）では実行され、release のビルドでは実行されないためです。どちらでも実行される `assert!` を使うか、それを使う関数を `unchecked fn` にします
+src/lib.eyk:36:46: E0001: 構文エラー: `include_bytes!` は `.eyk` に書けません。書けないのは、読むファイルが、Verus の実行とビルドで違いうる（`/proc/self/cmdline` や `/proc/self/environ` のような絶対パスや、そのあいだに変わるファイル）ためです。値が要るなら `unchecked fn` で包みます
+src/lib.eyk:38:24: E0001: 構文エラー: `include_str!` は `.eyk` に書けません。書けないのは、読むファイルが、Verus の実行とビルドで違いうる（`/proc/self/cmdline` や `/proc/self/environ` のような絶対パスや、そのあいだに変わるファイル）ためです。値が要るなら `unchecked fn` で包みます
+src/lib.eyk:41:46: E0001: 構文エラー: `option_env!` は `.eyk` に書けません。書けないのは、コンパイル時の環境変数の値が、Verus の実行と素のビルドで違いうる（`ebykn verify` は `CARGO_TERM_COLOR` を設定し、`RUSTUP_TOOLCHAIN` は Verus の toolchain になる）ためです。値が要るなら `unchecked fn` で包みます
+src/lib.eyk:43:25: E0001: 構文エラー: `env!` は `.eyk` に書けません。書けないのは、コンパイル時の環境変数の値が、Verus の実行と素のビルドで違いうる（`ebykn verify` は `CARGO_TERM_COLOR` を設定し、`RUSTUP_TOOLCHAIN` は Verus の toolchain になる）ためです。値が要るなら `unchecked fn` で包みます
+src/lib.eyk:45:30: E0001: 構文エラー: `file!` は `.eyk` に書けません。書けないのは、パスが cargo のクレートのコンパイルの仕方で変わる（Verus で検証するときは相対、別のクレートから依存されると絶対）ためです。値が要るなら `unchecked fn` で包みます
+src/lib.eyk:48:48: E0001: 構文エラー: `include!` は `.eyk` に書けません。書けないのは、Ebykn が読まないコードを取り込む（`::vstd::prelude::proof!{ assume(false); }` など。#16）ためです
+src/lib.eyk:57:34: E0001: 構文エラー: `include!` は `.eyk` に書けません。書けないのは、Ebykn が読まないコードを取り込む（`::vstd::prelude::proof!{ assume(false); }` など。#16）ためです

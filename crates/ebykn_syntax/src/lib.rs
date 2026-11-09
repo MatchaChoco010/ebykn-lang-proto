@@ -6,6 +6,7 @@
 #![allow(clippy::large_enum_variant)]
 
 pub mod ast;
+pub mod denylist;
 pub mod diag;
 pub mod macros;
 mod parse;
@@ -32,9 +33,6 @@ pub const ALLOWED_MACROS: &[&str] = &[
     "assert",
     "assert_eq",
     "assert_ne",
-    "debug_assert",
-    "debug_assert_eq",
-    "debug_assert_ne",
     "unreachable",
     "unimplemented",
     "todo",
@@ -44,9 +42,10 @@ pub const ALLOWED_MACROS: &[&str] = &[
     "line",
     "column",
     "module_path",
-    "include_str",
-    "include_bytes",
     "compile_error",
+    // 条件の名前は拒否リスト（`denylist`）で見る（#27）。`debug_assert` 系と `include_str` /
+    // `include_bytes` は拒否リストにある。
+    "cfg",
     // vstd
     "seq",
     "set",

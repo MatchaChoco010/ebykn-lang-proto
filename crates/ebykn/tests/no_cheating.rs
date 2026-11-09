@@ -104,7 +104,7 @@ fn smuggled_assumptions_fail_verify() {
     let expected =
         std::fs::read_to_string(dir.join("expected/smuggled.txt")).expect("expected/smuggled.txt");
     assert_eq!(
-        verus::status_text(&got.all, got.summary, &got.cheating),
+        verus::status_text(&got.all, got.summary, &got.cheating, &output.cfg_uses),
         expected
     );
     assert!(!got.success(&got.all));

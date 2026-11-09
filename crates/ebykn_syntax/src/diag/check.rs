@@ -200,19 +200,25 @@ pub enum Unimpl {
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
     NestedAssumption,
-    /// 関数の本体の中の `cfg!` と `#[cfg(..)]`（#27 の既定 B）。
-    CfgInBody,
     /// ジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。#95）。
     CfgOnGenericParam,
-    /// std のマクロの引数の中の属性（トークンのまま持つので検査できない。#28）。
-    AttrInMacro,
-    /// `env!` / `option_env!`（`unchecked fn` の本体の外。#27 の既定）。
-    EnvMacro,
-    /// `file!`（`unchecked fn` の本体の外。#27 の既定）。
-    FileMacro,
+    /// パターン（クロージャの引数、構造体パターンの欄と `@x`）に付けた `#[cfg(..)]`（#95）。
+    CfgOnPattern,
     /// 戻り値の型を `Option<..>` / `Result<..>` と書いていない関数の、`borrow mut` の中の `?`
     /// （#21 の既定 D。失敗の経路で権限を戻す展開の形を決められない）。
     TryInBorrowMut,
+    /// §6 が権限の操作として読むか、ブロックを抜ける文・式・欄に付いた `#[cfg]`（と、代入・二項演算・型変換の文
+    /// と `take` / `put` / `leak` / 仕様の代入に付いた属性）。§6 の検査が、コンパイルされないコードを見てしまう（#27）。
+    CfgStmt,
+    /// 安定版の Rust が式の属性を許さない位置の、式の属性（`let x = #[allow(..)] a;`、`if` の条件、`return` の値
+    /// など）。Verus の toolchain では通るが、Verus なしのビルドで落ちる。
+    ExprAttr,
+    /// std のマクロの引数の中の、cfg・`cfg_attr`・lint のほかの属性（トークンのまま持つので、derive や
+    /// 属性マクロを見られない。#27）。
+    AttrInMacro,
+    /// std のマクロの引数の中の、安定版の Rust が許さない位置の属性（`assert!(#[allow(..)] (a > 0))`）。
+    /// Verus の toolchain では通るが、Verus なしのビルドで落ちる（PR #59 の再確認）。
+    AttrPosInMacro,
 }
 
 impl Unimpl {
@@ -286,24 +292,6 @@ impl Unimpl {
             (Unimpl::NestedAssumption, Lang::Ja) => {
                 "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
             }
-            (Unimpl::AttrInMacro, Lang::En) => {
-                "attributes (`#[..]`) inside the arguments of this macro are not supported yet, because Ebykn does not read them (an attribute such as `#[cfg(..)]` could make the verified code differ from the built code); move the code out of the macro"
-            }
-            (Unimpl::AttrInMacro, Lang::Ja) => {
-                "このマクロの引数の中の属性（`#[..]`）はまだ扱えません。Ebykn が引数を読まないためです（`#[cfg(..)]` などで、検証するコードとビルドするコードが食い違いうる）。コードをマクロの外に出します"
-            }
-            (Unimpl::EnvMacro, Lang::En) => {
-                "`env!` / `option_env!` outside the body of an `unchecked fn` are not supported yet, because a compile-time environment variable can differ between the Verus run and the plain build; if you need the value, wrap it in an `unchecked fn`"
-            }
-            (Unimpl::EnvMacro, Lang::Ja) => {
-                "`unchecked fn` の本体の外の `env!` / `option_env!` はまだ扱えません。コンパイル時の環境変数は、Verus の実行と素のビルドで値が違いうるためです。値が要るなら `unchecked fn` で包みます"
-            }
-            (Unimpl::FileMacro, Lang::En) => {
-                "`file!` outside the body of an `unchecked fn` is not supported yet, because the path depends on how cargo compiles the crate (relative when Verus verifies it, absolute when another crate depends on it); if you need the value, wrap it in an `unchecked fn`"
-            }
-            (Unimpl::FileMacro, Lang::Ja) => {
-                "`unchecked fn` の本体の外の `file!` はまだ扱えません。パスは cargo のクレートのコンパイルの仕方で変わる（Verus で検証するときは相対、別のクレートから依存されると絶対）ためです。値が要るなら `unchecked fn` で包みます"
-            }
             (Unimpl::TryInBorrowMut, Lang::En) => {
                 "`?` inside `borrow mut` is supported only when the function's return type is written as `Option<..>` or `Result<..>`, because the permission is put back before returning on the failure path, which needs the shape of the failure value; write the `match` explicitly"
             }
@@ -316,11 +304,11 @@ impl Unimpl {
             (Unimpl::CfgOnGenericParam, Lang::Ja) => {
                 "ジェネリクスの引数に付けた `#[cfg(..)]` はまだ扱えません。Ebykn の検査は `cfg` を評価せずに引数の並びを読むためです。構成ごとに別の項目に分けます"
             }
-            (Unimpl::CfgInBody, Lang::En) => {
-                "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"
+            (Unimpl::CfgOnPattern, Lang::En) => {
+                "`#[cfg(..)]` on a pattern (closure parameters and fields of struct patterns, including `@x`) is not supported yet, because Ebykn's checks bind the names in the pattern without evaluating `cfg`; write the code for each configuration separately"
             }
-            (Unimpl::CfgInBody, Lang::Ja) => {
-                "関数の中（文・式・match の腕・欄・引数）の `cfg!` と `#[cfg(..)]` はまだ扱えません。Verus が検証するコードと Verus なしでビルドするコードが食い違いうるためです。条件付きのコードは別の項目に分けます"
+            (Unimpl::CfgOnPattern, Lang::Ja) => {
+                "パターン（クロージャの引数、構造体パターンの欄と `@x`）に付けた `#[cfg(..)]` はまだ扱えません。Ebykn の検査は `cfg` を評価せずにパターンの名前を束縛するためです。構成ごとにコードを分けます"
             }
             (Unimpl::JumpInMacro, Lang::En) => {
                 "`return`, `break`, `continue` and `?` inside the arguments of a macro are not supported yet, because Ebykn does not rewrite them: a jump out of a `borrow mut` block there would skip putting the permission back, and the permission checks would not see it; move the jump out of the macro (if it is inside a closure, bind the closure with `let` outside the macro)"
@@ -333,6 +321,30 @@ impl Unimpl {
             }
             (Unimpl::JumpInRustExpr, Lang::Ja) => {
                 "この式（Ebykn が Rust のトークンのまま持つ `.await` など）の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこの式の中を読まないので、そこから抜けると `borrow mut` の権限を戻さずに抜け、権限の検査も見ないためです。値は式の前で `let` に束縛してから使います"
+            }
+            (Unimpl::CfgStmt, Lang::En) => {
+                "`#[cfg]` on a statement, an expression (such as an array or tuple element or an argument) or a struct literal field that operates on permissions (`take`, `put`, `leak`, `free`, a call that consumes or returns a permission, a spec assignment `x@f = e`) or leaves the block (`return`, `break`, `continue`) is not supported yet, and neither is any attribute on an assignment, binary operation or cast statement or on `take` / `put` / `leak` / a spec assignment, because the check of §6 would see code that is not compiled (and attributes on assignment, binary operation and cast statements are not stable Rust); put the conditional code in separate functions"
+            }
+            (Unimpl::CfgStmt, Lang::Ja) => {
+                "権限を操作する（`take`、`put`、`leak`、`free`、権限を消費する・返す呼び出し、仕様の代入 `x@f = e`）か、ブロックを抜ける（`return`、`break`、`continue`）文・式（配列とタプルの要素、引数など）・構造体リテラルの欄に付けた `#[cfg]` と、代入・二項演算・型変換の文と `take` / `put` / `leak` / 仕様の代入に付けた属性は、まだ扱えません。§6 の検査が、コンパイルされないコードを見てしまうためです（代入・二項演算・型変換の文の属性は、安定版の Rust でも書けない）。条件付きのコードは別の関数に分けます"
+            }
+            (Unimpl::ExprAttr, Lang::En) => {
+                "an attribute on this expression is not supported, because stable Rust accepts attributes on expressions only at the start of a statement, on the tail expression of a block, on array and tuple elements and on call and method arguments (elsewhere it is `attributes on expressions are experimental`, so the build without Verus fails); move the attribute to the statement"
+            }
+            (Unimpl::ExprAttr, Lang::Ja) => {
+                "この式の属性は扱えません。安定版の Rust が式の属性を許すのは、文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数だけで、それ以外では「attributes on expressions are experimental」になり、Verus なしのビルドが落ちるためです。属性は文に付けます"
+            }
+            (Unimpl::AttrInMacro, Lang::En) => {
+                "attributes other than `cfg`, `cfg_attr` and lint attributes (`allow`, `warn`, `deny`, `forbid`, `expect`) are not supported yet inside the arguments of this macro, because Ebykn does not read them (a derive or attribute macro there could generate code that is not checked); move the code out of the macro"
+            }
+            (Unimpl::AttrInMacro, Lang::Ja) => {
+                "このマクロの引数の中では、`cfg`・`cfg_attr`・lint の属性（`allow`、`warn`、`deny`、`forbid`、`expect`）のほかの属性はまだ扱えません。Ebykn が引数を読まないためです（derive や属性マクロが、検査しないコードを作りうる）。コードをマクロの外に出します"
+            }
+            (Unimpl::AttrPosInMacro, Lang::En) => {
+                "an attribute at this position inside the arguments of this macro is not supported, because Ebykn keeps the arguments as tokens and can tell only these positions where stable Rust accepts an attribute: the elements of `vec!` and the start of statements, match arms and fields inside `{ .. }` (outer attributes only); stable Rust rejects some other positions with `attributes on expressions are experimental`, so the build without Verus would fail; move the attribute or the code out of the macro"
+            }
+            (Unimpl::AttrPosInMacro, Lang::Ja) => {
+                "このマクロの引数の中のこの位置の属性は扱えません。Ebykn は引数をトークンのまま持つので、安定版の Rust が属性を許す位置のうち見分けられるのは、`vec!` の要素と、`{ .. }` の中の文・match の腕・欄の頭（外側の属性だけ）です。ほかには安定版の Rust が「attributes on expressions are experimental」で拒否する位置があり、Verus なしのビルドが落ちうるためです。属性かコードをマクロの外に出します"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"

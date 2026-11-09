@@ -14,6 +14,25 @@ pub struct Expr {
     pub span: Span,
 }
 
+impl Expr {
+    /// 文の先頭に書いた属性。構文解析器は、代入・二項演算・キャスト・フィールド・添字・メソッドの呼び出し・
+    /// `x@f` の文の属性を、左端の式に付けることがあるので、属性のない節点は左端の子をたどる。
+    pub fn leading_attrs(&self) -> &[Attr] {
+        if !self.attrs.is_empty() {
+            return &self.attrs;
+        }
+        match &self.kind {
+            ExprKind::Assign { lhs, .. } | ExprKind::Binary { lhs, .. } => lhs.leading_attrs(),
+            ExprKind::Cast { expr, .. } | ExprKind::Try(expr) => expr.leading_attrs(),
+            ExprKind::Field { base, .. }
+            | ExprKind::Index { base, .. }
+            | ExprKind::Erased { base, .. } => base.leading_attrs(),
+            ExprKind::MethodCall { receiver, .. } => receiver.leading_attrs(),
+            _ => &[],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     // Rust の式
