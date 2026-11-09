@@ -16,12 +16,19 @@ use super::{push, sp, span_of, span_of_tokens};
 use crate::ast;
 use crate::diag::Message;
 
+/// 名前に使えない語（`r#` を付ければ使える）。
+pub(super) const RESERVED_WORDS: &[&str] = &["uses"];
+
 pub(super) fn ident(i: &proc_macro2::Ident) -> ast::Ident {
     let s = i.to_string();
     let (name, raw) = match s.strip_prefix("r#") {
         Some(n) => (n.to_string(), true),
         None => (s, false),
     };
+    // `uses` は予約語（呼び出しで領域を渡す `f(x, uses &mut r)` と区別する。#19 の既定 P1）。
+    if !raw && RESERVED_WORDS.contains(&name.as_str()) {
+        push(sp(i.span()), Message::ReservedWord { word: name.clone() });
+    }
     ast::Ident {
         name,
         raw,

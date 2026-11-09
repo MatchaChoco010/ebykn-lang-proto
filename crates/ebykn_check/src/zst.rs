@@ -519,7 +519,7 @@ impl Walker<'_, '_> {
             | ExprKind::Infer
             | ExprKind::Rust(_)
             | ExprKind::Perm(_) => {}
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, args, .. } => {
                 self.alloc_arg(func, args);
                 self.expr(func);
                 self.exprs(args);

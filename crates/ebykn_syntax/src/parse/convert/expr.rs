@@ -51,6 +51,41 @@ fn args(p: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>) -> Vec<ast::E
     p.into_iter().map(expr).collect()
 }
 
+/// 呼び出しの引数。末尾の `uses ..`（差し込み口が読んだ `Verbatim`）は領域に分ける（#19 の既定 P1）。
+fn call_args(
+    p: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]>,
+) -> (Vec<ast::Expr>, Vec<ast::RegionArg>) {
+    let mut es: Vec<syn::Expr> = p.into_iter().collect();
+    if let Some(syn::Expr::Verbatim(ts)) = es.last()
+        && let Ok((a, RawVerbatimExpr::Atom(RawAtom::Uses(raw)))) =
+            hook::parse_expr_verbatim.parse2(ts.clone())
+        && a.is_empty()
+    {
+        es.pop();
+        let uses = raw.into_iter().map(raw_region_arg).collect();
+        return (es.into_iter().map(expr).collect(), uses);
+    }
+    (es.into_iter().map(expr).collect(), Vec::new())
+}
+
+fn raw_region_arg(r: hook::RawRegionArg) -> ast::RegionArg {
+    ast::RegionArg {
+        mode: r.mode,
+        region: raw_region(r.region),
+        span: r.span,
+    }
+}
+
+fn raw_region(r: RawRegion) -> ast::Region {
+    match r {
+        RawRegion::SelfField { self_span, field } => ast::Region::SelfField {
+            self_span: sp(self_span),
+            field: ident(&field),
+        },
+        RawRegion::Var(i) => ast::Region::Var(ident(&i)),
+    }
+}
+
 pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
     use ast::ExprKind as K;
     let span = span_of(&e);
@@ -105,11 +140,13 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
                     return mk(Vec::new(), ast::ExprKind::Rust(tk), span);
                 }
             }
+            let (args, uses) = call_args(c.args);
             mk(
                 attrs(&c.attrs),
                 K::Call {
                     func: bx(*c.func),
-                    args: args(c.args),
+                    args,
+                    uses,
                 },
                 span,
             )
@@ -237,6 +274,7 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
             if m.atomically.is_some() {
                 return rejected(&m, verus_only("atomically"));
             }
+            let (args, uses) = call_args(m.args);
             mk(
                 attrs(&m.attrs),
                 K::MethodCall {
@@ -246,7 +284,8 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
                         .turbofish
                         .as_ref()
                         .map(|t| t.args.iter().map(generic_arg).collect()),
-                    args: args(m.args),
+                    args,
+                    uses,
                 },
                 span,
             )
@@ -388,6 +427,7 @@ pub(in crate::parse) fn expr(e: syn::Expr) -> ast::Expr {
                 K::Call {
                     func: Box::new(func),
                     args: vec![expr(*f.arg)],
+                    uses: Vec::new(),
                 },
                 span,
             )
@@ -636,6 +676,11 @@ fn verbatim(ts: TokenStream) -> ast::Expr {
         Ok((a, raw)) => {
             let outer = attrs(&a);
             let kind = match raw {
+                // 呼び出しの引数の末尾の `uses` は [`call_args`] が先に分ける。
+                RawVerbatimExpr::Atom(RawAtom::Uses(_)) => {
+                    push(span, Message::UsesOutsideCall);
+                    ast::ExprKind::Rust(ast::Tokens { tokens: ts, span })
+                }
                 RawVerbatimExpr::Atom(raw) => raw_atom(raw),
                 RawVerbatimExpr::Struct { path: p, body } => {
                     let fields = body
@@ -704,13 +749,7 @@ fn verbatim(ts: TokenStream) -> ast::Expr {
 
 pub(in crate::parse) fn raw_region_index(r: RawRegionIndex) -> ast::RegionIndex {
     ast::RegionIndex {
-        region: match r.region {
-            RawRegion::SelfField { self_span, field } => ast::Region::SelfField {
-                self_span: sp(self_span),
-                field: ident(&field),
-            },
-            RawRegion::Var(i) => ast::Region::Var(ident(&i)),
-        },
+        region: raw_region(r.region),
         index: bx(r.index),
         span: sp(r.span),
     }
@@ -783,6 +822,9 @@ pub(in crate::parse) fn raw_atom(raw: RawAtom) -> ast::ExprKind {
                 .collect(),
             body: block(l.body),
         }),
+        // 呼び出しの引数の末尾なら [`call_args`]、それ以外は [`verbatim`] が先に扱う。文の先頭の
+        // 原子は `borrow` とループだけ（`hook::peek_stmt`）。
+        RawAtom::Uses(_) => unreachable!("`uses` の領域は呼び出しの引数で扱う"),
     }
 }
 

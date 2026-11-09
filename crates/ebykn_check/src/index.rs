@@ -76,8 +76,9 @@ pub enum UseInfo {
         mode: PermMode,
         cell: bool,
     },
-    /// `r: Region<..>` など。
-    Named { name: String },
+    /// `r: Region<..>` など。`mode` は型の形（`Region<..>` は移動、`&Region<..>` は共有、
+    /// `&mut Region<..>` は可変）。
+    Named { name: String, mode: PermMode },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,8 +264,9 @@ pub fn fn_info(vis: &Vis, sig: &ast::Signature, contract: &ast::Contract, kind: 
                     });
                 }
             }
-            UsesItem::Named { ident, .. } => uses.push(UseInfo::Named {
+            UsesItem::Named { ident, ty, .. } => uses.push(UseInfo::Named {
                 name: ident.name.clone(),
+                mode: region_mode(ty),
             }),
         }
     }
@@ -325,6 +327,15 @@ pub fn is_region_type(ty: &ast::Type) -> bool {
         _ => ty,
     };
     last_segment(ty) == Some("Region")
+}
+
+/// 領域の型の渡し方（`Region<..>` は移動、`&Region<..>` は共有、`&mut Region<..>` は可変）。
+pub fn region_mode(ty: &ast::Type) -> PermMode {
+    match &ty.kind {
+        TypeKind::Ref { mutable: true, .. } => PermMode::Mut,
+        TypeKind::Ref { .. } => PermMode::Shared,
+        _ => PermMode::Move,
+    }
 }
 
 /// 型が一つの名前（`ebykn_prelude::` を前に付けてよい）のパスなら、その最後の名前。

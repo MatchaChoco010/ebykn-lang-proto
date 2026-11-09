@@ -568,3 +568,69 @@ fn owned_regions_are_rebound_as_mut() {
     );
     lacks(&src, "let tracked mut s");
 }
+
+#[test]
+fn region_arguments_are_appended_as_tracked() {
+    // #19 の既定 P1：`uses` の後の領域を、呼ばれる側の `uses` の宣言順で引数の末尾に足す。
+    let helpers = "fn mv(n: u64) uses r: Region<Ptr<Node>> { }\nfn rd(n: u64) uses r: &Region<Ptr<Node>> { }\nfn wr(n: u64) uses r: &mut Region<Ptr<Node>> { }\nfn mixed(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>, &mut p@ { }\n";
+    let local = "let mut r: Region<Ptr<Node>> = Region::empty();";
+    let src = format!(
+        "{PRE}{helpers}fn f() {{ {local} rd(1, uses &r); wr(2, uses &mut r); mv(3, uses r); }}"
+    );
+    has(
+        &src,
+        "rd(1, Tracked(&r)); wr(2, Tracked(&mut r)); mv(3, Tracked(r));",
+    );
+    // `uses` で受けた参照は借り直す。
+    let src = format!(
+        "{PRE}{helpers}fn g() uses r: &mut Region<Ptr<Node>> {{ rd(1, uses &r); wr(2, uses &mut r); }}"
+    );
+    has(&src, "rd(1, Tracked(&*r)); wr(2, Tracked(&mut *r));");
+    // `owns` フィールド。
+    let src = format!(
+        "{PRE}{helpers}impl P {{ fn h(&mut self) {{ rd(1, uses &self@r); wr(2, uses &mut self@r); }} }}"
+    );
+    has(
+        &src,
+        "rd(1, Tracked(self.r.borrow())); wr(2, Tracked(self.r.borrow_mut()));",
+    );
+    // 権限と領域が混ざった宣言は、宣言の順に並べる。
+    let src = format!(
+        "{PRE}{helpers}fn k() {{ {local} let p = Ptr::new(Node {{ val: 1 }}); mixed(p, uses &mut r); let _ = p.free(); }}"
+    );
+    has(
+        &src,
+        "mixed(p, Tracked(&mut r), Tracked(&mut __eyk_perm_p));",
+    );
+}
+
+#[test]
+fn region_arguments_are_never_dropped() {
+    // 呼ばれる側を引けない呼び出しや、検査が拒む呼び出しでも、書いた領域は末尾に残す（受け取らない
+    // 関数なら Verus が型の誤りとして拒む）。
+    let src = format!(
+        "{PRE}fn plain(n: u64) {{ }}\nfn f(g: fn(u64)) {{ let mut r: Region<Ptr<Node>> = Region::empty(); g(1, uses &mut r); plain(2, uses &r); }}"
+    );
+    let got = lowered_ignoring_errors(&src);
+    for want in ["g(1, Tracked(&mut r))", "plain(2, Tracked(&r))"] {
+        assert!(got.contains(&squash(want)), "{want:?} がない:\n{got}");
+    }
+}
+
+#[test]
+fn region_arguments_survive_missing_facts() {
+    // 検査の事実（`facts.calls`）に並びがない呼び出しでも、書き下しは書いた領域を末尾に足す
+    // （`ebykn_lower` の予備の経路）。
+    let src = format!(
+        "{PRE}fn rd(n: u64) uses r: &Region<Ptr<Node>> {{ }}\nfn f() {{ let mut r: Region<Ptr<Node>> = Region::empty(); rd(1, uses &r); rd(2, uses &mut r); }}"
+    );
+    let (p, d) = project::single(&src);
+    assert!(d.is_empty(), "{d:?}");
+    let mut c = ebykn_check::check(&p);
+    assert!(!c.facts.calls.is_empty());
+    c.facts.calls.clear();
+    let got = squash(&lower(&p, &c).unwrap().files[0].text);
+    for want in ["rd(1, Tracked(&r))", "rd(2, Tracked(&mut r))"] {
+        assert!(got.contains(&squash(want)), "{want:?} がない:\n{got}");
+    }
+}

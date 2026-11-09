@@ -1,0 +1,23 @@
+verified region_call::alloc
+verified region_call::set
+verified region_call::get
+verified region_call::Pair::invariant
+verified region_call::Pair::new
+verified region_call::Pair::set_a
+verified region_call::Pair::get_b
+failed region_call::Pair::set_a_wrong
+verified region_call::Single::invariant
+verified region_call::Single::new
+verified region_call::Single::set
+verified region_call::fill
+verified region_call::sum
+verified region_call::filled
+verified region_call::transfer
+verified region_call::Graph::invariant
+verified region_call::vertex
+verified region_call::connect
+verified region_call::out_degree
+verified region_call::into_graph
+verified region_call::triangle
+verified region_call::moved_between
+results 18 verified, 1 errors
