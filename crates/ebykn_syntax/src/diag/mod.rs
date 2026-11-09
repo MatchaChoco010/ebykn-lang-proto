@@ -8,7 +8,7 @@ mod check;
 
 use std::fmt::Write as _;
 
-pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, Unimpl};
+pub use check::{CheckMsg, LoopPoint, Mismatch, Op, PermState, ProofOnlyClash, Unimpl};
 
 use crate::span::{SourceFile, Span};
 
@@ -29,8 +29,16 @@ pub enum Code {
     E0101,
     /// `#[verifier::..]` の使用。
     E0102,
+    /// 対応する `.eyk` のない `.eykp`。
+    E0301,
+    /// `.eykp` の置き場所の誤り。
+    E0302,
     /// `.eyk` に証明構文。
     E0303,
+    /// 剥がし不一致。
+    E0304,
+    /// ループ句が部分列でない。
+    E0305,
     /// tuple struct・enum（・unit struct）に `owns` / `spec`。
     E0401,
     /// `impl T` の中での `invariant` / `view` の直接定義。
@@ -81,7 +89,11 @@ impl Code {
             Code::E0001 => "E0001",
             Code::E0101 => "E0101",
             Code::E0102 => "E0102",
+            Code::E0301 => "E0301",
+            Code::E0302 => "E0302",
             Code::E0303 => "E0303",
+            Code::E0304 => "E0304",
+            Code::E0305 => "E0305",
             Code::E0401 => "E0401",
             Code::E0403 => "E0403",
             Code::E0002 => "E0002",

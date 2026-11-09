@@ -1,9 +1,9 @@
 //! 静的検査（仕様 §6）とプロジェクトの読み込み（仕様 §3）。
 //!
-//! 入口は [`project::load`] と [`check`]。M2 で実装するのは §6.2〜§6.5（線形性、領域添字、
-//! 絞り込みの署名展開、索引と名前解決）。§6.1（剥がし一致）と §6.6（自己完結）は `.eykp` が
-//! 来る M3、部分集合型・trait の契約は M4、性質ファイルは M5 で、どれも書かれていれば
-//! `E0003`（未実装）にする。
+//! 入口は [`project::load`] と [`check`]。§6.1（剥がし一致、[`strip`]）と §6.2〜§6.5（線形性、領域添字、
+//! 絞り込みの署名展開、索引と名前解決）を実装している。§6.2〜§6.5 が見るのは `.eyk` だけ（`.eykp` の
+//! 本体の検査は #67）。§6.6（自己完結）は M3、部分集合型・trait の契約は M4、性質ファイルは M5 で、
+//! どれも書かれていれば `E0003`（未実装）にする。
 
 pub mod body;
 pub mod ensures;
@@ -12,6 +12,7 @@ pub mod index;
 pub mod names;
 pub mod project;
 pub mod sig;
+pub mod strip;
 pub mod zst;
 
 use ebykn_syntax::ast::{self, ItemKind, Param, TraitItemKind};
@@ -81,6 +82,7 @@ pub fn check(project: &Project) -> Checked {
     project.for_each_module(|m, _, items| check_items(&index, m, items, &mut diags, &mut facts));
     names::check(project, &index, &mut diags);
     zst::check(project, &index, &mut diags);
+    strip::check(project, &mut diags);
     let mut list = diags.list;
     sort_diags(&mut list);
     Checked {

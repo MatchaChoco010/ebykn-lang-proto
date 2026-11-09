@@ -3,17 +3,17 @@
 //! モジュールは Rust と同じ規則で探す。`src/lib.eyk`（か `src/main.eyk`）がクレートルートで、
 //! `mod foo;` は `foo.eyk` か `foo/mod.eyk`。`mod.eyk` でないファイル `src/a.eyk` の中の `mod b;` は
 //! `src/a/b.eyk` か `src/a/b/mod.eyk`、インラインの `mod x { mod y; }` は `x/` の下を探す。
-//! まだ実装しない機能（`.eykp`、性質ファイル、`[props]`、`[ebykn-dependencies]`）は、
-//! 黙って無視せず `E0003` にする。
+//! 証明ファイル `proof/<p>.eykp` は `src/<p>.eyk` のモジュールに対応づけて読む（§3.1）。
+//! まだ実装しない機能（性質ファイル、`[props]`、`[ebykn-dependencies]`）は、黙って無視せず `E0003` にする。
 
 use std::path::{Path, PathBuf};
 
 use ebykn_syntax::ast::{self, ItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
-use ebykn_syntax::parse_eyk;
 use ebykn_syntax::reserved::DeferredName;
 use ebykn_syntax::reserved::{RESERVED_CRATE_NAMES, RESERVED_DEPENDENCY_NAMES};
 use ebykn_syntax::span::{FileId, SourceFile, Span};
+use ebykn_syntax::{parse_eyk, parse_eykp};
 use toml::de::{DeTable, DeValue};
 
 /// `Ebykn.toml` の値（`[dependencies]` を `build/verus/Cargo.toml` に写すために持つ）。
@@ -49,6 +49,18 @@ pub struct FileModule {
     pub rel: String,
 }
 
+/// 一つの証明ファイル `proof/<p>.eykp` と、対応する `src/<p>.eyk`（仕様 §3.1）。
+#[derive(Debug, Clone)]
+pub struct ProofFile {
+    pub file: FileId,
+    /// 対応する `.eyk` のファイル。
+    pub src: FileId,
+    /// 対応するモジュールのパス（ルートは空）。
+    pub module: Vec<String>,
+    /// プロジェクトのルートからの相対パス（`proof/foo/mod.eykp`）。
+    pub rel: String,
+}
+
 /// 読み込んだプロジェクト。
 #[derive(Debug)]
 pub struct Project {
@@ -60,8 +72,12 @@ pub struct Project {
     pub asts: Vec<Option<ast::File>>,
     /// `files` と同じ番号の、構文解析が検査に任せた名前（[`ebykn_syntax::reserved`]）。
     pub deferred: Vec<Vec<(Span, DeferredName)>>,
+    /// `files` と同じ番号の、構文解析の診断が出なかったか（`.eyk` / `.eykp` でないファイルは `false`）。
+    pub parsed_ok: Vec<bool>,
     /// 見つけた `.eyk`（クレートルートが先頭）。
     pub modules: Vec<FileModule>,
+    /// 対応する `.eyk` のある証明ファイル（パスの順）。
+    pub proofs: Vec<ProofFile>,
     /// クレートルートが `src/main.eyk` か。
     pub bin: bool,
 }
@@ -150,14 +166,35 @@ pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
         files: vec![manifest, file],
         asts: vec![None, Some(parsed.file)],
         deferred: vec![Vec::new(), parsed.deferred],
+        parsed_ok: vec![false, parsed.diags.is_empty()],
         modules: vec![FileModule {
             file: FileId(1),
             module: Vec::new(),
             rel: "src/lib.eyk".into(),
         }],
+        proofs: Vec::new(),
         bin: false,
     };
     (p, parsed.diags)
+}
+
+/// ファイルを読まずに、`src/lib.eyk` と `proof/lib.eykp` だけのプロジェクトを作る（テスト用）。
+pub fn single_with_proof(src: &str, proof: &str) -> (Project, Vec<Diagnostic>) {
+    let (mut p, mut diags) = single(src);
+    let file = SourceFile::new(FileId(2), "proof/lib.eykp", proof);
+    let parsed = parse_eykp(&file);
+    diags.extend(parsed.diags.iter().cloned());
+    p.parsed_ok.push(parsed.diags.is_empty());
+    p.files.push(file);
+    p.asts.push(Some(parsed.file));
+    p.deferred.push(parsed.deferred);
+    p.proofs.push(ProofFile {
+        file: FileId(2),
+        src: FileId(1),
+        module: Vec::new(),
+        rel: "proof/lib.eykp".into(),
+    });
+    (p, diags)
 }
 
 /// `dir` から上へ `Ebykn.toml` を探す。
@@ -187,7 +224,9 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         files: vec![manifest_file],
         asts: vec![None],
         deferred: vec![Vec::new()],
+        parsed_ok: vec![false],
         modules: Vec::new(),
+        proofs: Vec::new(),
         bin: false,
     };
     match &manifest_text {
@@ -200,7 +239,10 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
             }),
         )),
     }
-    scan_unsupported(&mut p, &mut diags);
+    let mut found = Vec::new();
+    walk_dir(&p.root, &p.root, &mut found);
+    found.sort();
+    scan_unsupported(&mut p, &found, &mut diags);
     let lib = root.join("src/lib.eyk").is_file();
     let main = root.join("src/main.eyk").is_file();
     let at0 = p.files[0].span(0, 0);
@@ -219,6 +261,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
                 at0,
                 Message::Check(CheckMsg::CrateRootMissing),
             ));
+            load_proofs(&mut p, &found, &mut diags);
             return (p, diags);
         }
     };
@@ -226,7 +269,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
     // (モジュールのパス, ファイルの相対パス, 子を探すディレクトリ)
     let mut queue = vec![(Vec::new(), rel.to_string(), "src".to_string())];
     while let Some((module, rel, dir)) = queue.pop() {
-        let Some(id) = parse_file(&mut p, &rel, &mut diags) else {
+        let Some(id) = parse_file(&mut p, &rel, false, &mut diags) else {
             continue;
         };
         p.modules.push(FileModule {
@@ -269,7 +312,67 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
     }
     // クレートルートを先頭に、あとはパスの順に並べる（出力を決定的にする）。
     p.modules.sort_by(|x, y| x.module.cmp(&y.module));
+    load_proofs(&mut p, &found, &mut diags);
     (p, diags)
+}
+
+/// 証明ファイルを読む（仕様 §3.1）。`proof/<p>.eykp` は `src/<p>.eyk` のモジュールに対応する。対応する
+/// モジュールがなければ E0301、`proof/` の外の `.eykp`（`props/` の下は性質ファイル）と `proof/` の中の
+/// `.eyk` は E0302。`found` はプロジェクトのファイルの相対パス（名前の順）。
+fn load_proofs(p: &mut Project, found: &[String], diags: &mut Vec<Diagnostic>) {
+    for rel in found {
+        let in_proof = rel.starts_with("proof/");
+        let misplaced = if rel.ends_with(".eykp") {
+            !in_proof && !rel.starts_with("props/")
+        } else {
+            in_proof && rel.ends_with(".eyk")
+        };
+        if misplaced {
+            let id = push_unread(p, rel);
+            diags.push(Diagnostic::new(
+                p.files[id.0 as usize].span(0, 0),
+                Message::Check(CheckMsg::ProofMisplaced {
+                    eyk: rel.ends_with(".eyk"),
+                }),
+            ));
+            continue;
+        }
+        if !(in_proof && rel.ends_with(".eykp")) {
+            continue;
+        }
+        let stem = &rel["proof/".len()..rel.len() - ".eykp".len()];
+        let src_rel = format!("src/{stem}.eyk");
+        let Some(m) = p.modules.iter().find(|m| m.rel == src_rel).cloned() else {
+            let id = push_unread(p, rel);
+            diags.push(Diagnostic::new(
+                p.files[id.0 as usize].span(0, 0),
+                Message::Check(CheckMsg::ProofWithoutSource {
+                    exists: found.contains(&src_rel),
+                    src: src_rel,
+                }),
+            ));
+            continue;
+        };
+        let Some(id) = parse_file(p, rel, true, diags) else {
+            continue;
+        };
+        p.proofs.push(ProofFile {
+            file: id,
+            src: m.file,
+            module: m.module,
+            rel: rel.clone(),
+        });
+    }
+}
+
+/// 中を読まないファイル（診断の位置にだけ使う）を足す。
+fn push_unread(p: &mut Project, rel: &str) -> FileId {
+    let id = FileId(p.files.len() as u32);
+    p.files.push(SourceFile::new(id, rel, ""));
+    p.asts.push(None);
+    p.deferred.push(Vec::new());
+    p.parsed_ok.push(false);
+    id
 }
 
 /// `mod foo;` を集める。インラインの `mod x { .. }` の中は `x/` の下を探す。
@@ -293,7 +396,13 @@ fn collect_mods(
     }
 }
 
-fn parse_file(p: &mut Project, rel: &str, diags: &mut Vec<Diagnostic>) -> Option<FileId> {
+/// `proof` なら `.eykp` として読む。
+fn parse_file(
+    p: &mut Project,
+    rel: &str,
+    proof: bool,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<FileId> {
     let id = FileId(p.files.len() as u32);
     let text = match std::fs::read_to_string(p.root.join(rel)) {
         Ok(t) => t,
@@ -309,14 +418,19 @@ fn parse_file(p: &mut Project, rel: &str, diags: &mut Vec<Diagnostic>) -> Option
         }
     };
     let file = SourceFile::new(id, rel, text);
-    let parsed = parse_eyk(&file);
+    let parsed = if proof {
+        parse_eykp(&file)
+    } else {
+        parse_eyk(&file)
+    };
     let edition = p.manifest.edition.clone();
-    diags.extend(
-        parsed
-            .diags
-            .into_iter()
-            .filter(|d| keeps_edition_keyword(d, &edition)),
-    );
+    let kept: Vec<Diagnostic> = parsed
+        .diags
+        .into_iter()
+        .filter(|d| keeps_edition_keyword(d, &edition))
+        .collect();
+    p.parsed_ok.push(kept.is_empty());
+    diags.extend(kept);
     p.files.push(file);
     p.asts.push(Some(parsed.file));
     p.deferred.push(parsed.deferred);
@@ -334,29 +448,17 @@ fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
     }
 }
 
-/// まだ読めないファイル（`.eykp` と `props/` の下）を探し、`E0003` にする。
-fn scan_unsupported(p: &mut Project, diags: &mut Vec<Diagnostic>) {
-    let mut found = Vec::new();
-    walk_dir(&p.root, &p.root, &mut found);
-    found.sort();
+/// まだ読めないファイル（`props/` の下の性質ファイル）を探し、`E0003` にする。
+fn scan_unsupported(p: &mut Project, found: &[String], diags: &mut Vec<Diagnostic>) {
     for rel in found {
-        let what = if rel.starts_with("props/") && (rel.ends_with(".eyk") || rel.ends_with(".eykp"))
-        {
-            Unimpl::PropsDir
-        } else if rel.ends_with(".eykp") {
-            Unimpl::Eykp
-        } else {
+        if !(rel.starts_with("props/") && (rel.ends_with(".eyk") || rel.ends_with(".eykp"))) {
             continue;
-        };
-        let id = FileId(p.files.len() as u32);
-        let file = SourceFile::new(id, rel, "");
+        }
+        let id = push_unread(p, rel);
         diags.push(Diagnostic::new(
-            file.span(0, 0),
-            Message::Check(CheckMsg::Unimplemented(what)),
+            p.files[id.0 as usize].span(0, 0),
+            Message::Check(CheckMsg::Unimplemented(Unimpl::PropsDir)),
         ));
-        p.files.push(file);
-        p.asts.push(None);
-        p.deferred.push(Vec::new());
     }
 }
 
