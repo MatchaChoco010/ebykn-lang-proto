@@ -9,6 +9,8 @@
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+pub use crate::sites::ErrorSites;
+
 use ebykn_check::project::Project;
 use ebykn_lower::{Deps, OutFile, Output};
 
@@ -203,6 +205,8 @@ pub struct VerusError {
     pub loc: Option<String>,
     /// このエラーの診断の全文（見出しから、次の見出しかまとめの行の前まで）。
     pub block: String,
+    /// このエラーが指す生成コードの行（[`crate::sites::error_sites`]）。
+    pub sites: ErrorSites,
 }
 
 /// 検証の要約。
@@ -216,8 +220,8 @@ pub enum Summary {
 
 impl Run {
     /// エラーごとの生成コードの位置（[`statuses`] に渡す形）。
-    pub fn locations(&self) -> Vec<Option<(String, usize)>> {
-        self.errors.iter().map(|e| e.at.clone()).collect()
+    pub fn locations(&self) -> Vec<ErrorSites> {
+        self.errors.iter().map(|e| e.sites.clone()).collect()
     }
 
     /// Verus が失敗したのに検証のエラーが 0 件（または件数がない）なら、検証の前に止まった。
@@ -381,6 +385,7 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
                     at: None,
                     loc: None,
                     block: String::new(),
+                    sites: ErrorSites::default(),
                 });
                 pending = true;
                 current = Some(errors.len() - 1);
@@ -427,6 +432,9 @@ pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError
         }
         text.push_str(line);
         text.push('\n');
+    }
+    for e in &mut errors {
+        e.sites = crate::sites::error_sites(&e.block);
     }
     (text, errors)
 }
@@ -488,8 +496,10 @@ pub struct ItemFacts {
     pub unchecked: bool,
     /// `#[test]`（`#[verifier::external]`。Verus は見ない）。
     pub external: bool,
-    /// Verus のエラーがこの項目の行にある。
+    /// Verus のエラーの失敗の場所がこの項目の行にある（[`ErrorSites::blamed`]）。
     pub error: bool,
+    /// Verus のエラーがこの項目の行を副の位置として指す（[`ErrorSites::related`]。PR #76 のレビューの B1）。
+    pub related: bool,
     /// Verus の `func-details` にこの項目の関数がある（Verus が見た）。
     pub checked: bool,
     /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）。
@@ -508,7 +518,8 @@ pub struct ItemFacts {
 ///   優先する（その項目にエラーがあっても `failed` にしない。エラーの場所は、標準エラーに出す Verus の診断の
 ///   生成コードの位置で示される）。
 /// - `failed`：その項目にエラーがある。
-/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、割り当てられないエラーがあるか、
+/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、エラーが副の位置としてその項目を指すか、
+///   割り当てられないエラーがあるか、
 ///   Verus が検証の前に止まった（コンパイルエラーなど。#43）か、紛れ込んだ前提がある
 ///   （[`ItemFacts::tainted`]、#37）。`verify` を成功にしない。
 pub fn decide(f: ItemFacts) -> &'static str {
@@ -520,7 +531,7 @@ pub fn decide(f: ItemFacts) -> &'static str {
         "external"
     } else if f.error {
         "failed"
-    } else if !f.checked || f.stray_errors || f.stopped || f.tainted {
+    } else if !f.checked || f.related || f.stray_errors || f.stopped || f.tainted {
         "unknown"
     } else {
         "verified"
@@ -534,7 +545,7 @@ pub fn decide(f: ItemFacts) -> &'static str {
 pub fn statuses(
     files: &[OutFile],
     output: &Output,
-    errors: &[Option<(String, usize)>],
+    errors: &[ErrorSites],
     checked: Option<&std::collections::BTreeSet<String>>,
     summary: Summary,
     tainted: bool,
@@ -579,22 +590,24 @@ pub fn statuses(
             .iter()
             .any(|f| f.rel == file && f.items.iter().any(|(s, e, _)| *s <= line && line <= *e))
     };
-    let stray = errors.iter().any(|e| match e {
-        Some((file, line)) => !in_item(file, *line),
-        None => true,
-    }) || error_count.is_some_and(|n| n != errors.len() as u64);
+    // 失敗の場所がないか、項目の外にあるエラーは、どの項目にも割り当てられない。
+    let stray = errors
+        .iter()
+        .any(|e| e.blamed.is_empty() || e.blamed.iter().any(|(file, line)| !in_item(file, *line)))
+        || error_count.is_some_and(|n| n != errors.len() as u64);
     let mut out = Vec::new();
     for f in files {
         for (start, end, item) in &f.items {
-            let error = errors
-                .iter()
-                .flatten()
-                .any(|(file, line)| *file == f.rel && start <= line && line <= end);
+            let here =
+                |(file, line): &(String, usize)| *file == f.rel && start <= line && line <= end;
+            let error = errors.iter().any(|e| e.blamed.iter().any(here));
+            let related = errors.iter().any(|e| e.related.iter().any(here));
             let facts = ItemFacts {
                 admitted: output.admitted.contains(item),
                 unchecked: output.unchecked.contains(item),
                 external: output.external.contains(item),
                 error,
+                related,
                 checked: {
                     let n = verus_of(item);
                     !shared(&n) && n.is_some_and(|n| checked.is_some_and(|c| c.contains(&n)))
@@ -742,6 +755,7 @@ mod tests {
             unchecked: false,
             external: false,
             error: false,
+            related: false,
             checked: true,
             stray_errors: false,
             stopped: false,
@@ -784,6 +798,14 @@ mod tests {
         assert_eq!(
             decide(ItemFacts {
                 checked: false,
+                ..facts()
+            }),
+            "unknown"
+        );
+        // エラーが副の位置としてこの項目を指す（PR #76 のレビューの B1）。
+        assert_eq!(
+            decide(ItemFacts {
+                related: true,
                 ..facts()
             }),
             "unknown"
@@ -876,7 +898,7 @@ mod tests {
         let st = statuses(
             &files,
             &output,
-            &[Some(("src/lib.rs".into(), 7))],
+            &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
             Summary::Ran {
                 verified: 1,
@@ -896,7 +918,14 @@ mod tests {
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
         // 項目に入らないエラーがあれば、失敗していない項目は unknown。
-        let st = statuses(&files, &output, &[None], Some(&checked), ran(1), false);
+        let st = statuses(
+            &files,
+            &output,
+            &[ErrorSites::default()],
+            Some(&checked),
+            ran(1),
+            false,
+        );
         assert_eq!(st[0].status, "unknown");
         // func-details がなければ unknown。
         let st = statuses(&files, &output, &[], None, ran(0), false);
@@ -908,7 +937,7 @@ mod tests {
         let st = statuses(
             &files,
             &output,
-            &[Some(("src/lib.rs".into(), 7))],
+            &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
             ran(1),
             true,
@@ -921,7 +950,7 @@ mod tests {
         let st = statuses(
             &files,
             &output,
-            &[Some(("src/lib.rs".into(), 7))],
+            &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
             stopped,
             false,
@@ -935,6 +964,58 @@ mod tests {
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
         );
+    }
+
+    /// PR #76 のレビューの B1：主な span が呼ばれる側の署名にあるエラー（`callee may open invariants that
+    /// caller cannot`）は、呼び出しのある `drop` を failed にし、呼ばれる側を failed にしない。
+    #[test]
+    fn errors_are_assigned_by_their_labels() {
+        let files = vec![OutFile {
+            rel: "src/lib.rs".into(),
+            text: String::new(),
+            items: vec![
+                (10, 11, "drop::helper".into()),
+                (13, 13, "drop::C".into()),
+                (15, 20, "drop::C::drop".into()),
+                (22, 23, "drop::other".into()),
+            ],
+        }];
+        let output = Output {
+            files: files.clone(),
+            ..Default::default()
+        };
+        let checked: std::collections::BTreeSet<String> =
+            ["drop::helper", "drop::C::drop", "drop::other"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let raw = "error: callee may open invariants that caller cannot
+  --> src/lib.rs:10:1
+   |
+10 | pub fn helper(x: u64) -> u64
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invariants opened by callee
+...
+16 |     fn drop(&mut self) opens_invariants none
+   |                                         ^^^^ invariants opened by caller
+17 |     no_unwind {
+18 |         self.a = helper(self.a);
+   |                  ^^^^^^^^^^^^^^ at this call-site
+
+error: could not compile `drop` (lib) due to 1 previous error
+";
+        let (_, errors) = read_diagnostics(raw, false);
+        let sites: Vec<ErrorSites> = errors.iter().map(|e| e.sites.clone()).collect();
+        let st = statuses(&files, &output, &sites, Some(&checked), ran(1), false);
+        let got: Vec<&str> = st.iter().map(|s| s.status).collect();
+        assert_eq!(got, ["verified", "unknown", "failed", "verified"]);
+        // 副の位置（`-` のラベル）だけが指す項目は、verified にしない。
+        let related = ErrorSites {
+            blamed: vec![("src/lib.rs".into(), 16)],
+            related: vec![("src/lib.rs".into(), 22)],
+        };
+        let st = statuses(&files, &output, &[related], Some(&checked), ran(1), false);
+        let got: Vec<&str> = st.iter().map(|s| s.status).collect();
+        assert_eq!(got, ["verified", "unknown", "failed", "unknown"]);
     }
 
     #[test]
@@ -1085,6 +1166,7 @@ mod tests {
             at: Some(("src/lib.rs".into(), 22)),
             loc: Some("src/lib.rs:22:19".into()),
             block: String::new(),
+            sites: ErrorSites::default(),
         };
         let ran = Summary::Ran {
             verified: 1,

@@ -590,7 +590,9 @@ fn int_type(t: &ast::Type) -> bool {
         "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize")))
 }
 
-fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
+/// `drop_fn` は std の `Drop` の impl の `fn drop`（#61）。Verus は `opens_invariants none` と
+/// `no_unwind` のない `Drop` の実装を拒否し、利用者はどちらも `.eyk` に書けないので、書き下しが足す。
+fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
     let mut c = fn_cx(cx, &f.sig, &f.contract);
     let exp = cx
         .facts
@@ -612,10 +614,19 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
         cx.report.borrow_mut().unchecked.push(path);
     }
     let v = vis(&item.vis);
+    let sig = |c: &mut Cx| {
+        let s = sig_text(c, &f.sig, &f.contract, &exp);
+        // `Drop` の `fn drop` の契約（`no_panic` を含む）は検査が E0003 にするので、`s` は句を持たない。
+        if drop_fn {
+            format!("{s} opens_invariants none no_unwind")
+        } else {
+            s
+        }
+    };
     match &f.body {
-        None => format!("{a}{v}{};", sig_text(&mut c, &f.sig, &f.contract, &exp)),
+        None => format!("{a}{v}{};", sig(&mut c)),
         Some(ast::FnBody::Block(b)) => {
-            let sig = sig_text(&mut c, &f.sig, &f.contract, &exp);
+            let sig = sig(&mut c);
             let body = c.body_block(b);
             format!("{a}{v}{sig} {}", rebind_owned(&f.contract, body))
         }
@@ -910,6 +921,13 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
                             .unwrap_or_default();
                         out.push(tokens(
                             format!("{}{kwv} spec {sig} {{ {body} }}", attrs(&m.attrs)),
+                            Some(c.item_path(&f.sig.ident.name)),
+                            indent + 1,
+                        ));
+                    }
+                    ItemKind::Fn(f) if kind == ImplTrait::Drop && f.sig.ident.name == "drop" => {
+                        out.push(tokens(
+                            fn_text(&c, m, f, true),
                             Some(c.item_path(&f.sig.ident.name)),
                             indent + 1,
                         ));

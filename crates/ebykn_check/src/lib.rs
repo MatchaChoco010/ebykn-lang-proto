@@ -150,7 +150,7 @@ pub fn check_nested_items(
         let ebykn = match &item.kind {
             ItemKind::Impl(imp) => !matches!(
                 index.impl_trait(module, imp),
-                ImplTrait::Inherent | ImplTrait::Other
+                ImplTrait::Inherent | ImplTrait::Drop | ImplTrait::Other
             ),
             ItemKind::Struct(s) => s.owns.is_some() || s.spec.is_some(),
             ItemKind::Mod(_) => true,
@@ -346,7 +346,7 @@ fn check_impl(
             }
             return;
         }
-        ImplTrait::Inherent | ImplTrait::Other => {}
+        ImplTrait::Inherent | ImplTrait::Drop | ImplTrait::Other => {}
     }
     let own_impl = kind == ImplTrait::Inherent;
     for item in &imp.items {
@@ -363,6 +363,10 @@ fn check_impl(
                         is_pub: true,
                     };
                     let exp = sig::expand(&scx, &f.sig, &mut probe);
+                    if f.contract.is_empty() && !exp.is_empty() && kind == ImplTrait::Drop {
+                        unimpl(diags, item.span, Unimpl::InvariantDrop);
+                        continue;
+                    }
                     if !f.contract.is_empty() || !exp.is_empty() {
                         unimpl(diags, item.span, Unimpl::ContractTrait);
                         continue;
