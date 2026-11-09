@@ -18,3 +18,11 @@ pub fn h(x: u32) -> u32 {
         _ => 2,
     }
 }
+
+// std のマクロの引数の中の属性（PR #26 の 3 回目の確認。根本の対策は #28）。
+pub fn p() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }
+
+pub fn q(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }
+
+// 本体の中で定義した構造体の欄。
+pub fn s() { struct T { #[cfg(test)] a: u32, b: u32 } }

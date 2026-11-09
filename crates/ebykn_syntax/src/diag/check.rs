@@ -134,6 +134,8 @@ pub enum Unimpl {
     MacroFirstLast,
     /// 関数の本体の中の `cfg!` と `#[cfg(..)]`（#27 の既定 B）。
     CfgInBody,
+    /// std のマクロの引数の中の属性（トークンのまま持つので検査できない。#28）。
+    AttrInMacro,
 }
 
 impl Unimpl {
@@ -202,6 +204,12 @@ impl Unimpl {
             }
             (Unimpl::NestedAssumption, Lang::Ja) => {
                 "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
+            }
+            (Unimpl::AttrInMacro, Lang::En) => {
+                "attributes (`#[..]`) inside the arguments of this macro are not supported yet, because Ebykn does not read them (an attribute such as `#[cfg(..)]` could make the verified code differ from the built code); move the code out of the macro"
+            }
+            (Unimpl::AttrInMacro, Lang::Ja) => {
+                "このマクロの引数の中の属性（`#[..]`）はまだ扱えません。Ebykn が引数を読まないためです（`#[cfg(..)]` などで、検証するコードとビルドするコードが食い違いうる）。コードをマクロの外に出します"
             }
             (Unimpl::CfgInBody, Lang::En) => {
                 "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"

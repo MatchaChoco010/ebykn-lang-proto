@@ -460,7 +460,35 @@ fn cfg_inside_functions_is_e0003() {
     ] {
         rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
     }
+    // 本体の中で定義した構造体・列挙の欄と列挙子（PR #26 の 3 回目の確認）。
+    for src in [
+        "pub fn p() { struct T { #[cfg(test)] a: u32, b: u32 } }",
+        "pub fn q() { struct T(#[cfg(test)] u32, u32); }",
+        "pub fn s() { enum E { #[cfg(test)] A, B } }",
+        "pub fn t() { enum E { A { #[cfg(test)] a: u32 }, B } }",
+    ] {
+        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+    }
     // 項目に付ける #[cfg] と、cfg を含まない cfg_attr は今のまま。
     accepts("#[cfg(test)]\npub fn f() {}");
     accepts("pub fn f() { #[cfg_attr(test, inline)] let y = 1; }");
+}
+
+/// std のマクロの引数はトークンのまま持つので、その中の属性はどれも E0003（PR #26 の 3 回目の確認、#28）。
+#[test]
+fn attributes_inside_std_macro_arguments_are_e0003() {
+    for src in [
+        "pub fn f() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }",
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
+        "pub fn h() { assert!({ #[inline] let y = 1; y == 1 }); }",
+        "pub fn k() { assert!({ #![allow(unused)] true }); }",
+    ] {
+        rejects(
+            src,
+            "E0003",
+            "attributes (`#[..]`) inside the arguments of this macro",
+        );
+    }
+    // 属性でない `#` は今のまま（文字列の中や、`[` の続かない `#`）。
+    accepts("pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }");
 }

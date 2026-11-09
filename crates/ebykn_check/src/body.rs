@@ -542,6 +542,30 @@ impl<'a> Walker<'a> {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
                 self.no_cfg(&item.attrs, item.span);
+                // 本体の中で定義した構造体・列挙の欄と列挙子の `#[cfg]` も同じ（PR #26 の 3 回目の確認）。
+                let mut fields: Vec<&ast::Field> = Vec::new();
+                match &item.kind {
+                    ast::ItemKind::Struct(st) => {
+                        if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &st.fields {
+                            fields.extend(fs);
+                        }
+                        for sec in [&st.owns, &st.spec].into_iter().flatten() {
+                            fields.extend(&sec.fields);
+                        }
+                    }
+                    ast::ItemKind::Enum(en) => {
+                        for v in &en.variants {
+                            self.no_cfg(&v.attrs, v.span);
+                            if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &v.fields {
+                                fields.extend(fs);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                for f in fields {
+                    self.no_cfg(&f.attrs, f.span);
+                }
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
