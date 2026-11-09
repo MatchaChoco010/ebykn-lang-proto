@@ -10,6 +10,7 @@ pub mod gate_tests;
 pub mod md_links;
 pub mod md_tables;
 pub mod prelude_exports;
+pub mod vendor_commits;
 pub mod verus_pin;
 pub mod verus_probes;
 
@@ -57,6 +58,10 @@ pub const ALL: &[Gate] = &[
     Gate {
         name: "check-attr-names",
         run: attr_names::run,
+    },
+    Gate {
+        name: "check-vendor-commits",
+        run: vendor_commits::run,
     },
 ];
 

@@ -46,7 +46,10 @@ jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
+      # check-vendor-commits が HEAD から辿れるコミットを全部見るので、全履歴を取り出す。
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask gates

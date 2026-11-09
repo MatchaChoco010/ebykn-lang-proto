@@ -29,6 +29,7 @@ const USAGE: &str = "\
   check-prelude-exports  ebykn_prelude が vstd を許した名前のほかに再公開しない
   check-examples    examples/ の各例に Ebykn.toml と README があり、README の ```console を読める
   check-attr-names  組み込みの属性の名前を、raw の綴り（r#cfg）を見逃す形で比べない
+  check-vendor-commits  vendor/ を変えるコミットが vendor/ の外を変えない（全履歴が要る）
 
   verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
   verus-verify      ebykn_prelude と §6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
