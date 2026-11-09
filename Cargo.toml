@@ -4,8 +4,8 @@ members = ["crates/*", "xtask"]
 # Verus のクレートは Verus の toolchain で検証する（`cargo xtask verus-verify`）。
 # 外部から取り込んだコード（AGENTS.md「外部から取り込むコード」）は path 依存で使い、
 # メンバーにしない（cargo fmt と clippy --workspace の対象から外す）。
-# 例のプロジェクト（examples/）と、その写し（playground/ と、examples-verify の target/examples/）が
-# 書き出す build/verus/ も、このワークスペースに入れない。
+# 例のプロジェクト（examples/）と、その写し（playground/ と、examples-verify の target/examples/）、
+# dogfooding の記録（eval/）のプロジェクトが書き出す build/verus/ も、このワークスペースに入れない（#78）。
 exclude = [
     "crates/ebykn_prelude",
     "tests/golden",
@@ -14,6 +14,7 @@ exclude = [
     "examples",
     "playground",
     "target/examples",
+    "eval",
 ]
 
 [workspace.package]
