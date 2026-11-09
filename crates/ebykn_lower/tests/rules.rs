@@ -550,3 +550,21 @@ fn foreign_impl_test_methods_are_listed() {
     let out = lower(&p, &c).unwrap();
     assert_eq!(out.external, ["single::<u64 as Tr>::e"]);
 }
+
+#[test]
+fn owned_regions_are_rebound_as_mut() {
+    // #90：値で受けた領域は本体の先頭で `mut` に束縛し直す（Verus は引数のパターン
+    // `Tracked(mut r)` を受け付けない）。参照で受けた領域は束縛し直さない。
+    let src = format!(
+        "{PRE}fn f(v: u64) uses r: Region<Ptr<Node>>, s: &mut Region<Ptr<Node>> {{ let p = Ptr::new(Node {{ val: v }}); put r[p]; }}"
+    );
+    has(
+        &src,
+        "Tracked(r): Tracked<Region<Ptr<Node>>>, Tracked(s): Tracked<&mut Region<Ptr<Node>>>",
+    );
+    has(
+        &src,
+        "#[allow(unused_mut)] let tracked mut r = r; let (p, Tracked(__eyk_perm_p)) = Ptr::new",
+    );
+    lacks(&src, "let tracked mut s");
+}

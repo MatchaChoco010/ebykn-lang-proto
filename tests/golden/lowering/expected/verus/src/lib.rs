@@ -142,4 +142,24 @@ pub open spec fn all_pos(s: Seq < int >) -> bool { (forall | i: int | 0 <= i < s
 
 pub open spec fn some_pos(s: Seq < int >) -> bool { (exists | x | s.contains(x) && ((x == 1) || (x == 2))) }
 
+pub struct Bag { items: Tracked < Region < Ptr < Node >>>, }
+
+impl Bag {
+    fn with_node(v: u64, Tracked(r): Tracked < Region < Ptr < Node >>>) -> (b: Bag)
+    ensures (forall | q | r.contains(q) ==> b.items@.contains(q)), {
+        #[allow(unused_mut)] let tracked mut r = r;
+        let (p, Tracked(__eyk_perm_p)) = Ptr::new(Node { val: v, next: None });
+        proof {
+            r.insert(__eyk_perm_p);
+        }
+        Bag { items: Tracked(r) }
+    }
+
+}
+
+pub fn wrap(n: u64, Tracked(items): Tracked < Region < Ptr < Node >>>) -> Bag {
+    #[allow(unused_mut)] let tracked mut items = items;
+    Bag { items: Tracked(items) }
+}
+
 } // verus!

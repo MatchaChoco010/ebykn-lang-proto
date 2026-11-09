@@ -18,4 +18,6 @@ verified lowering::total
 verified lowering::quant
 verified lowering::all_pos
 verified lowering::some_pos
-results 16 verified, 0 errors
+verified lowering::Bag::with_node
+verified lowering::wrap
+results 18 verified, 0 errors

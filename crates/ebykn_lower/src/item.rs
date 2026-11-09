@@ -616,9 +616,32 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
         None => format!("{a}{v}{};", sig_text(&mut c, &f.sig, &f.contract, &exp)),
         Some(ast::FnBody::Block(b)) => {
             let sig = sig_text(&mut c, &f.sig, &f.contract, &exp);
-            format!("{a}{v}{sig} {}", c.body_block(b))
+            let body = c.body_block(b);
+            format!("{a}{v}{sig} {}", rebind_owned_regions(&f.contract, body))
         }
         Some(ast::FnBody::Pure(e)) => pure_fn(&mut c, &a, &item.vis, f, e, &exp),
+    }
+}
+
+/// 値で受けた領域（`uses r: Region<..>`）は持っているので、`take` / `put` / `&mut r` で変更できるよう、
+/// 本体の先頭で `mut` に束縛し直す（#90）。Verus は引数のパターン `Tracked(mut r)` を受け付けない。
+/// 変更しない関数で `unused_mut` の警告を出さない。
+fn rebind_owned_regions(contract: &ast::Contract, body: String) -> String {
+    let lets: String = contract
+        .uses()
+        .filter_map(|u| match u {
+            UsesItem::Named { ident: i, ty, .. }
+                if !matches!(ty.kind, ast::TypeKind::Ref { .. }) =>
+            {
+                let r = ident(i);
+                Some(format!("#[allow(unused_mut)] let tracked mut {r} = {r}; "))
+            }
+            _ => None,
+        })
+        .collect();
+    match body.strip_prefix('{') {
+        Some(rest) if !lets.is_empty() => format!("{{ {lets}{rest}"),
+        _ => body,
     }
 }
 
