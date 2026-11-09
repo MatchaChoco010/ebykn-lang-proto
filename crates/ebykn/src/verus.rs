@@ -12,6 +12,7 @@ use std::process::Command;
 use ebykn_check::project::Project;
 use ebykn_lower::{Deps, OutFile, Output};
 
+use crate::no_cheating::{self, Cheating};
 use crate::{VerusPin, verus_pin};
 
 /// 見つけた Verus。
@@ -171,6 +172,8 @@ pub enum Mode {
     Verify,
     /// `cargo verus build`。
     Build,
+    /// `verus --no-cheating --no-verify`（証明の前提の拒否だけを見る。`crate::no_cheating`）。
+    NoCheating,
 }
 
 /// Verus の実行の結果。
@@ -180,10 +183,21 @@ pub struct Run {
     pub text: String,
     /// 検証の件数（`--output-json` の `verification-results` か、`verification results::` の行）。
     pub results: Option<(u64, u64)>,
-    /// エラーごとの主な位置（`build/verus/` からの相対パスと行）。生成コードの外か位置がないものは `None`。
-    pub errors: Vec<Option<(String, usize)>>,
+    /// エラーごとの文言と位置。
+    pub errors: Vec<VerusError>,
     /// Verus が検証した関数（`--output-json` の `func-details` の鍵）。
     pub checked: Option<std::collections::BTreeSet<String>>,
+}
+
+/// Verus のエラーの一つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerusError {
+    /// 見出しの文言（`error: ` / `error[E..]: ` の後）。
+    pub message: String,
+    /// 主な位置（`build/verus/` からの相対パスと行）。生成コードの外か位置がないものは `None`。
+    pub at: Option<(String, usize)>,
+    /// 主な位置の `-->` の後（`src/lib.rs:19:19`、生成コードの外の絶対パスなども）。
+    pub loc: Option<String>,
 }
 
 /// 検証の要約。
@@ -196,6 +210,11 @@ pub enum Summary {
 }
 
 impl Run {
+    /// エラーごとの生成コードの位置（[`statuses`] に渡す形）。
+    pub fn locations(&self) -> Vec<Option<(String, usize)>> {
+        self.errors.iter().map(|e| e.at.clone()).collect()
+    }
+
     /// Verus が失敗したのに検証のエラーが 0 件（または件数がない）なら、検証の前に止まった。
     /// `--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出すので、件数だけでは
     /// 見分けられない（PR #26 の確認）。
@@ -242,6 +261,7 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
             "--output-json",
         ]),
         Mode::Build => cmd.args(["verus", "build"]),
+        Mode::NoCheating => cmd.args(["verus", "focus", "--", "--no-cheating", "--no-verify"]),
     };
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
     // `cargo verus focus` は `target/verus-partial` にも成果物を置く。
@@ -301,8 +321,8 @@ fn parse_json(stdout: &str) -> Option<Json> {
 
 /// 診断を読む：生成コードの位置に `（生成コード）` を付け、エラーごとの主な位置を集める。
 /// `json` のときは標準出力の JSON の部分を本文から除く。
-fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<Option<(String, usize)>>) {
-    let mut errors: Vec<Option<(String, usize)>> = Vec::new();
+pub(crate) fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<VerusError>) {
+    let mut errors: Vec<VerusError> = Vec::new();
     let mut text = String::new();
     // 今のエラーの主な位置をまだ読んでいないか。
     let mut pending = false;
@@ -321,7 +341,15 @@ fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<Option<(String, usize
             // 全体のまとめの行（`could not compile`、`aborting due to`）は個々のエラーではない。
             let summary = t.contains("could not compile") || t.contains("aborting due to");
             if !summary {
-                errors.push(None);
+                let message = t
+                    .split_once(": ")
+                    .map(|(_, m)| m.to_string())
+                    .unwrap_or_default();
+                errors.push(VerusError {
+                    message,
+                    at: None,
+                    loc: None,
+                });
                 pending = true;
             }
         } else if top && (t.starts_with("warning") || t.starts_with("note")) {
@@ -331,14 +359,15 @@ fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<Option<(String, usize
             let (file, rest) = loc.split_once(':').unwrap_or((loc, ""));
             if pending {
                 pending = false;
-                if file.starts_with("src/") {
-                    let line_no = rest
-                        .split(':')
-                        .next()
-                        .and_then(|n| n.parse().ok())
-                        .unwrap_or(0);
-                    if let Some(last) = errors.last_mut() {
-                        *last = Some((file.to_string(), line_no));
+                if let Some(last) = errors.last_mut() {
+                    last.loc = Some(loc.to_string());
+                    if file.starts_with("src/") {
+                        let line_no = rest
+                            .split(':')
+                            .next()
+                            .and_then(|n| n.parse().ok())
+                            .unwrap_or(0);
+                        last.at = Some((file.to_string(), line_no));
                     }
                 }
             }
@@ -419,6 +448,9 @@ pub struct ItemFacts {
     pub stray_errors: bool,
     /// Verus が検証の前に止まった（[`Summary::Stopped`]）。`func-details` に関数があっても、検証はしていない。
     pub stopped: bool,
+    /// `--no-cheating` の照合で、Ebykn が出した前提のほかの前提が見つかったか、ないと言えない
+    /// （[`crate::no_cheating`]）。どの項目がそれに頼るか分からないので、どの項目も verified にしない。
+    pub tainted: bool,
 }
 
 /// 項目の状態を決める（PR #26 のレビューの方針）。`verified` と表示してよいのは、Verus が見た関数
@@ -429,7 +461,8 @@ pub struct ItemFacts {
 ///   生成コードの位置で示される）。
 /// - `failed`：その項目にエラーがある。
 /// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、割り当てられないエラーがあるか、
-///   Verus が検証の前に止まった（コンパイルエラーなど。#43）。`verify` を成功にしない。
+///   Verus が検証の前に止まった（コンパイルエラーなど。#43）か、紛れ込んだ前提がある
+///   （[`ItemFacts::tainted`]、#37）。`verify` を成功にしない。
 pub fn decide(f: ItemFacts) -> &'static str {
     if f.admitted {
         "admit"
@@ -439,7 +472,7 @@ pub fn decide(f: ItemFacts) -> &'static str {
         "external"
     } else if f.error {
         "failed"
-    } else if !f.checked || f.stray_errors || f.stopped {
+    } else if !f.checked || f.stray_errors || f.stopped || f.tainted {
         "unknown"
     } else {
         "verified"
@@ -448,13 +481,15 @@ pub fn decide(f: ItemFacts) -> &'static str {
 
 /// 全項目の状態を決める。`checked` は Verus の `func-details` の鍵（`None` なら一覧がない）。
 /// `summary` が [`Summary::Ran`] なら、Verus が数えたエラーの数が読み取ったエラーの見出しの数と違えば、
-/// エラーを項目に割り当てられていないとみなす。[`Summary::Stopped`] なら何も検証していない。
+/// エラーを項目に割り当てられていないとみなす。[`Summary::Stopped`] なら何も検証していない。`tainted` は
+/// [`ItemFacts::tainted`]（`--no-cheating` の照合の結果）。
 pub fn statuses(
     files: &[OutFile],
     output: &Output,
     errors: &[Option<(String, usize)>],
     checked: Option<&std::collections::BTreeSet<String>>,
     summary: Summary,
+    tainted: bool,
 ) -> Vec<ItemStatus> {
     let (error_count, stopped) = match summary {
         Summary::Ran { errors, .. } => (Some(errors), false),
@@ -518,6 +553,7 @@ pub fn statuses(
                 },
                 stray_errors: stray,
                 stopped,
+                tainted,
             };
             out.push(ItemStatus {
                 item: item.clone(),
@@ -562,7 +598,12 @@ pub fn select(all: &[ItemStatus], items: &[&str]) -> Option<Vec<ItemStatus>> {
 }
 
 /// `verify --json` の結果（1 行）。
-pub fn status_json(items: &[ItemStatus], summary: Summary, success: bool) -> String {
+pub fn status_json(
+    items: &[ItemStatus],
+    summary: Summary,
+    cheating: &Cheating,
+    success: bool,
+) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
         .map(|i| serde_json::json!({"item": i.item, "status": i.status}))
@@ -573,20 +614,50 @@ pub fn status_json(items: &[ItemStatus], summary: Summary, success: bool) -> Str
         }
         Summary::Stopped { errors } => serde_json::json!({"ran": false, "errors": errors}),
     };
+    let no_cheating = match cheating {
+        Cheating::Clean => serde_json::json!({"checked": true, "smuggled": []}),
+        Cheating::Smuggled(v) => serde_json::json!({
+            "checked": true,
+            "smuggled": v
+                .iter()
+                .map(|e| serde_json::json!({"location": no_cheating::location(e), "message": e.message}))
+                .collect::<Vec<_>>(),
+        }),
+        Cheating::Unreadable(u) => serde_json::json!({"checked": false, "reason": u.text(false)}),
+        Cheating::NotRun => {
+            serde_json::json!({"checked": false, "reason": "Verus stopped before verification"})
+        }
+    };
     serde_json::json!({
         "$message_type": "ebykn-verify",
         "success": success,
         "items": items,
+        "no_cheating": no_cheating,
         "results": results,
     })
     .to_string()
 }
 
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
-pub fn status_text(items: &[ItemStatus], summary: Summary) -> String {
+///
+/// 紛れ込んだ前提は `smuggled 位置 文言` の行、照合できなかったときは `smuggled unreadable: 理由` の行にする。
+pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) -> String {
     let mut s = String::new();
     for i in items {
         s.push_str(&format!("{} {}\n", i.status, i.item));
+    }
+    match cheating {
+        Cheating::Smuggled(v) => {
+            for e in v {
+                s.push_str(&format!(
+                    "smuggled {} {}\n",
+                    no_cheating::location(e),
+                    e.message
+                ));
+            }
+        }
+        Cheating::Unreadable(u) => s.push_str(&format!("smuggled unreadable: {}\n", u.text(false))),
+        Cheating::Clean | Cheating::NotRun => {}
     }
     match summary {
         Summary::Ran { verified, errors } => {
@@ -621,6 +692,7 @@ mod tests {
             checked: true,
             stray_errors: false,
             stopped: false,
+            tainted: false,
         }
     }
 
@@ -675,6 +747,14 @@ mod tests {
         assert_eq!(
             decide(ItemFacts {
                 stopped: true,
+                ..facts()
+            }),
+            "unknown"
+        );
+        // 紛れ込んだ前提がある（#37）。
+        assert_eq!(
+            decide(ItemFacts {
+                tainted: true,
                 ..facts()
             }),
             "unknown"
@@ -749,6 +829,7 @@ mod tests {
                 verified: 1,
                 errors: 1,
             },
+            false,
         );
         assert_eq!(
             status_text(
@@ -756,19 +837,31 @@ mod tests {
                 Summary::Ran {
                     verified: 1,
                     errors: 1
-                }
+                },
+                &Cheating::Clean
             ),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
         // 項目に入らないエラーがあれば、失敗していない項目は unknown。
-        let st = statuses(&files, &output, &[None], Some(&checked), ran(1));
+        let st = statuses(&files, &output, &[None], Some(&checked), ran(1), false);
         assert_eq!(st[0].status, "unknown");
         // func-details がなければ unknown。
-        let st = statuses(&files, &output, &[], None, ran(0));
+        let st = statuses(&files, &output, &[], None, ran(0), false);
         assert_eq!(st[0].status, "unknown");
         // Verus の数えたエラーと、読み取ったエラーの見出しの数が違えば unknown（nit 4）。
-        let st = statuses(&files, &output, &[], Some(&checked), ran(1));
+        let st = statuses(&files, &output, &[], Some(&checked), ran(1), false);
         assert_eq!(st[0].status, "unknown");
+        // 紛れ込んだ前提があれば（#37）、失敗していない項目は unknown。前提と failed はそのまま。
+        let st = statuses(
+            &files,
+            &output,
+            &[Some(("src/lib.rs".into(), 7))],
+            Some(&checked),
+            ran(1),
+            true,
+        );
+        let got: Vec<&str> = st.iter().map(|s| s.status).collect();
+        assert_eq!(got, ["unknown", "failed", "admit"]);
         // Verus が検証の前に止まれば、func-details にあっても verified にしない（#43）。テキストと
         // JSON は同じ状態を出す。証明なしの前提は前提のまま出す。
         let stopped = Summary::Stopped { errors: 1 };
@@ -778,12 +871,13 @@ mod tests {
             &[Some(("src/lib.rs".into(), 7))],
             Some(&checked),
             stopped,
+            false,
         );
         assert_eq!(
-            status_text(&st, stopped),
+            status_text(&st, stopped, &Cheating::NotRun),
             "unknown k::f\nfailed k::g\nadmit k::l\nresults not verified: Verus stopped before verification (1 errors)\n"
         );
-        let json = status_json(&st, stopped, false);
+        let json = status_json(&st, stopped, &Cheating::NotRun, false);
         assert!(
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
@@ -810,7 +904,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let st = statuses(&files, &output, &[], Some(&checked), ran(0));
+        let st = statuses(&files, &output, &[], Some(&checked), ran(0), false);
         let got: Vec<&str> = st.iter().map(|s| s.status).collect();
         assert_eq!(got, ["unknown", "unknown", "verified"]);
     }
@@ -835,7 +929,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&one), ran(0))[0].status,
+            statuses(&files, &output, &[], Some(&one), ran(0), false)[0].status,
             "verified"
         );
         // 当たる鍵が二つ（同じ名前のメソッドを持つ別の impl）なら決められない。
@@ -844,7 +938,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&two), ran(0))[0].status,
+            statuses(&files, &output, &[], Some(&two), ran(0), false)[0].status,
             "unknown"
         );
     }
@@ -853,7 +947,10 @@ mod tests {
     fn reads_diagnostics_and_skips_the_json() {
         let raw = "{\n  \"func-details\": {\n    \"k::f\": {}\n  }\n}\nerror: postcondition not satisfied\n  --> src/lib.rs:33:13\n   |\nnote: x\n  --> /p/prelude.rs:3:1\nerror: precondition\n  --> /abs/other.rs:1:1\nerror: could not compile `k`\n";
         let (text, errors) = read_diagnostics(raw, true);
-        assert_eq!(errors, [Some(("src/lib.rs".into(), 33)), None]);
+        let at: Vec<_> = errors.iter().map(|e| e.at.clone()).collect();
+        assert_eq!(at, [Some(("src/lib.rs".into(), 33)), None]);
+        assert_eq!(errors[0].message, "postcondition not satisfied");
+        assert_eq!(errors[1].loc.as_deref(), Some("/abs/other.rs:1:1"));
         assert!(!text.contains("func-details"), "{text}");
         assert!(
             text.contains("--> build/verus/src/lib.rs:33:13（生成コード）"),
@@ -913,18 +1010,50 @@ mod tests {
         let r = missing_run(false);
         assert_eq!(r.results, Some((0, 0)));
         assert_eq!(r.summary(), Summary::Stopped { errors: 1 });
-        let text = status_text(&[], r.summary());
+        let text = status_text(&[], r.summary(), &Cheating::NotRun);
         assert_eq!(
             text,
             "results not verified: Verus stopped before verification (1 errors)\n"
         );
         assert!(!text.contains("0 errors"), "{text}");
-        let json = status_json(&[], r.summary(), false);
+        let json = status_json(&[], r.summary(), &Cheating::NotRun, false);
         assert!(json.contains("\"ran\":false"), "{json}");
         // 件数がない（Verus が JSON を出さなかった）ときも同じ。
         let mut none = missing_run(false);
         none.results = None;
         assert_eq!(none.summary(), Summary::Stopped { errors: 1 });
+    }
+
+    #[test]
+    fn smuggled_assumptions_are_reported() {
+        let e = VerusError {
+            message: no_cheating::ADMIT.into(),
+            at: Some(("src/lib.rs".into(), 22)),
+            loc: Some("src/lib.rs:22:19".into()),
+        };
+        let ran = Summary::Ran {
+            verified: 1,
+            errors: 0,
+        };
+        let smuggled = Cheating::Smuggled(vec![e]);
+        let text = status_text(&[], ran, &smuggled);
+        assert_eq!(
+            text,
+            "smuggled build/verus/src/lib.rs:22:19 `assume`/`admit` not allowed with `--no-cheating`\nresults 1 verified, 0 errors\n"
+        );
+        let json = status_json(&[], ran, &smuggled, false);
+        assert!(
+            json.contains("\"location\":\"build/verus/src/lib.rs:22:19\""),
+            "{json}"
+        );
+        assert!(json.contains("\"checked\":true"), "{json}");
+        let unread = Cheating::Unreadable(no_cheating::Unreadable::NoErrors);
+        assert!(status_text(&[], ran, &unread).contains("smuggled unreadable: "));
+        assert!(status_json(&[], ran, &unread, false).contains("\"checked\":false"));
+        assert_eq!(
+            status_text(&[], ran, &Cheating::Clean),
+            "results 1 verified, 0 errors\n"
+        );
     }
 
     #[test]
@@ -948,7 +1077,7 @@ mod tests {
                 errors: 2
             }
         );
-        let json = status_json(&[], failed.summary(), false);
+        let json = status_json(&[], failed.summary(), &Cheating::Clean, false);
         assert!(
             json.contains("\"ran\":true") && json.contains("\"errors\":2"),
             "{json}"

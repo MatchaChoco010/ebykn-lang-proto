@@ -17,7 +17,8 @@ Ebykn: .eyk / .eykp を Verus のソースに書き下すトランスパイラ
 サブコマンド:
   init <name>   雛形を <name>/ に作る
   check         §6 の検査、build/verus/ への書き下し（§7）、verus --no-verify
-  verify [item] check と Verus による検証。項目ごとの状態と、証明なしの前提（admit / unchecked）を出す
+  verify [item] check と Verus による検証。項目ごとの状態と、証明なしの前提（admit / unchecked）を出す。
+                Ebykn が出した前提のほかに紛れ込んだ前提がないかを --no-cheating で確かめる
   build         check と cargo verus build（--verified は M5）
   sync          証明ファイルの追従（M3 で実装）
   status        検証の状態（M5 で実装）
@@ -151,10 +152,12 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if step == Step::Verify {
+        return verify(opts, &verus, &build, &output, items);
+    }
     let mode = match step {
         Step::Check => ebykn::verus::Mode::NoVerify,
-        Step::Verify => ebykn::verus::Mode::Verify,
-        Step::Build => ebykn::verus::Mode::Build,
+        _ => ebykn::verus::Mode::Build,
     };
     let r = match ebykn::verus::run(&verus, &build, mode) {
         Ok(r) => r,
@@ -186,26 +189,33 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    if step == Step::Build {
-        if !r.success {
-            eprint!("{}", r.text);
-            return ExitCode::from(1);
-        }
-        return ExitCode::SUCCESS;
-    }
-    // verify：Verus の診断、項目ごとの状態、未証明の前提（admit と unchecked）を必ず出す。
     if !r.success {
         eprint!("{}", r.text);
+        return ExitCode::from(1);
     }
-    let summary = r.summary();
-    let all = ebykn::verus::statuses(
-        &output.files,
-        &output,
-        &r.errors,
-        r.checked.as_ref(),
-        summary,
-    );
-    let Some(shown) = ebykn::verus::select(&all, items) else {
+    ExitCode::SUCCESS
+}
+
+/// verify：Verus の診断、項目ごとの状態、未証明の前提（admit と unchecked）、紛れ込んだ前提を必ず出す。
+fn verify(
+    opts: &Opts,
+    verus: &ebykn::verus::Verus,
+    build: &Path,
+    output: &ebykn_lower::Output,
+    items: &[&str],
+) -> ExitCode {
+    use ebykn::no_cheating::Cheating;
+    let v = match ebykn::verify::verify_build(verus, build, output) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    if !v.run.success {
+        eprint!("{}", v.run.text);
+    }
+    let Some(shown) = ebykn::verus::select(&v.all, items) else {
         say(
             opts,
             "no item matches the given paths",
@@ -213,17 +223,20 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let unproven: Vec<_> = all.iter().filter(|s| ebykn::verus::assumed(s)).collect();
-    let fails = shown
-        .iter()
-        .any(|s| matches!(s.status, "failed" | "unknown"))
-        || !r.success;
+    let unproven: Vec<_> = v.all.iter().filter(|s| ebykn::verus::assumed(s)).collect();
+    let success = v.success(&shown);
     if opts.json {
-        println!("{}", ebykn::verus::status_json(&shown, summary, !fails));
+        println!(
+            "{}",
+            ebykn::verus::status_json(&shown, v.summary, &v.cheating, success)
+        );
     } else {
-        print!("{}", ebykn::verus::status_text(&shown, summary));
+        print!(
+            "{}",
+            ebykn::verus::status_text(&shown, v.summary, &v.cheating)
+        );
     }
-    if let ebykn::verus::Summary::Stopped { errors } = summary {
+    if let ebykn::verus::Summary::Stopped { errors } = v.summary {
         say(
             opts,
             &format!(
@@ -233,6 +246,40 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
                 "コンパイルエラーなどで Verus が検証の前に止まったので、何も検証していません（上のエラー {errors} 件）"
             ),
         );
+    }
+    match &v.cheating {
+        Cheating::Smuggled(found) => {
+            eprint!("{}", v.cheating_text);
+            let locs: Vec<String> = found.iter().map(ebykn::no_cheating::location).collect();
+            say(
+                opts,
+                &format!(
+                    "{} proof assumption(s) were smuggled in outside the items Ebykn lowers as assumptions (unchecked, lemmas without a body), for example from a macro expansion or `include!`; Verus's results cannot be trusted, so no item is verified: {}",
+                    found.len(),
+                    locs.join(", ")
+                ),
+                &format!(
+                    "Ebykn が前提として書き下した項目（unchecked、本体のない補題）のほかに、証明の前提が {} 個紛れ込んでいます（マクロの展開や `include!` など）。Verus の結果を信用できないので、どの項目も verified にしません: {}",
+                    found.len(),
+                    locs.join("、")
+                ),
+            );
+        }
+        Cheating::Unreadable(u) => {
+            eprint!("{}", v.cheating_text);
+            say(
+                opts,
+                &format!(
+                    "could not check for smuggled proof assumptions ({}), so no item is verified",
+                    u.text(false)
+                ),
+                &format!(
+                    "紛れ込んだ証明の前提がないことを確かめられないので、どの項目も verified にしません（{}）",
+                    u.text(true)
+                ),
+            );
+        }
+        Cheating::Clean | Cheating::NotRun => {}
     }
     if !unproven.is_empty() {
         say(
@@ -260,11 +307,11 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
     if shown.iter().any(|s| s.status == "unknown") {
         say(
             opts,
-            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), or an error could not be attributed to an item",
-            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、どの項目のものか決められないエラーがあります",
+            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), an error could not be attributed to an item, or a proof assumption was smuggled in",
+            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、どの項目のものか決められないエラーがあるか、証明の前提が紛れ込んでいます",
         );
     }
-    if fails {
+    if !success {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS

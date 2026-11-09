@@ -27,7 +27,7 @@ const USAGE: &str = "\
 
   verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
   verus-verify      ebykn_prelude と §6.2 の参照モデルを Verus で検証し、Verus なしでもビルドする
-  golden-verify     golden の各ケースに ebykn verify をかけ、expected/status.txt と比べる
+  golden-verify     golden の各ケースに ebykn verify をかけ、expected/status.txt と比べる。Verus の要るテストも走らせる
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
   formal-oracle     §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ と比べる
   formal-oracle-write  §6.2 の参照モデルから判定の表を作り直し、formal/oracle/ に書く
