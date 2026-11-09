@@ -31,6 +31,9 @@ pub enum ReservedKind {
     ProofCall,
     /// Verus の構文を処理するマクロ（[`VERUS_MACROS`]）。マクロのパスと `use` で見る。
     VerusMacro,
+    /// Verus の ghost の包み（[`VERUS_WRAPPERS`]）。式のパス（実行コードの `Tracked(e)` は `e` を証明の
+    /// モードで評価する）、型、パターン、`use`、中を読まないトークン列で見る（#99）。
+    VerusWrapper,
     /// Ebykn の型の性質のトレイト（`Invariant`、`View`）。`impl` のトレイトと `use` で見る。
     /// 受理する書き方は、裸の名前・ジェネリクスなしの `impl Invariant for T` だけ。
     EbyknTrait,
@@ -38,6 +41,11 @@ pub enum ReservedKind {
 
 /// 証明の構文の関数（仕様 §5.7）。
 pub const PROOF_CALLS: &[&str] = &["assert", "reveal", "reveal_with_fuel", "hide"];
+
+/// Verus の ghost の包み（`verus_builtin` の構造体）。書き下しが消去フィールドと消去される引数に使う。
+/// 実行コードの `Tracked(e)` / `Ghost(e)` はモードの変換（`tracked_exec` / `ghost_exec`）で、`.eyk` に
+/// 書けると証明のモードの式を書けてしまう（#99）。
+pub const VERUS_WRAPPERS: &[&str] = &["Tracked", "Ghost"];
 
 /// Ebykn の型の性質のトレイト（仕様 §5.1、§6.4、§7.2）。
 pub const EBYKN_TRAITS: &[&str] = &["Invariant", "View"];
@@ -167,6 +175,7 @@ pub fn all() -> impl Iterator<Item = (&'static str, ReservedKind)> {
     k(VERUS_BUILTIN_CALLS, ReservedKind::VerusCall)
         .chain(k(PROOF_CALLS, ReservedKind::ProofCall))
         .chain(k(VERUS_MACROS, ReservedKind::VerusMacro))
+        .chain(k(VERUS_WRAPPERS, ReservedKind::VerusWrapper))
         .chain(k(EBYKN_TRAITS, ReservedKind::EbyknTrait))
 }
 
@@ -177,7 +186,15 @@ pub fn kind_of(name: &str) -> Option<ReservedKind> {
 
 /// 式のパス・`use` の最後の名前として見る種類か（関数として呼べるもの）。
 pub fn is_call(kind: ReservedKind) -> bool {
-    matches!(kind, ReservedKind::VerusCall | ReservedKind::ProofCall)
+    matches!(
+        kind,
+        ReservedKind::VerusCall | ReservedKind::ProofCall | ReservedKind::VerusWrapper
+    )
+}
+
+/// 型・パターンのパスの最後の名前として見る種類か（ghost の包み）。
+pub fn is_wrapper(kind: ReservedKind) -> bool {
+    kind == ReservedKind::VerusWrapper
 }
 
 /// 証明の構文の関数（[`PROOF_CALLS`]）を、クレートの定義でない名前として拒否する診断。
@@ -209,4 +226,75 @@ pub struct DeferredName {
     pub kind: ReservedKind,
     /// 診断に出す書き方（`crate::requires(..)`、`use self::requires as rq` など）。
     pub written: String,
+}
+
+/// Rust の予約語のうち、`r#` を付けて名前にできるもの（`self`・`Self`・`super`・`crate` は `r#` でも
+/// 名前にできない）と、予約語になった版。
+///
+/// Verus（固定した版）は、これらを `r#` で名前にした局所の名前（変数・引数・パターンの束縛・量化子の
+/// 変数・名前付きの戻り値・const generics の引数）を、SMT の記号に `r#type@` の形のまま書き、z3 が
+/// 読めずに失敗する（`function body check`。#119、`tests/verus-probes/raw_keyword_local.rs`）。
+/// rustc は、その版の予約語でない名前の `r#` を外して渡すので、`r#foo` や、2021 の `r#gen` は通る。
+/// 構文解析は束縛の位置でこの表の名前の raw の綴りを E0103 にし（[`raw_keyword_since`]）、
+/// 検査は `Ebykn.toml` の `edition` で予約語でない名前の診断を捨てる（[`edition_reserves`]）。
+pub const RAW_KEYWORDS: &[(&str, u32)] = &[
+    // 厳格な予約語（どの版でも）
+    ("as", 2015),
+    ("break", 2015),
+    ("const", 2015),
+    ("continue", 2015),
+    ("else", 2015),
+    ("enum", 2015),
+    ("extern", 2015),
+    ("false", 2015),
+    ("fn", 2015),
+    ("for", 2015),
+    ("if", 2015),
+    ("impl", 2015),
+    ("in", 2015),
+    ("let", 2015),
+    ("loop", 2015),
+    ("match", 2015),
+    ("mod", 2015),
+    ("move", 2015),
+    ("mut", 2015),
+    ("pub", 2015),
+    ("ref", 2015),
+    ("return", 2015),
+    ("static", 2015),
+    ("struct", 2015),
+    ("trait", 2015),
+    ("true", 2015),
+    ("type", 2015),
+    ("unsafe", 2015),
+    ("use", 2015),
+    ("where", 2015),
+    ("while", 2015),
+    // 将来のための予約語（どの版でも）
+    ("abstract", 2015),
+    ("become", 2015),
+    ("box", 2015),
+    ("do", 2015),
+    ("final", 2015),
+    ("macro", 2015),
+    ("override", 2015),
+    ("priv", 2015),
+    ("typeof", 2015),
+    ("unsized", 2015),
+    ("virtual", 2015),
+    ("yield", 2015),
+    // 版で予約語になったもの
+    ("async", 2018),
+    ("await", 2018),
+    ("dyn", 2018),
+    ("try", 2018),
+    ("gen", 2024),
+];
+
+/// 名前（`r#` を外したもの）が [`RAW_KEYWORDS`] にあれば、予約語になった版。
+pub fn raw_keyword_since(name: &str) -> Option<u32> {
+    RAW_KEYWORDS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, since)| *since)
 }

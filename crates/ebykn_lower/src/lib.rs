@@ -54,9 +54,15 @@ pub struct Output {
     pub unchecked: Vec<String>,
     /// `#[test]` の項目（`#[verifier::external]`。Verus は見ない）。
     pub external: Vec<String>,
+    /// 本体を検証する実行関数（`#[verifier::exec_allows_no_decreases_clause]` などを付けた項目）。`decreases`
+    /// を書いていないループと再帰の停止は示さない（#81）。
+    pub exec: Vec<String>,
     /// Verus の名前をパスで決められない項目（クレートの外の型への impl のメソッド）の、Verus の
     /// `func-details` の名前の形（`k::m::impl&%*::e`。`*` は impl の番号）。
     pub verus_patterns: BTreeMap<String, String>,
+    /// クレートが頼っている、ビルドの設定で値の変わる cfg の名前（[`Project::cfg_uses`]）。`verify` は、
+    /// 空でなければ、検証した組み合わせを前提として一覧に出す（#27、#87）。
+    pub cfg_uses: Vec<String>,
     /// std でも組み込みでもない手続きマクロ（依存クレートの derive と属性マクロ）が付いた項目。
     /// マクロが作る項目は Verus が検証しないので、`verify` が前提の一覧に必ず出す（#49）。
     pub macros: Vec<MacroUse>,
@@ -80,6 +86,7 @@ pub(crate) struct Report {
     admitted: Vec<String>,
     unchecked: Vec<String>,
     external: Vec<String>,
+    exec: Vec<String>,
     verus_patterns: BTreeMap<String, String>,
     macros: Vec<MacroUse>,
 }
@@ -245,7 +252,10 @@ pub fn lower_with_crates(
     crates: Option<&[String]>,
 ) -> Result<Output, String> {
     let report = RefCell::new(Report::default());
-    let mut out = Output::default();
+    let mut out = Output {
+        cfg_uses: project.cfg_uses.iter().cloned().collect(),
+        ..Output::default()
+    };
     // 名前を覆い隠す書き方（`use evil::Clone;`、同じ名前の依存クレート）を見分ける（#49）。
     let mut bindings = ebykn_syntax::macros::Bindings::default();
     let (names, known) = project.dependency_crate_names();
@@ -305,6 +315,7 @@ pub fn lower_with_crates(
     out.admitted = r.admitted;
     out.unchecked = r.unchecked;
     out.external = r.external;
+    out.exec = r.exec;
     out.verus_patterns = r.verus_patterns;
     out.macros = r.macros;
     Ok(out)
@@ -351,10 +362,13 @@ pub struct Deps<'a> {
 
 /// `build/verus/Cargo.toml`（仕様 §3.2、§1.3）。`[dependencies]` を写し、`vstd` と `ebykn_prelude` を
 /// 足し、`panic = "abort"` を書く。`Ebykn.toml` の相対の `path` は `build/verus/` から見た形に直す。
+///
+/// 空の `[workspace]` を書き、生成クレートをそれだけで一つのワークスペースにする。書かないと、上の
+/// ディレクトリにある Cargo のワークスペースのメンバーとみなされ、cargo が止まる（#78）。
 pub fn cargo_toml(project: &Project, deps: &Deps) -> String {
     let m = &project.manifest;
     let mut s = String::new();
-    s.push_str("[package]\n");
+    s.push_str("[workspace]\n\n[package]\n");
     s.push_str(&format!("name = {}\n", toml_str(&m.name)));
     s.push_str(&format!("version = {}\n", toml_str(&m.version)));
     s.push_str(&format!("edition = {}\n", toml_str(&m.edition)));

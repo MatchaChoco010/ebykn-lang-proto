@@ -1,19 +1,21 @@
 //! 関数本体の検査：権限スコープと線形性（仕様 §6.2）、領域添字の認識（§6.3）、
-//! 消去フィールドの規則（E0402、E0513、E0515、E0516）、メソッド呼び出しの解決（E0514）。
+//! 消去フィールドの規則（E0402、E0404、E0513、E0515、E0516）、メソッド呼び出しの解決（E0514）。
 //!
 //! 環境 Γ（名前 → 状態）と領域変数の集合 R を持って文を順にたどる。読み方で迷った点は
 //! `OPEN.md` に書いた（分岐の比べ方、`borrow` の借用の扱い、`gives` の戻し方など）。
 
+mod attrs;
 mod calls;
+mod erased;
 mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ebykn_syntax::ast::{
-    self, Block, Expr, ExprKind, FieldPat, LoopKind, Member, PatKind, PermMode, Region,
-    RegionIndex, StmtKind, UnOp,
+    self, Block, Expr, ExprKind, FieldPat, LoopKind, PatKind, PermMode, Region, RegionIndex,
+    StmtKind, UnOp,
 };
-use ebykn_syntax::diag::{CheckMsg, LoopPoint, Message, Mismatch, Op, PermState, Unimpl};
+use ebykn_syntax::diag::{CheckMsg, DotForm, LoopPoint, Message, Mismatch, Op, PermState, Unimpl};
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
@@ -75,6 +77,8 @@ pub struct FnCx<'a> {
     pub module: &'a [String],
     pub self_ty: Option<&'a ItemPath>,
     pub has_self: bool,
+    /// スコープにある型の引数の名前（消去フィールドの `.` の検査で、型が分からないものとして扱う）。
+    pub type_params: Vec<String>,
     /// 権限の規則（E0503〜E0512）を検査するか（`unchecked fn` と論理の本体では検査しない）。
     pub linear: bool,
     pub gives: Vec<String>,
@@ -102,6 +106,12 @@ pub struct Walker<'a> {
     closure_outer: Option<(Env, BTreeSet<String>)>,
     /// 式として読むマクロの引数の中（`return` / `break` / `continue` / `?` は E0003。#21 の既定 D）。
     in_macro: bool,
+    /// 次に読む式が、安定版の Rust が式の属性を許す位置か（文の先頭、ブロックの末尾、配列とタプルの要素、
+    /// 呼び出しとメソッドの引数）。[`Walker::expr`] が読んで戻す。
+    attr_ok: bool,
+    /// 代入・二項演算・型変換の文で、文の属性を持つ左端の式（[`Walker::stmt`] が E0003 を出したので、
+    /// [`Walker::expr`] では重ねて出さない）。
+    attr_lead: Option<usize>,
     /// 論理文脈（契約・`spec fn` の本体・`seq!` の引数など）か。
     logic: bool,
     /// 開いている `borrow` ブロックの名前と、開いたときの枠の数、`borrow mut` か（#21 の既定 D）。
@@ -133,6 +143,8 @@ impl<'a> Walker<'a> {
             borrows: Vec::new(),
             try_known: false,
             bound_source: None,
+            attr_ok: false,
+            attr_lead: None,
         }
     }
 
@@ -159,14 +171,12 @@ impl<'a> Walker<'a> {
                 }
         });
         for p in &sig.params {
-            let (ast::Param::Typed { attrs, span, .. } | ast::Param::Receiver { attrs, span, .. }) =
-                p;
-            self.no_cfg(attrs, *span);
             if let ast::Param::Typed { pat, ty, .. } = p {
                 if let Some(i) = pat_ident(pat) {
                     self.var_types.insert(i.name.clone(), ty.clone());
                 }
                 self.add_locals(pat);
+                self.param_pattern_cfg(pat);
             }
         }
         for u in contract.uses() {
@@ -572,31 +582,6 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// 文・式・`let`・match の腕に付ける属性は、Rust の組み込みの属性とツールの属性（`#[rustfmt::skip]`）
-    /// だけ（#49。`macros::non_builtin`）。ここに付く属性マクロは Verus でも E0658 で大きく失敗する
-    /// （`proc_macro_hygiene` は有効でない。それを有効にする `#![feature(..)]` は内側の属性の検査が
-    /// 拒否する）ので、この拒否は二重の守り。ツールの属性は、同じ名前の依存クレートのマクロを指しても
-    /// 大きく失敗するだけなので許す。
-    fn builtin_attrs_only(&mut self, attrs: &[ast::Attr]) {
-        for a in attrs {
-            if let Some(written) =
-                ebykn_syntax::macros::non_builtin(a, ebykn_syntax::macros::AttrPosition::StmtExpr)
-            {
-                self.diags.push(a.span, Message::AttrPosition { written });
-            }
-        }
-    }
-
-    /// 関数の中の `#[cfg(..)]` / `#[cfg_attr(.., cfg(..))]` は E0003（#27 の既定 B）。
-    fn no_cfg(&mut self, attrs: &[ast::Attr], span: Span) {
-        if crate::index::has_cfg(attrs) {
-            self.diags.push(
-                span,
-                Message::Check(CheckMsg::Unimplemented(Unimpl::CfgInBody)),
-            );
-        }
-    }
-
     // ---- ブロックと文 ----
 
     /// ブロック。発散するなら `true`。
@@ -613,35 +598,10 @@ impl<'a> Walker<'a> {
         diverges
     }
 
-    fn stmt(&mut self, s: &ast::Stmt) -> bool {
+    fn stmt_inner(&mut self, s: &ast::Stmt) -> bool {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
-                self.no_cfg(&item.attrs, item.span);
-                // 本体の中で定義した構造体・列挙の欄と列挙子の `#[cfg]` も同じ（PR #26 の 3 回目の確認）。
-                let mut fields: Vec<&ast::Field> = Vec::new();
-                match &item.kind {
-                    ast::ItemKind::Struct(st) => {
-                        if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &st.fields {
-                            fields.extend(fs);
-                        }
-                        for sec in [&st.owns, &st.spec].into_iter().flatten() {
-                            fields.extend(&sec.fields);
-                        }
-                    }
-                    ast::ItemKind::Enum(en) => {
-                        for v in &en.variants {
-                            self.no_cfg(&v.attrs, v.span);
-                            if let ast::Fields::Named(fs) | ast::Fields::Tuple(fs) = &v.fields {
-                                fields.extend(fs);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                for f in fields {
-                    self.no_cfg(&f.attrs, f.span);
-                }
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -652,7 +612,11 @@ impl<'a> Walker<'a> {
                 false
             }
             StmtKind::Empty => false,
-            StmtKind::Expr { expr, .. } => self.expr(expr),
+            StmtKind::Expr { expr, .. } => {
+                // 文の先頭とブロックの末尾の式は、安定版の Rust が属性を許す。
+                self.attr_ok = true;
+                self.expr(expr)
+            }
             StmtKind::Take(ri) => {
                 if let Some(r) = self.region(ri, "take") {
                     self.facts.region_stmts.insert(s.span.into(), r);
@@ -766,7 +730,6 @@ impl<'a> Walker<'a> {
     }
 
     fn local(&mut self, l: &ast::Local, span: Span) -> bool {
-        self.no_cfg(&l.attrs, span);
         self.builtin_attrs_only(&l.attrs);
         let mut diverges = false;
         if let Some(init) = &l.init {
@@ -862,7 +825,7 @@ impl<'a> Walker<'a> {
     /// パターンの束縛：Γ にある名前なら E0507。消去フィールドのパターンを検査する。
     fn bind(&mut self, p: &ast::Pat) {
         // パターンの属性（クロージャの引数 `|#[cfg(..)] a| ..` など。#95）。
-        self.no_cfg(&p.attrs, p.span);
+        self.no_cfg_pattern(&p.attrs, p.span);
         self.add_locals(p);
         match &p.kind {
             PatKind::Ident { ident, sub, .. } => {
@@ -909,11 +872,14 @@ impl<'a> Walker<'a> {
                         FieldPat::Field {
                             attrs, pat, span, ..
                         } => {
-                            self.no_cfg(attrs, *span);
+                            self.no_cfg_pattern(attrs, *span);
+                            if let Some(name) = self.pat_field(info, f) {
+                                named.insert(name);
+                            }
                             self.bind(pat)
                         }
                         FieldPat::Erased { attrs, ident } => {
-                            self.no_cfg(attrs, ident.span);
+                            self.no_cfg_pattern(attrs, ident.span);
                             named.insert(ident.name.clone());
                             match info.and_then(|s| s.erased_kind(&ident.name)) {
                                 Some(k) => {
@@ -995,10 +961,17 @@ impl<'a> Walker<'a> {
 
     // ---- 式 ----
 
-    /// 式。発散するなら `true`。
+    /// 式。発散するなら `true`。`#[cfg]` の付いた式（文、配列とタプルの要素、引数など）は
+    /// [`Walker::cfg_guarded`] で守る。
     fn expr(&mut self, e: &Expr) -> bool {
-        self.no_cfg(&e.attrs, e.span);
-        self.builtin_attrs_only(&e.attrs);
+        self.expr_attrs(e);
+        if crate::index::has_cfg(&e.attrs) {
+            return self.cfg_guarded(e.span, |w| w.expr_inner(e));
+        }
+        self.expr_inner(e)
+    }
+
+    fn expr_inner(&mut self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Array(es) | ExprKind::Tuple(es) => self.exprs(es),
             ExprKind::Repeat { expr, len } => self.expr(expr) | self.expr(len),
@@ -1029,6 +1002,7 @@ impl<'a> Walker<'a> {
                 if *op == UnOp::Deref
                     && let Some(x) = ident_of(expr)
                 {
+                    self.chain_attrs(expr);
                     self.deref(x, e.span);
                     return false;
                 }
@@ -1045,7 +1019,10 @@ impl<'a> Walker<'a> {
             ExprKind::Ref { expr, .. } | ExprKind::Paren(expr) | ExprKind::Cast { expr, .. } => {
                 self.expr(expr)
             }
-            ExprKind::Field { base, .. } => self.expr(base),
+            ExprKind::Field { base, member } => {
+                self.field_dot(base, member);
+                self.expr(base)
+            }
             ExprKind::Block { label, block } => match label {
                 Some(l) => self.labeled_block(&l.name, block),
                 None => self.block(block),
@@ -1157,6 +1134,7 @@ impl<'a> Walker<'a> {
             }
             ExprKind::Erased { base, .. } => {
                 if is_self(base) {
+                    self.chain_attrs(base);
                     if !self.cx.has_self {
                         self.push(base.span, CheckMsg::SelfErasedWithoutSelf);
                     }
@@ -1198,9 +1176,11 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 配列とタプルの要素、呼び出しとメソッドの引数など。どれも、安定版の Rust が式の属性を許す位置。
     fn exprs(&mut self, es: &[Expr]) -> bool {
         let mut d = false;
         for e in es {
+            self.attr_ok = true;
             d |= self.expr(e);
         }
         d
@@ -1218,6 +1198,8 @@ impl<'a> Walker<'a> {
 
     /// 代入の左辺。`assign` は `=`（`+=` などでなければ）。
     fn place(&mut self, lhs: &Expr, assign: bool) {
+        // 左辺はたどり方が枝で違うので、属性はここで見る（下の `_` の枝は `expr` を通さない）。
+        self.expr_attrs(lhs);
         match &lhs.kind {
             ExprKind::Path { qself: None, path } if path.as_ident().is_some() => {
                 let x = path.as_ident().map(|i| i.name.clone()).unwrap_or_default();
@@ -1234,12 +1216,23 @@ impl<'a> Walker<'a> {
             // 分解代入（`(p, x) = ..`、`[a, b] = ..`、`S { f: p, .. } = ..`）。
             ExprKind::Tuple(es) | ExprKind::Array(es) => {
                 for x in es {
+                    // タプルと配列の要素は、安定版の Rust が式の属性を許す位置。
+                    self.attr_ok = true;
                     self.place(x, assign);
+                    self.attr_ok = false;
                 }
             }
             ExprKind::Paren(x) if deref_root(lhs).is_none() => self.place(x, assign),
             ExprKind::Struct(lit) => {
+                let info = if lit.qself.is_none() {
+                    self.struct_of_path(&lit.path)
+                } else {
+                    None
+                };
                 for f in &lit.fields {
+                    if !f.erased {
+                        self.named_erased(info, &f.member, DotForm::Literal, f.span);
+                    }
                     self.place(&f.expr, assign);
                 }
             }
@@ -1261,11 +1254,17 @@ impl<'a> Walker<'a> {
                         }
                         self.facts.derefs.insert(deref_span.into(), x.name.clone());
                     }
+                    self.chain_children_attrs(lhs);
                     self.place_indices(lhs);
                     return;
                 }
                 let _ = assign;
-                self.expr(lhs);
+                // 属性は上で見たので、`expr` の残り（cfg の守り）だけを当てる。
+                if crate::index::has_cfg(&lhs.attrs) {
+                    self.cfg_guarded(lhs.span, |w| w.expr_inner(lhs));
+                } else {
+                    self.expr_inner(lhs);
+                }
             }
         }
     }
@@ -1273,7 +1272,11 @@ impl<'a> Walker<'a> {
     /// 左辺の中の添字の式をたどる。
     fn place_indices(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::Field { base, .. } | ExprKind::Paren(base) => self.place_indices(base),
+            ExprKind::Field { base, member } => {
+                self.field_dot(base, member);
+                self.place_indices(base);
+            }
+            ExprKind::Paren(base) => self.place_indices(base),
             ExprKind::Index { base, index } => {
                 self.expr(index);
                 self.place_indices(base);
@@ -1389,6 +1392,10 @@ impl<'a> Walker<'a> {
                 w.apply_uses(e.span, None, args, uses);
             }
         };
+        if is_self(receiver) || ident_of(receiver).is_some() {
+            // 下の二つの枝は受け手を `expr` でたどらないので、属性はここで見る。
+            self.chain_attrs(receiver);
+        }
         if is_self(receiver) {
             // `self.f(..)`（`impl T` の中）は `T` の impl で引く。
             if let Some(info) = self
@@ -1533,7 +1540,6 @@ impl<'a> Walker<'a> {
         for arm in arms {
             self.env = start.clone();
             let saved = self.save_scope();
-            self.no_cfg(&arm.attrs, arm.span);
             self.builtin_attrs_only(&arm.attrs);
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
@@ -1725,6 +1731,7 @@ impl<'a> Walker<'a> {
     /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
     /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
+        self.field_dot_tokens(&m.tokens, m.span);
         if self.perm_in_tokens(m.tokens.clone()) {
             self.diags.push(
                 m.span,
@@ -1852,61 +1859,6 @@ impl<'a> Walker<'a> {
             }
         }
         false
-    }
-
-    fn struct_lit(&mut self, e: &Expr, lit: &ast::StructLit) -> bool {
-        let info = if lit.qself.is_none() {
-            self.struct_of_path(&lit.path)
-        } else {
-            None
-        };
-        let mut d = false;
-        let mut given = BTreeSet::new();
-        for f in &lit.fields {
-            self.no_cfg(&f.attrs, f.span);
-            if f.erased {
-                let name = match &f.member {
-                    Member::Named(i) => i.name.clone(),
-                    Member::Unnamed { index, .. } => index.to_string(),
-                };
-                match info.and_then(|s| s.erased_kind(&name)) {
-                    Some(k) => {
-                        self.facts.erased.insert(f.span.into(), k);
-                    }
-                    None => self.push(
-                        f.span,
-                        CheckMsg::NotErasedField {
-                            ty: path_text(&lit.path),
-                            field: name.clone(),
-                        },
-                    ),
-                }
-                given.insert(name);
-                // 消去フィールドの値は仕様の世界（`Tracked(..)` / `Ghost(..)` に入る）。
-                let prev = std::mem::replace(&mut self.logic, true);
-                self.expr(&f.expr);
-                self.logic = prev;
-            } else {
-                d |= self.expr(&f.expr);
-            }
-        }
-        if let Some(Some(base)) = &lit.rest {
-            d |= self.expr(base);
-        } else if let Some(s) = info {
-            for (name, _, _) in &s.erased {
-                if !given.contains(name) {
-                    self.push(
-                        e.span,
-                        CheckMsg::MissingErasedField {
-                            ty: path_text(&lit.path),
-                            field: name.clone(),
-                            pattern: false,
-                        },
-                    );
-                }
-            }
-        }
-        d
     }
 }
 

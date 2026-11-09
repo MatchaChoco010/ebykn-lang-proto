@@ -6,7 +6,7 @@ use verus_syn::Token;
 use verus_syn::parse::discouraged::Speculative as _;
 use verus_syn::parse::{ParseBuffer, ParseStream, Parser as _};
 
-use super::convert::{self, expr, ident, ty};
+use super::convert::{self, binding, expr, ident, ty};
 use super::hook::is_single_colon;
 use super::{err, peek_kw, peek_tts, push, sp, span_between};
 use crate::ast;
@@ -146,7 +146,7 @@ pub(super) fn ret(input: ParseStream) -> syn::Result<Option<ast::Ret>> {
             return Err(content.error("expected `)`"));
         }
         return Ok(Some(ast::Ret {
-            name: Some(ident(&name)),
+            name: Some(binding(&name)),
             ty: ty(&t),
             span: span_between(&begin, input),
         }));
@@ -305,7 +305,7 @@ fn uses_items(input: ParseStream) -> syn::Result<Vec<ast::UsesItem>> {
             input.parse::<Token![:]>()?;
             let t: syn::Type = input.parse()?;
             ast::UsesItem::Named {
-                ident: ident(&i),
+                ident: binding(&i),
                 ty: ty(&t),
                 span: span_between(&begin, input),
             }

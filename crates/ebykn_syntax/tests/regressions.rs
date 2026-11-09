@@ -311,15 +311,15 @@ fn only_listed_macros_can_be_called() {
     // 別のファイルを読み込む。
     rejects(
         "include!(\"evil.rs\");",
-        &format!("macro `include!` {NOT_ALLOWED}"),
+        "`include!` cannot be written in `.eyk`, because it brings in code that Ebykn does not read",
     );
     rejects(
         "fn f() { include!(\"evil.rs\"); }",
-        &format!("macro `include!` {NOT_ALLOWED}"),
+        "`include!` cannot be written in `.eyk`, because it brings in code that Ebykn does not read",
     );
     rejects(
         "fn f() { let v = vec![include!(\"x\")]; }",
-        &format!("macro `include!` {NOT_ALLOWED}"),
+        "`include!` cannot be written in `.eyk`, because it brings in code that Ebykn does not read",
     );
     let unread = "cannot be written in `.eyk`, because it brings in code that Ebykn does not read";
     rejects(
@@ -801,19 +801,44 @@ fn verus_clause_builtins_are_rejected_as_calls() {
     );
 }
 
-/// #27 の既定 B：`cfg!` は `.eyk` で呼べるマクロの一覧にない（関数の中の条件付きコンパイルは E0003）。
+/// #27：`cfg!` は呼べるマクロの一覧にあり、条件の名前を拒否リストで見る。`env!` / `option_env!` /
+/// `file!` / `include!` は一覧になく、拒否リストで拒否する（総当たりは `ebykn_check` の `tests/denylist.rs`）。
 #[test]
-fn cfg_macro_is_not_allowed() {
-    assert!(!ebykn_syntax::ALLOWED_MACROS.contains(&"cfg"));
-    rejects("pub fn f() -> bool { cfg!(test) }", "E0003");
-    rejects("pub fn f() -> bool { std::cfg!(test) }", "E0003");
+fn cfg_is_allowed_and_build_dependent_macros_are_denied() {
+    assert!(ebykn_syntax::ALLOWED_MACROS.contains(&"cfg"));
+    ok("pub fn f() -> bool { cfg!(test) }");
+    ok("pub fn f() -> bool { std::cfg!(test) }");
+    rejects(
+        "pub fn f() -> bool { cfg!(verus_keep_ghost) }",
+        "because its condition uses `verus_keep_ghost`",
+    );
+    for m in ["env", "option_env", "file", "include"] {
+        assert!(!ebykn_syntax::ALLOWED_MACROS.contains(&m), "{m}");
+        assert!(ebykn_syntax::denylist::macro_entry(m).is_some(), "{m}");
+    }
 }
 
-/// #27 の既定：`env!` / `option_env!` / `file!` は `.eyk` で呼べるマクロの一覧にない（Verus の実行と
-/// 素のビルドで値が違いうる）。`unchecked fn` の本体の外では、どこに書いても E0003。
+/// PR #59 の再レビューの X3：cfg の述語に書いた名前を集め、`ebykn verify` が前提の行に出す。
+/// `all()` / `any()` と `true` / `false` だけの述語は、ビルドの設定で値が変わらないので数えない（`r#true` は名前）。
 #[test]
-fn build_dependent_macros_are_not_allowed() {
-    for m in ["env", "option_env", "file"] {
-        assert!(!ebykn_syntax::ALLOWED_MACROS.contains(&m), "{m}");
-    }
+fn cfg_names_are_collected_for_the_assumption() {
+    let src = "#[cfg(all(unix, not(feature = \"x\")))]\npub fn a() {}\n#[cfg_attr(test, inline)]\npub fn b() -> bool { cfg!(any(my_flag, target_pointer_width = \"64\")) }\npub fn c() -> usize { let v: Vec<u32> = vec![#[cfg(r#other)] 1u32]; v.len() }\n#[cfg(r#true)]\npub fn t() {}\n#[cfg(any())]\npub fn d() {}\n";
+    let (_, p) = parse(src);
+    let got: Vec<&str> = p.cfg_uses.iter().map(String::as_str).collect();
+    assert_eq!(
+        got,
+        [
+            "feature = \"x\"",
+            "my_flag",
+            "other",
+            "target_pointer_width = \"64\"",
+            "test",
+            "true",
+            "unix"
+        ]
+    );
+    let (_, p) = parse(
+        "#[cfg(any())]\npub fn d() {}\npub fn e() -> bool { cfg!(all()) }\n#[cfg(true)]\npub fn g() {}\npub fn h() -> bool { cfg!(not(false)) }\n",
+    );
+    assert!(p.cfg_uses.is_empty(), "{:?}", p.cfg_uses);
 }

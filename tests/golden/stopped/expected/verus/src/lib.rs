@@ -7,10 +7,10 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-pub fn ok1(x: u64) -> u64
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn ok1(x: u64) -> u64
 requires x < 10, { x }
 
-pub fn bad() -> u32 { std::process::id() }
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn bad() -> u32 { std::process::id() }
 
 #[verifier::external_body] fn pid() -> u32 { std::process::id() }
 

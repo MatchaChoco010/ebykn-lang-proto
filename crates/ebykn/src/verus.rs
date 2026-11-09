@@ -21,6 +21,8 @@ use crate::{VerusPin, verus_pin};
 pub struct Verus {
     pub dir: PathBuf,
     pub pin: VerusPin,
+    /// 外部のコマンドが失敗したときの文言の言語（`find` に渡した `--lang`）。
+    pub lang: ebykn_syntax::diag::Lang,
 }
 
 /// 固定した Verus を探し、`verus --version` で版を確かめる。
@@ -83,7 +85,7 @@ pub fn find(lang: ebykn_syntax::diag::Lang) -> Result<Verus, String> {
             )
         });
     }
-    Ok(Verus { dir, pin })
+    Ok(Verus { dir, pin, lang })
 }
 
 /// `verus --version --output-json` の版・コミットが固定値と完全に一致し、toolchain が固定値で始まるか
@@ -243,9 +245,8 @@ impl Run {
 /// コードで使われる名前（改名と `[lib] name` を反映した名前）を [`parse_extern_crate_names`] で読む。
 /// 走らなければ `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
 pub fn cargo_metadata(verus: &Verus, build: &Path) -> Option<String> {
-    let out = Command::new("cargo")
-        .current_dir(build)
-        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+    let out = cargo(verus, build)
+        .ok()?
         .args(["metadata", "--format-version", "1", "--offline"])
         .output()
         .ok()?;
@@ -272,26 +273,37 @@ pub fn parse_extern_crate_names(json: &str) -> Option<Vec<String>> {
         .collect()
 }
 
+/// 生成クレートの成果物の置き場（`build/verus/target`）。[`cargo`] が `CARGO_TARGET_DIR` に渡すので、
+/// 利用者の `CARGO_TARGET_DIR` や、親の `.cargo/config.toml` の `build.target-dir` によらない（#137）。
+pub fn target_dir(build: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(build.join("target")).map_err(|e| format!("{}: {e}", build.display()))
+}
+
+/// 生成クレート（`build`）で走らせる cargo。cargo の呼び出しはここでだけ作る（テストが数える）。
+///
+/// `ebykn` を起動した cargo の環境（`cargo run` や `cargo test` から呼ばれたとき）を引き継がず、
+/// 固定した toolchain で走らせ、成果物を [`target_dir`] に置かせる。`CARGO_TARGET_DIR` は
+/// `.cargo/config.toml` の `build.target-dir` より優先する。置き場を cargo の設定に任せると、
+/// [`run`] が消す成果物と cargo が使う成果物が食い違い、cargo が Verus を呼ばなくなる。
+fn cargo(verus: &Verus, build: &Path) -> Result<Command, String> {
+    let mut cmd = Command::new("cargo");
+    for v in ["CARGO", "RUSTC", "RUSTDOC", "CARGO_MANIFEST_DIR"] {
+        cmd.env_remove(v);
+    }
+    cmd.current_dir(build)
+        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
+        .env("CARGO_TARGET_DIR", target_dir(build)?);
+    Ok(cmd)
+}
+
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let path = std::env::join_paths(std::iter::once(verus.dir.clone()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("cargo");
-    for v in [
-        "CARGO",
-        "RUSTC",
-        "RUSTDOC",
-        "CARGO_TARGET_DIR",
-        "CARGO_MANIFEST_DIR",
-    ] {
-        cmd.env_remove(v);
-    }
+    let mut cmd = cargo(verus, build)?;
     // 診断の位置を読むので、色の制御文字を出させない（CI は `CARGO_TERM_COLOR=always`）。
-    cmd.current_dir(build)
-        .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
-        .env("CARGO_TERM_COLOR", "never")
-        .env("PATH", path);
+    cmd.env("CARGO_TERM_COLOR", "never").env("PATH", path);
     match mode {
         Mode::NoVerify => cmd.args(["verus", "focus", "--", "--no-verify"]),
         Mode::Verify => cmd.args([
@@ -307,27 +319,27 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         Mode::NoCheating => cmd.args(["verus", "focus", "--", "--no-cheating", "--no-verify"]),
     };
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
-    // `cargo verus focus` は `target/verus-partial` にも成果物を置く。
+    // `cargo verus focus` は target-dir の下の `verus-partial` にも成果物を置く。
     let name = package_name(build).unwrap_or_default();
+    let target = target_dir(build)?;
     // 消せなければ、前の結果を今の結果と取り違えるおそれがあるので止める。
-    for target in ["target", "target/verus-partial"] {
-        let status = Command::new("cargo")
-            .current_dir(build)
-            .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
-            .args(["clean", "--quiet", "-p", &name, "--target-dir", target])
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            other => {
-                return Err(format!(
-                    "`cargo clean -p {name} --target-dir {target}` failed: {other:?}"
-                ));
-            }
+    for dir in [target.clone(), target.join("verus-partial")] {
+        let shown = format!(
+            "cargo clean --quiet -p {name} --target-dir {}",
+            dir.display()
+        );
+        let out = cargo(verus, build)?
+            .args(["clean", "--quiet", "-p", &name, "--target-dir"])
+            .arg(&dir)
+            .output()
+            .map_err(|e| cannot_run(&shown, &e, verus.lang))?;
+        if !out.status.success() {
+            return Err(command_failed(&shown, build, &out, verus.lang));
         }
     }
     let out = cmd
         .output()
-        .map_err(|e| format!("cannot run `cargo verus`: {e}"))?;
+        .map_err(|e| cannot_run("cargo verus", &e, verus.lang))?;
     let stdout = strip_ansi(&String::from_utf8_lossy(&out.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
     let json = parse_json(&stdout);
@@ -345,6 +357,61 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         checked: json.map(|j| j.checked),
         compiled,
     })
+}
+
+/// 外部のコマンドを起動できなかったときの文言。
+fn cannot_run(cmd: &str, e: &std::io::Error, lang: ebykn_syntax::diag::Lang) -> String {
+    if lang == ebykn_syntax::diag::Lang::Ja {
+        format!("`{cmd}` を起動できません: {e}")
+    } else {
+        format!("cannot run `{cmd}`: {e}")
+    }
+}
+
+/// 外部のコマンドが失敗したときの文言：コマンド、走らせたディレクトリ、終了コード（シグナルで
+/// 止まったならそう書く）、コマンドの出力（#78。終了の状態を Debug 表記で出さない）。
+pub fn command_failed(
+    cmd: &str,
+    dir: &Path,
+    out: &std::process::Output,
+    lang: ebykn_syntax::diag::Lang,
+) -> String {
+    let ja = lang == ebykn_syntax::diag::Lang::Ja;
+    let how = match (out.status.code(), signal(&out.status)) {
+        (Some(c), _) if ja => format!("終了コード {c}"),
+        (Some(c), _) => format!("exit code {c}"),
+        (None, Some(s)) if ja => format!("シグナル {s} で停止"),
+        (None, Some(s)) => format!("killed by signal {s}"),
+        (None, None) if ja => "終了コードなし".into(),
+        (None, None) => "no exit code".into(),
+    };
+    let mut s = if ja {
+        format!("`{}` で `{cmd}` が失敗しました（{how}）", dir.display())
+    } else {
+        format!("`{cmd}` failed in `{}` ({how})", dir.display())
+    };
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let output = output.trim_end();
+    if !output.is_empty() {
+        s.push_str(":\n");
+        s.push_str(output);
+    }
+    s
+}
+
+#[cfg(unix)]
+fn signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn signal(_: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 /// cargo の出力に、クレート `name` を作り直した行（`Checking name v..` / `Compiling name v..`）があるか。
@@ -719,26 +786,80 @@ pub fn select(all: &[ItemStatus], items: &[&str]) -> Option<Vec<ItemStatus>> {
     )
 }
 
+/// 前提の行の名前（`cfg` の行の文言）。`cfg_uses` は、クレートが頼っている、ビルドの設定で値の変わる cfg
+/// の名前（[`Output::cfg_uses`]）。空でなければ、verified はホストの target・既定の feature・追加の
+/// `--cfg` なし・`test` なしで検証した結果で、ほかの組み合わせのビルドと `cargo test` は検証していない（#27、#87）。
+pub const CFG_ASSUMPTION_EN: &str = "verified for the host target, the default features, no extra `--cfg` and no `cfg(test)`; builds with other targets, features or `--cfg` (for example through `RUSTFLAGS`) and `cargo test` are not verified";
+pub const CFG_ASSUMPTION_JA: &str = "verified は、ホストの target・既定の feature・追加の `--cfg` なし・`test` なしで検証した結果です。ほかの target・feature・`--cfg`（`RUSTFLAGS` で付けたものなど）でのビルドと `cargo test` は検証していません";
+
+/// 頼っている cfg があれば、標準エラーに出す文言（英語と日本語）。なければ `None`（#87 の既定）。
+pub fn cfg_assumption_message(cfg_uses: &[String]) -> Option<(String, String)> {
+    if cfg_uses.is_empty() {
+        return None;
+    }
+    Some((
+        format!(
+            "the crate depends on cfg that the build settings can change ({}): {CFG_ASSUMPTION_EN}",
+            cfg_uses.join(", ")
+        ),
+        format!(
+            "このクレートは、ビルドの設定で値の変わる cfg に頼っています（{}）。{CFG_ASSUMPTION_JA}",
+            cfg_uses.join("、")
+        ),
+    ))
+}
+
+/// 実行関数の `verified` が停止を含まないことの注記（#81）。表示する項目に `verified` の実行関数
+/// （`exec`。`Output::exec`）があるときだけ返す。
+///
+/// `decreases` が示すのは、それを書いたループや再帰が整礎であることだけで、関数が停止することではない。
+/// `decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先のものを含む）に届けば止まらない
+/// ことがある。Verus は、関数の `decreases` を書いた実行関数に停止を保証しないという警告をいつも出すが、
+/// `.eyk` では従えない `#[verifier::allow(..)]` を案内するので、書き下しがその属性を付けて警告を消し
+/// （`ebykn_lower` の `EXEC_NO_DECREASES`）、この注記で断る。
+pub fn termination_note(
+    items: &[ItemStatus],
+    exec: &[String],
+    lang: ebykn_syntax::diag::Lang,
+) -> Option<&'static str> {
+    if !items
+        .iter()
+        .any(|s| s.status == "verified" && exec.contains(&s.item))
+    {
+        return None;
+    }
+    Some(match lang {
+        ebykn_syntax::diag::Lang::En => TERMINATION_NOTE_EN,
+        ebykn_syntax::diag::Lang::Ja => TERMINATION_NOTE_JA,
+    })
+}
+
+/// [`termination_note`] の英語の文言。
+pub const TERMINATION_NOTE_EN: &str = "`verified` for an executable function does not include termination: it means the function meets its contract whenever it returns. `decreases` shows only that the loop or recursion it is written on is well-founded; code that reaches a loop or recursion without `decreases` may not terminate";
+
+/// [`termination_note`] の日本語の文言。
+pub const TERMINATION_NOTE_JA: &str = "実行関数の `verified` は停止を含みません。戻ったときに契約を満たすという意味です。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` のないループや再帰に届けば、止まらないことがあります";
+
 /// `verify --json` の結果（1 行）。
+///
+/// `exec` は本体を検証する実行関数（`Output::exec`）。その項目には `"termination": "not_proven"` を付ける。
+/// 実行関数の `verified` は停止を含まない（#81）ので、機械で読む側もそれを見分けられるようにする。
 pub fn status_json(
     items: &[ItemStatus],
     summary: Summary,
     cheating: &Cheating,
+    cfg_uses: &[String],
     success: bool,
+    exec: &[String],
 ) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
-        .map(|i| match &i.via {
-            Some((kind, path)) => serde_json::json!({
-                "item": i.item,
-                "status": i.status,
-                "macro": path,
-                "kind": match kind {
-                    ebykn_syntax::macros::MacroKind::Derive => "derive",
-                    ebykn_syntax::macros::MacroKind::Attribute => "attribute",
-                },
-            }),
-            None => serde_json::json!({"item": i.item, "status": i.status}),
+        .map(|i| {
+            let mut v = item_json(i);
+            if exec.contains(&i.item) {
+                v["termination"] = "not_proven".into();
+            }
+            v
         })
         .collect();
     let results = match summary {
@@ -766,24 +887,56 @@ pub fn status_json(
                 "Verus stopped before verification, so the check did not run".into()
         }
     }
+    // 頼っている cfg があれば、検証した組み合わせを前提として出す（なければ null）。
+    let cfg = if cfg_uses.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({"names": cfg_uses, "note": CFG_ASSUMPTION_EN})
+    };
     serde_json::json!({
         "$message_type": "ebykn-verify",
         "success": success,
         "items": items,
         "no_cheating": no_cheating,
+        "cfg_assumption": cfg,
         "results": results,
     })
     .to_string()
 }
 
+/// `verify --json` の項目一つ。
+fn item_json(i: &ItemStatus) -> serde_json::Value {
+    match &i.via {
+        Some((kind, path)) => serde_json::json!({
+            "item": i.item,
+            "status": i.status,
+            "macro": path,
+            "kind": match kind {
+                ebykn_syntax::macros::MacroKind::Derive => "derive",
+                ebykn_syntax::macros::MacroKind::Attribute => "attribute",
+            },
+        }),
+        None => serde_json::json!({"item": i.item, "status": i.status}),
+    }
+}
+
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
 ///
 /// 紛れ込んだ前提は `smuggled 位置 文言` の行、照合できなかったときは `smuggled unreadable: 理由` の行にする。
-pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) -> String {
+/// 頼っている cfg があれば `assumed cfg 名前, ..` の行を出す（[`CFG_ASSUMPTION_EN`]）。
+pub fn status_text(
+    items: &[ItemStatus],
+    summary: Summary,
+    cheating: &Cheating,
+    cfg_uses: &[String],
+) -> String {
     let mut s = String::new();
     for i in items {
         s.push_str(&i.line());
         s.push('\n');
+    }
+    if !cfg_uses.is_empty() {
+        s.push_str(&format!("assumed cfg {}\n", cfg_uses.join(", ")));
     }
     match cheating {
         Cheating::Smuggled(v) => {
@@ -812,6 +965,157 @@ pub fn status_text(items: &[ItemStatus], summary: Summary, cheating: &Cheating) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ebykn_syntax::diag::Lang;
+
+    #[test]
+    fn cargo_puts_artifacts_under_the_build_dir() {
+        let verus = Verus {
+            dir: PathBuf::from("/verus"),
+            pin: verus_pin(),
+            lang: Lang::En,
+        };
+        let build = Path::new("rel/build/verus");
+        let cmd = cargo(&verus, build).unwrap();
+        let env = |k: &str| {
+            cmd.get_envs()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.map(PathBuf::from))
+        };
+        // 親の `.cargo/config.toml` の `build.target-dir` より優先する環境変数で、絶対パスを渡す（#137）。
+        let target = env("CARGO_TARGET_DIR").flatten().expect("CARGO_TARGET_DIR");
+        assert!(target.is_absolute(), "{}", target.display());
+        assert!(
+            target.ends_with("rel/build/verus/target"),
+            "{}",
+            target.display()
+        );
+        assert_eq!(target, target_dir(build).unwrap());
+        for v in ["CARGO", "RUSTC", "RUSTDOC", "CARGO_MANIFEST_DIR"] {
+            assert_eq!(env(v), Some(None), "{v} を外していない");
+        }
+        assert_eq!(
+            env("RUSTUP_TOOLCHAIN").flatten(),
+            Some(PathBuf::from(&verus.pin.toolchain))
+        );
+        assert_eq!(cmd.get_current_dir(), Some(build));
+    }
+
+    /// `root` の下の `.rs`（サブディレクトリも）を、`root` からのパスと中身の組で読む。
+    fn sources_under(root: &Path) -> Vec<(String, String)> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, base, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.push((rel, std::fs::read_to_string(&path).unwrap()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out.sort();
+        out
+    }
+
+    fn crate_sources() -> Vec<(String, String)> {
+        sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+    }
+
+    /// cargo の呼び出し（`Command::new("cargo")`）が、テストの外では `verus.rs` の `fn cargo(` の中の
+    /// 1 か所だけか。`cargo` を通らない呼び出しは、成果物の置き場を cargo の設定に任せてしまう（#137）。
+    fn cargo_only_in_helper(files: &[(String, String)]) -> Result<(), String> {
+        let needle = ["Command::new(", "\"cargo\")"].concat();
+        let mut found = Vec::new();
+        for (rel, text) in files {
+            let body = text
+                .split_once("\n#[cfg(test)]\nmod tests {")
+                .map_or(text.as_str(), |(b, _)| b);
+            for (at, _) in body.match_indices(needle.as_str()) {
+                found.push((rel.as_str(), body, at));
+            }
+        }
+        let [(rel, body, at)] = found[..] else {
+            let at: Vec<&str> = found.iter().map(|(r, _, _)| *r).collect();
+            return Err(format!("cargo の呼び出しが 1 か所でない: {at:?}"));
+        };
+        if rel != "verus.rs" {
+            return Err(format!("cargo の呼び出しが verus.rs の外にある: {rel}"));
+        }
+        match body[..at].rfind("\nfn ") {
+            Some(def) if body[def..].starts_with("\nfn cargo(") => Ok(()),
+            _ => Err("cargo の呼び出しが fn cargo の中にない".into()),
+        }
+    }
+
+    /// `from` を `to` に置き換える。壊す操作が当たったことを先に確かめる。
+    fn mutate(src: &str, from: &str, to: &str) -> String {
+        assert!(src.contains(from), "壊す操作が当たらない: {from:?}");
+        let out = src.replacen(from, to, 1);
+        assert_ne!(out, src);
+        out
+    }
+
+    #[test]
+    fn cargo_is_called_only_in_the_cargo_helper() {
+        let files = crate_sources();
+        assert!(files.iter().any(|(r, _)| r == "verus.rs"), "{files:?}");
+        assert_eq!(cargo_only_in_helper(&files), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_cargo_is_called_outside_the_cargo_helper() {
+        let files = crate_sources();
+        let stray = "\nfn stray() -> Command {\n    Command::new(\"cargo\")\n}\n";
+        let with = |rel: &str, edit: &dyn Fn(&str) -> String| -> Vec<(String, String)> {
+            let mut f = files.clone();
+            let e = f.iter_mut().find(|(r, _)| r == rel).expect(rel);
+            e.1 = edit(&e.1);
+            f
+        };
+        // ほかのファイルの呼び出し。
+        let other = with("sync.rs", &|t| {
+            mutate(t, "\nuse ", &format!("{stray}\nuse "))
+        });
+        assert!(cargo_only_in_helper(&other).is_err());
+        // サブディレクトリのファイルの呼び出し：実際のディレクトリを読み、sources_under が拾うこと。
+        let dir = std::env::temp_dir().join(format!("ebykn-cargo-calls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in &files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        assert_eq!(cargo_only_in_helper(&sources_under(&dir)), Ok(()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(
+            dir.join("sub/mod.rs"),
+            format!("use std::process::Command;{stray}"),
+        )
+        .unwrap();
+        let sub = sources_under(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(sub.iter().any(|(r, _)| r == "sub/mod.rs"), "{sub:?}");
+        assert!(cargo_only_in_helper(&sub).is_err());
+        // verus.rs の中でも、fn cargo の外の呼び出し。
+        let outside = with("verus.rs", &|t| {
+            mutate(t, "\npub fn run(", &format!("{stray}\npub fn run("))
+        });
+        assert!(cargo_only_in_helper(&outside).is_err());
+        // fn cargo の中の呼び出しを、別の名前の関数に移したもの。
+        let renamed = with("verus.rs", &|t| mutate(t, "\nfn cargo(", "\nfn cargo_any("));
+        assert!(cargo_only_in_helper(&renamed).is_err());
+        // テストの中の呼び出しは数えない。
+        let in_tests = with("verus.rs", &|t| {
+            mutate(t, "\nmod tests {\n", &format!("\nmod tests {{\n{stray}"))
+        });
+        assert_eq!(cargo_only_in_helper(&in_tests), Ok(()));
+    }
 
     #[test]
     fn relative_paths() {
@@ -820,6 +1124,123 @@ mod tests {
         std::fs::create_dir_all(base.join("c")).unwrap();
         assert_eq!(relative(&base.join("a/b"), &base.join("c")), "../../c");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_commands_show_the_exit_code_and_output() {
+        use std::os::unix::process::ExitStatusExt;
+        let out = std::process::Output {
+            // 終了コード 101（wait の状態は 101 << 8）。
+            status: std::process::ExitStatus::from_raw(101 << 8),
+            stdout: Vec::new(),
+            stderr: b"error: current package believes it's in a workspace when it's not\n".to_vec(),
+        };
+        let m = command_failed(
+            "cargo clean -p app",
+            Path::new("/w/app/build/verus"),
+            &out,
+            Lang::En,
+        );
+        assert_eq!(
+            m,
+            "`cargo clean -p app` failed in `/w/app/build/verus` (exit code 101):\nerror: current package believes it's in a workspace when it's not"
+        );
+        assert!(!m.contains("ExitStatus"), "{m}");
+        // `--lang ja` では日本語で出す。
+        assert_eq!(
+            command_failed(
+                "cargo clean -p app",
+                Path::new("/w/app/build/verus"),
+                &out,
+                Lang::Ja
+            ),
+            "`/w/app/build/verus` で `cargo clean -p app` が失敗しました（終了コード 101）:\nerror: current package believes it's in a workspace when it's not"
+        );
+        // シグナルで止まったもの（終了コードがない）。
+        let out = std::process::Output {
+            status: std::process::ExitStatus::from_raw(9),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            command_failed("cargo", Path::new("/w"), &out, Lang::En),
+            "`cargo` failed in `/w` (killed by signal 9)"
+        );
+        assert_eq!(
+            command_failed("cargo", Path::new("/w"), &out, Lang::Ja),
+            "`/w` で `cargo` が失敗しました（シグナル 9 で停止）"
+        );
+    }
+
+    #[test]
+    fn cannot_run_follows_the_language() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(cannot_run("cargo verus", &e, Lang::En).starts_with("cannot run `cargo verus`: "));
+        assert!(
+            cannot_run("cargo verus", &e, Lang::Ja).starts_with("`cargo verus` を起動できません: ")
+        );
+    }
+
+    fn item(item: &str, status: &'static str) -> ItemStatus {
+        ItemStatus {
+            item: item.into(),
+            status,
+            via: None,
+        }
+    }
+
+    /// 実行関数の `verified` が停止を含まないことの注記（#81）は、`verified` の実行関数があるときだけ出し、
+    /// `decreases` のある関数でも停止を含まないと断る（`decreases` を書いたループや再帰だけが止まる、
+    /// と言いすぎない）。
+    #[test]
+    fn termination_note_only_for_verified_exec_functions() {
+        let exec = vec!["k::count".to_string(), "k::spin".to_string()];
+        let verified = [item("k::count", "verified"), item("k::sum", "verified")];
+        let en = termination_note(&verified, &exec, Lang::En).expect("verified の実行関数がある");
+        assert!(en.contains("does not include termination"), "{en}");
+        assert!(en.contains("may not terminate"), "{en}");
+        assert!(!en.contains("termination is proven"), "{en}");
+        let ja = termination_note(&verified, &exec, Lang::Ja).expect("verified の実行関数がある");
+        assert!(ja.contains("停止を含みません"), "{ja}");
+        assert!(ja.contains("止まらないことがあります"), "{ja}");
+        // 実行関数が verified でなければ（failed・unchecked）、spec の側だけが verified なら、出さない。
+        assert_eq!(
+            termination_note(
+                &[item("k::count", "failed"), item("k::sum", "verified")],
+                &exec,
+                Lang::En
+            ),
+            None
+        );
+        assert_eq!(
+            termination_note(&[item("k::sum", "verified")], &exec, Lang::En),
+            None
+        );
+        assert_eq!(termination_note(&verified, &[], Lang::En), None);
+    }
+
+    /// `verify --json` は、実行関数の項目に `"termination":"not_proven"` を付ける（#81）。
+    #[test]
+    fn json_marks_exec_items_as_termination_not_proven() {
+        let exec = vec!["k::count".to_string()];
+        let items = [item("k::count", "verified"), item("k::sum", "verified")];
+        let ran = Summary::Ran {
+            verified: 2,
+            errors: 0,
+        };
+        let json = status_json(&items, ran, &Cheating::Clean, &[], true, &exec);
+        assert!(
+            json.contains(r#"{"item":"k::count","status":"verified","termination":"not_proven"}"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#"{"item":"k::sum","status":"verified"}"#),
+            "{json}"
+        );
+        // 実行関数の一覧がなければ付かない（壊す操作が当たったことを確かめる）。
+        let json = status_json(&items, ran, &Cheating::Clean, &[], true, &[]);
+        assert!(!json.contains("termination"), "{json}");
     }
 
     fn facts() -> ItemFacts {
@@ -842,6 +1263,52 @@ mod tests {
             verified: 0,
             errors,
         }
+    }
+
+    /// 頼っている cfg の前提（#87 の既定）：テキストの行、`--json` の `cfg_assumption`、標準エラーの文言。
+    /// 頼っていなければ、どれも出さない。
+    #[test]
+    fn cfg_assumption_is_shown_only_when_the_crate_uses_cfg() {
+        let names = vec!["my_flag".to_string(), "test".to_string()];
+        let text = status_text(&[], ran(0), &Cheating::Clean, &names);
+        assert!(text.contains("assumed cfg my_flag, test\n"), "{text}");
+        let json: serde_json::Value = serde_json::from_str(&status_json(
+            &[],
+            ran(0),
+            &Cheating::Clean,
+            &names,
+            true,
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(
+            json["cfg_assumption"],
+            serde_json::json!({"names": ["my_flag", "test"], "note": CFG_ASSUMPTION_EN})
+        );
+        let (en, ja) = cfg_assumption_message(&names).unwrap();
+        assert!(
+            en.contains("(my_flag, test)") && en.ends_with(CFG_ASSUMPTION_EN),
+            "{en}"
+        );
+        assert!(
+            ja.contains("（my_flag、test）") && ja.ends_with(CFG_ASSUMPTION_JA),
+            "{ja}"
+        );
+        // `test` と `cargo test` を検証していないことを書く（`cargo test` は `cfg(test)` でビルドする）。
+        assert!(
+            CFG_ASSUMPTION_EN.contains("`cargo test`") && CFG_ASSUMPTION_EN.contains("cfg(test)")
+        );
+        assert!(
+            CFG_ASSUMPTION_JA.contains("`cargo test`") && CFG_ASSUMPTION_JA.contains("`test` なし")
+        );
+
+        let text = status_text(&[], ran(0), &Cheating::Clean, &[]);
+        assert!(!text.contains("assumed cfg"), "{text}");
+        let json: serde_json::Value =
+            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &[], true, &[]))
+                .unwrap();
+        assert!(json["cfg_assumption"].is_null(), "{json}");
+        assert!(cfg_assumption_message(&[]).is_none());
     }
 
     #[test]
@@ -963,8 +1430,10 @@ mod tests {
             admitted: vec!["k::l".into()],
             unchecked: vec![],
             external: vec![],
+            exec: vec![],
             verus_patterns: Default::default(),
             macros: vec![],
+            cfg_uses: Vec::new(),
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()
@@ -988,7 +1457,8 @@ mod tests {
                     verified: 1,
                     errors: 1
                 },
-                &Cheating::Clean
+                &Cheating::Clean,
+                &[]
             ),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
@@ -1031,10 +1501,10 @@ mod tests {
             false,
         );
         assert_eq!(
-            status_text(&st, stopped, &Cheating::NotRun),
+            status_text(&st, stopped, &Cheating::NotRun, &[]),
             "unknown k::f\nfailed k::g\nadmit k::l\nresults not verified: Verus stopped before verification (1 errors)\n"
         );
-        let json = status_json(&st, stopped, &Cheating::NotRun, false);
+        let json = status_json(&st, stopped, &Cheating::NotRun, &[], false, &[]);
         assert!(
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
@@ -1095,7 +1565,7 @@ mod tests {
             ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
         let st = statuses(&files, &output, &[], Some(&checked), ran2, false);
         assert_eq!(
-            status_text(&st, ran2, &Cheating::Clean),
+            status_text(&st, ran2, &Cheating::Clean, &[]),
             "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
         );
         // 前提なので、項目を絞っても出る。
@@ -1109,7 +1579,7 @@ mod tests {
                 "macro tokio::main on k5::one"
             ]
         );
-        let json = status_json(&shown, ran2, &Cheating::Clean, true);
+        let json = status_json(&shown, ran2, &Cheating::Clean, &[], true, &[]);
         assert!(
             json.contains(
                 r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
@@ -1304,18 +1774,38 @@ error: could not compile `drop` (lib) due to 1 previous error
         let r = missing_run(false);
         assert_eq!(r.results, Some((0, 0)));
         assert_eq!(r.summary(), Summary::Stopped { errors: 1 });
-        let text = status_text(&[], r.summary(), &Cheating::NotRun);
+        let text = status_text(&[], r.summary(), &Cheating::NotRun, &[]);
         assert_eq!(
             text,
             "results not verified: Verus stopped before verification (1 errors)\n"
         );
         assert!(!text.contains("0 errors"), "{text}");
-        let json = status_json(&[], r.summary(), &Cheating::NotRun, false);
+        let json = status_json(&[], r.summary(), &Cheating::NotRun, &[], false, &[]);
         assert!(json.contains("\"ran\":false"), "{json}");
         // 件数がない（Verus が JSON を出さなかった）ときも同じ。
         let mut none = missing_run(false);
         none.results = None;
         assert_eq!(none.summary(), Summary::Stopped { errors: 1 });
+    }
+
+    #[test]
+    fn cfg_assumptions_are_reported() {
+        let ran = Summary::Ran {
+            verified: 1,
+            errors: 0,
+        };
+        let names = vec!["my_flag".to_string(), "test".to_string()];
+        assert_eq!(
+            status_text(&[], ran, &Cheating::Clean, &names),
+            "assumed cfg my_flag, test\nresults 1 verified, 0 errors\n"
+        );
+        let json = status_json(&[], ran, &Cheating::Clean, &names, true, &[]);
+        assert!(
+            json.contains("\"cfg_assumption\":{\"names\":[\"my_flag\",\"test\"]"),
+            "{json}"
+        );
+        let none = status_json(&[], ran, &Cheating::Clean, &[], true, &[]);
+        assert!(none.contains("\"cfg_assumption\":null"), "{none}");
     }
 
     #[test]
@@ -1332,12 +1822,12 @@ error: could not compile `drop` (lib) due to 1 previous error
             errors: 0,
         };
         let smuggled = Cheating::Smuggled(vec![e]);
-        let text = status_text(&[], ran, &smuggled);
+        let text = status_text(&[], ran, &smuggled, &[]);
         assert_eq!(
             text,
             "smuggled build/verus/src/lib.rs:22:19 `assume`/`admit` not allowed with `--no-cheating`\nresults 1 verified, 0 errors\n"
         );
-        let json = status_json(&[], ran, &smuggled, false);
+        let json = status_json(&[], ran, &smuggled, &[], false, &[]);
         assert!(
             json.contains("\"location\":\"build/verus/src/lib.rs:22:19\""),
             "{json}"
@@ -1345,18 +1835,18 @@ error: could not compile `drop` (lib) due to 1 previous error
         assert!(json.contains("\"checked\":true"), "{json}");
         assert!(json.contains("\"state\":\"smuggled\""), "{json}");
         let unread = Cheating::Unreadable(no_cheating::Unreadable::NoErrors);
-        assert!(status_text(&[], ran, &unread).contains("smuggled unreadable: "));
+        assert!(status_text(&[], ran, &unread, &[]).contains("smuggled unreadable: "));
         // 「読めない」と「走らせていない」は state で見分ける。
-        let unread_json = status_json(&[], ran, &unread, false);
+        let unread_json = status_json(&[], ran, &unread, &[], false, &[]);
         assert!(unread_json.contains("\"checked\":false"), "{unread_json}");
         assert!(
             unread_json.contains("\"state\":\"unreadable\""),
             "{unread_json}"
         );
-        let not_run = status_json(&[], ran, &Cheating::NotRun, false);
+        let not_run = status_json(&[], ran, &Cheating::NotRun, &[], false, &[]);
         assert!(not_run.contains("\"state\":\"not_run\""), "{not_run}");
         assert_eq!(
-            status_text(&[], ran, &Cheating::Clean),
+            status_text(&[], ran, &Cheating::Clean, &[]),
             "results 1 verified, 0 errors\n"
         );
     }
@@ -1382,7 +1872,7 @@ error: could not compile `drop` (lib) due to 1 previous error
                 errors: 2
             }
         );
-        let json = status_json(&[], failed.summary(), &Cheating::Clean, false);
+        let json = status_json(&[], failed.summary(), &Cheating::Clean, &[], false, &[]);
         assert!(
             json.contains("\"ran\":true") && json.contains("\"errors\":2"),
             "{json}"

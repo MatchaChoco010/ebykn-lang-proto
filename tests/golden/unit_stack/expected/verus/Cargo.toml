@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "unit_stack"
 version = "0.1.0"

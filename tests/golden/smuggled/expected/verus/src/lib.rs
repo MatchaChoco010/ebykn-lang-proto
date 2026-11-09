@@ -10,7 +10,7 @@ verus! {
 #[verifier::external_body] fn liar(x: u64) -> (r: u64)
 ensures r == 7, { x }
 
-pub fn caller(x: u64) -> (r: u64)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn caller(x: u64) -> (r: u64)
 ensures r == 7, { liar(x) }
 
 proof fn helper(x: u64)
@@ -18,13 +18,13 @@ ensures x + 0 == x, { vstd::prelude::admit() }
 
 #[verifier::external] #[test] fn t() {}
 
-pub fn a() -> (r: u32)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn a() -> (r: u32)
 ensures r == 1, { 1 }
 
-pub fn b() -> (r: u32)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn b() -> (r: u32)
 ensures r == 1, { 1 }
 
-pub fn c() -> (r: u32)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn c() -> (r: u32)
 ensures r == 1, { 1 }
 
 } // verus!

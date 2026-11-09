@@ -50,3 +50,4 @@ $ echo $?
 
 - `ebykn verify` だけを打って、Verus の診断を見る。
 - `push` の `put self@nodes[n];` を消して、権限の検査（§6.2）が何を報告するかを見る。
+- `self@order` を `self.order` と書き換えて、消去フィールドを `.` で書いたときの `E0404` を見る（[現行仕様](../../docs/current-spec.md)の「§5.4 消去フィールドは `@` でだけ書く」）。

@@ -256,7 +256,14 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
     }
     // 検証していないことを、成功の行で必ず断る（ビルドできたことを verified と取り違えない）。
     // 実行ファイルがあればそれを、ライブラリだけならその置き場所を示す。
-    let target = build.join("target/debug");
+    // 置き場は `cargo verus build` に渡したのと同じ（`verus::target_dir`）。
+    let target = match ebykn::verus::target_dir(&build) {
+        Ok(t) => t.join("debug"),
+        Err(e) => {
+            eprintln!("ebykn: error: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let out = if output.files.iter().any(|f| f.rel == "src/main.rs") {
         target.join(&report.project.manifest.name)
     } else {
@@ -323,12 +330,19 @@ fn verify(
     if opts.json {
         println!(
             "{}",
-            ebykn::verus::status_json(&shown, v.summary, &v.cheating, success)
+            ebykn::verus::status_json(
+                &shown,
+                v.summary,
+                &v.cheating,
+                &output.cfg_uses,
+                success,
+                &output.exec
+            )
         );
     } else {
         print!(
             "{}",
-            ebykn::verus::status_text(&shown, v.summary, &v.cheating)
+            ebykn::verus::status_text(&shown, v.summary, &v.cheating, &output.cfg_uses)
         );
     }
     if let ebykn::verus::Summary::Stopped { errors } = v.summary {
@@ -385,6 +399,9 @@ fn verify(
         }
         Cheating::Clean | Cheating::NotRun => {}
     }
+    if let Some((en, ja)) = ebykn::verus::cfg_assumption_message(&output.cfg_uses) {
+        say(opts, &en, &ja);
+    }
     if !unproven.is_empty() {
         say(
             opts,
@@ -413,6 +430,10 @@ fn verify(
                     .join("、")
             ),
         );
+    }
+    // 実行関数の verified は停止を含まない（#81）。verified の実行関数があるときは、そう断る。
+    if let Some(note) = ebykn::verus::termination_note(&shown, &output.exec, opts.lang) {
+        eprintln!("ebykn: {note}");
     }
     if shown.iter().any(|s| s.status == "unknown") {
         say(

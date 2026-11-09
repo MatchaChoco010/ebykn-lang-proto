@@ -8,21 +8,22 @@ pub fn caller(x: u64) -> (r: u64) ensures r == 7, { liar(x) }
 // 本体のない補題（admit）。
 lemma fn helper(x: u64) ensures x + 0 == x;
 
-// Verus のときだけ消える項目。Verus は見ないので unknown（verify は失敗する）。
-#[cfg(not(verus_keep_ghost))]
+// `#[cfg]` で消える項目。Verus は見ないので unknown（verify は失敗する）。`verus_keep_ghost` で Verus の
+// ときだけ消す書き方は、拒否リストで書けない（#27）。
+#[cfg(any())]
 pub fn hidden(x: u32) -> (r: u32) ensures r == 0, { x }
 
 // #[test] は #[verifier::external] になり、Verus は見ない。
 #[test]
 fn t() {}
 
-// 同じパス（Verus の名前 assumed::S::e）になる二つの項目：trait の impl のメソッドと、Verus のときだけ
+// 同じパス（Verus の名前 assumed::S::e）になる二つの項目：trait の impl のメソッドと、`#[cfg]` で
 // 消える固有のメソッド。Verus の証拠がどちらのものか分からないので、両方 unknown。
 pub trait Tr { fn e(&self) -> u32; }
 pub struct S { pub v: u32 }
 impl Tr for S { fn e(&self) -> u32 { 1 } }
 impl S {
-    #[cfg(not(verus_keep_ghost))]
+    #[cfg(any())]
     pub fn e(&self) -> (r: u32) ensures r == 0, { 1 }
 }
 

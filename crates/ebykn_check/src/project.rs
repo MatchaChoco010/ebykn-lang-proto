@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use ebykn_syntax::ast::{self, ItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
-use ebykn_syntax::reserved::DeferredName;
+use ebykn_syntax::reserved::{DeferredName, edition_reserves, raw_keyword_since};
 use ebykn_syntax::reserved::{RESERVED_CRATE_NAMES, RESERVED_DEPENDENCY_NAMES};
 use ebykn_syntax::span::{FileId, SourceFile, Span};
 use ebykn_syntax::{parse_eyk, parse_eykp};
@@ -80,6 +80,8 @@ pub struct Project {
     pub proofs: Vec<ProofFile>,
     /// クレートルートが `src/main.eyk` か。
     pub bin: bool,
+    /// 全ファイルの cfg の述語に書いた名前（[`ebykn_syntax::Parsed::cfg_uses`]）。
+    pub cfg_uses: std::collections::BTreeSet<String>,
 }
 
 impl Project {
@@ -167,6 +169,7 @@ pub fn single(text: &str) -> (Project, Vec<Diagnostic>) {
         asts: vec![None, Some(parsed.file)],
         deferred: vec![Vec::new(), parsed.deferred],
         parsed_ok: vec![false, parsed.diags.is_empty()],
+        cfg_uses: parsed.cfg_uses,
         modules: vec![FileModule {
             file: FileId(1),
             module: Vec::new(),
@@ -228,6 +231,7 @@ pub fn load(root: &Path) -> (Project, Vec<Diagnostic>) {
         modules: Vec::new(),
         proofs: Vec::new(),
         bin: false,
+        cfg_uses: Default::default(),
     };
     match &manifest_text {
         Ok(text) => p.manifest = read_manifest(&p.files[0], text, &mut diags),
@@ -434,15 +438,18 @@ fn parse_file(
     p.files.push(file);
     p.asts.push(Some(parsed.file));
     p.deferred.push(parsed.deferred);
+    p.cfg_uses.extend(parsed.cfg_uses);
     Some(id)
 }
 
-/// 版の予約語の診断（`gen`）を、`Ebykn.toml` の `edition` がその版より前なら捨てる（#104）。
-/// ほかの診断はそのまま残す。
+/// 版の予約語の診断を、`Ebykn.toml` の `edition` がその版より前なら捨てる。ほかの診断はそのまま
+/// 残す。`gen` を `r#` なしで書いた診断（#104）と、版で予約語になった名前の raw の綴りの局所の名前
+/// （#119。2021 の `r#gen` は、rustc が `r#` を外して Verus に渡すので通る）。
 fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
     match &d.message {
-        Message::EditionKeyword { since, .. } => {
-            ebykn_syntax::reserved::edition_reserves(edition, *since)
+        Message::EditionKeyword { since, .. } => edition_reserves(edition, *since),
+        Message::RawKeywordBinding { word, .. } => {
+            raw_keyword_since(word).is_none_or(|since| edition_reserves(edition, since))
         }
         _ => true,
     }

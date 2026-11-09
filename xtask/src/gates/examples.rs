@@ -628,9 +628,9 @@ mod tests {
         let t = real_examples(|_, s| s);
         let r = t.run(run_static);
         assert_passes(&r);
-        // 目次の ```sh が 1 つ、hello の ```eyk が 1 つ。
+        // 目次の ```sh が 1 つ、hello の ```eyk が 2 つ（中身と、試してみることの例）。
         assert!(
-            r.notes.iter().any(|n| n.contains("目次 1、各例 1")),
+            r.notes.iter().any(|n| n.contains("目次 1、各例 2")),
             "{:?}",
             r.notes
         );

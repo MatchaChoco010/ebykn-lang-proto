@@ -1,5 +1,5 @@
 [package]
-name = "cfg_in_body"
+name = "cfg_allowed"
 version = "0.1.0"
 edition = "2024"
 
