@@ -424,6 +424,18 @@ fn no_extra_attribute_errors_inside_rejected_code() {
         // `.eykp` では通る。
         assert!(diags_p(src).is_empty(), "{src}: {:?}", diags_p(src));
     }
+    // `.eykp` でも本体を読まない補題の中の属性にも重ねない。
+    for src in [
+        "unchecked lemma fn l() ensures true { #[trigger] g(x) }",
+        "trait T { lemma fn l() ensures true { #[trigger] g(x) } }",
+    ] {
+        let d = diags_p(src);
+        assert_eq!(d.len(), 1, "{src}: {d:?}");
+        assert!(
+            d[0].contains("cannot be written here") && !d[0].contains("#[trigger]"),
+            "{d:?}"
+        );
+    }
     // 読めない項目の中の属性にも重ねない。
     let d = diags_p("#[opaque] spec fn f() -> int = ;");
     assert!(

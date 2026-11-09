@@ -779,7 +779,8 @@ fn lemma_fn(
         // 与える。§5.1）は `.eykp` でも本体を持てないので、`.eyk` でも E0001 にする。
         let b: syn::Block = input.parse()?;
         let span = sp(b.brace_token.span.join());
-        if !super::in_proof() {
+        // 本体を AST に残さないとき（`.eyk`、`unchecked lemma fn`、trait の `lemma fn`）は中を読まない。
+        if !super::in_proof() || unchecked.is_some() || in_trait {
             super::mark_unread(span.lo, span.hi);
         }
         if unchecked.is_some() {
