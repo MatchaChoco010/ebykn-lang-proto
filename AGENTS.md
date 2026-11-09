@@ -11,6 +11,7 @@ Ebykn（`.eyk` / `.eykp` を Verus のソースに書き下すトランスパイ
 - PR 本文は日本語で書き、yomiyasu で推敲してから投稿する。ワーカーは PR をマージしない。条件を満たす PR はコーディネーターが `develop` にマージする。作者の承認は待たない。
 - リリースは毎朝 6 時に Orca のオートメーションが切る。作者は都合のよいときに報告スライドで確かめ、`release` を `main` にマージする。作者にレビューを催促しない。問題が見つかったら、直す PR を `develop` に積む。
 - ゲートは、失敗できると示してから信用する。
+- このマシンは作者が毎日使う。重い処理は `ebykn-limited` の下で 1 つずつ走らせ、ビルドを `/tmp` に置かない（「マシンの資源」）。
 
 ## 正典と優先順位
 
@@ -209,10 +210,19 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | `cargo test --workspace` | テスト |
 | `mdbook build book` | Ebykn Book を `book/book/` に作る（mdBook 0.5.4） |
 
-- pre-commit フックは `git config core.hooksPath .githooks` で有効にする。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
+- pre-commit フックは `git config core.hooksPath .githooks` で有効にする。フックは、`ebykn-limited` があればその下で `cargo xtask precommit` を走らせる（「マシンの資源」）。Claude Code では SessionStart フック（`.claude/hooks/session-start.sh`）が未設定なら設定する。
 - toolchain は `rust-toolchain.toml`（1.96.0）。Verus は自分の toolchain（固定値の `toolchain`）で動き、`verus-*` のコマンドがそれを指定する。Verus のクレートはルートの Cargo ワークスペースから `exclude` してある。
 - Verus の版を上げるときは固定値を書き換え、`verus-install`・`verus-verify`・`verus-probes`・`formal-oracle` を通す。プローブの期待が崩れたら、依拠した前提が変わったということなので `OPEN.md` の「M0 の実測」と `docs/current-spec.md` を見直す。
 - CI（`.github/workflows/ci.yml`）の必須チェックは `ci-required` だけ。全ジョブを `needs` に持つ集約ジョブで、ジョブを足したら `needs` にも足す。private リポジトリで Actions の分数を使うので、ジョブはキャッシュを使い、トリガーは `pull_request` と、`main`・`develop` への `push` だけにする。`develop` への `push` は、リリースを切る前に `develop` の先頭が緑であることを確かめるため（PR の CI は、ほかの PR が先にマージされたあとの組み合わせを試していない）。
+
+## マシンの資源
+
+このマシンは、作者が毎日使う作業用のマシンです。エージェントの処理で、作者の作業を重くしない。
+
+- 重い処理（cargo のコマンド、Verus、z3、Typst）は、`ebykn-limited` があれば、その下で走らせる（`ebykn-limited cargo xtask ci`）。`ebykn-limited` は、空きメモリと重い処理の席の数が条件を満たすまで待ってから、CPU とメモリに上限のある systemd の slice の中で走らせる。`ebykn-limited` がない環境（CI など）では、そのまま走らせる。
+- 重い処理を、自分で並列に走らせない。バックグラウンドに回して次を始めたり、サブエージェントに同時に走らせたりしない。同時に走る数は `ebykn-limited` が決める。
+- 使い捨てのワークツリーとビルドは `~/.cache/ebykn/scratch/<一意の名前>/` に置く。`/tmp` は tmpfs でメモリを使うので、ビルドの置き場にしない（Claude Code の scratchpad も `/tmp` の下にある）。
+- 消すのは、自分が作ったパスだけ。1 つずつ名前で指定して消す。一覧（`git worktree list`、`ls` など）をパターンで絞って消さない。`git worktree prune` も使わない。同じリポジトリと `scratch/` には、ほかのセッションのワークツリーもある。
 
 ## ゲートの規則
 

@@ -192,8 +192,8 @@ Typst の地の文では `#` を `\#` と書きます。`@`、`<`、`_`、`*` �
 ## 7. PDF を作る
 
 ```bash
-cargo xtask slides-install
-cargo xtask slides-build $DIR
+ebykn-limited cargo xtask slides-install
+ebykn-limited cargo xtask slides-build $DIR
 ```
 
 失敗したら、出力のとおりに直します。
