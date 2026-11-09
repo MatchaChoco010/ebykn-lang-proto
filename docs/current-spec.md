@@ -505,6 +505,19 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#69（PR #93 のレビュー）。
 * 状態：基準で決めた。
 
+### `ebykn build` は検証しない
+
+`--verified` なしの `build` は、`check` のあと `cargo verus build -- --no-verify` でビルドします。検証の結果によらずビルドし、検証に失敗する項目があっても止まりません。止まるのは、`check` の失敗と、ビルドそのものの失敗（生成コードのコンパイルエラーなど）だけです。
+
+- 成功したら、標準エラーに、作った実行ファイルの場所（ライブラリだけのクレートなら `build/verus/target/debug`）と、検証していないことを出します。ビルドできたことを verified と取り違えないためです。
+- 検証は `ebykn verify` で行います。全項目が verified / unchecked であることをビルドの条件にする `--verified` は、`status` と一緒に M5 で実装します（今は `E0003`）。
+- 生成コードは、Verus なしの cargo ではなく `cargo verus build` でビルドします。§9 の表の経路を保ち、prelude のコンパイル時の検査（#12）を利用者の経路で効かせるためです。
+- golden の各ケースで、`ebykn build` が Verus なしの cargo と同じ期待（`expected/build-error.txt` があればその行で失敗、なければ成功）になることを確かめます（`cargo xtask golden-verify`）。`check` で止まるケース（`tests/golden/stopped/`。Verus が対応しない std の関数を呼ぶ）だけは、`expected/ebykn-build-error.txt` で `ebykn build` の失敗を期待します。`failed` の項目を持つ `tests/golden/stack/` も、`ebykn build` が通ります。
+
+* 元の仕様：§9 の表は `build` を「`check` ＋ `cargo verus build`」とし、`--verified` を「全項目が verified / unchecked でなければ 1」とする。`cargo verus build` は既定で検証するので、`--verified` なしでも検証の失敗で止まっていた。
+* 根拠：#80。`--verified` の条件を `--verified` なしの `build` には課さないと読み、設計ノート §1.3 の「検証なしでもビルドできること」と現行仕様 §1.3（`build/verus/` は Verus なしの cargo でもビルドできる）に合わせる。
+* 状態：基準で決めた。
+
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
 Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。どの関数が失敗したかは JSON になく、標準エラーの診断（位置つき）にだけ出ます。そのため、失敗した関数は診断の位置から決めます（上の `failed`）。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。

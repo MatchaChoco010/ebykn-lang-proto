@@ -1,8 +1,9 @@
 //! `golden-verify`：golden のケース（`tests/golden/<名前>/`）のうち `expected/status.txt` があるものに
 //! `ebykn verify` をかけ、出力を `expected/status.txt` と比べる（仕様 §11 の (3)）。続けて、書き出した
-//! `build/verus/` を Verus なしの cargo でもビルドする（OPEN-11）。`expected/build-error.txt` があるケースは、
-//! 素の cargo のビルドと `ebykn build` が失敗し、その各行がビルドの出力に含まれることを期待する（検証は通り
-//! ビルドで止まるもの。#12）。最後に、Verus が要るので `#[ignore]` にしたテスト（[`IGNORED`]。#37 の
+//! `build/verus/` を Verus なしの cargo と `ebykn build` でビルドする（OPEN-11、#80）。どちらも成功を期待し、
+//! `expected/build-error.txt` があるケースだけは、両方が失敗し、その各行がビルドの出力に含まれることを
+//! 期待する（検証は通りビルドで止まるもの。#12）。`expected/ebykn-build-error.txt` があるケースは、`ebykn build`
+//! だけがその行で失敗することを期待する（`check` で止まるもの）。最後に、Verus が要るので `#[ignore]` にしたテスト（[`IGNORED`]。#37 の
 //! `--no-cheating` の照合の再現）を `--ignored` で走らせ、どれも実際に走って通ったことを確かめる。
 //!
 //! Verus が要るので `gates` には入れず、CI の Verus のジョブで走らせる。依存の版は、ケースの
@@ -118,31 +119,47 @@ impl Build {
     }
 }
 
-/// 走らせるビルド。`expected/build-error.txt` のあるケースは、素の cargo に加えて `ebykn build` も
-/// 同じ行で失敗することを確かめる。素のビルドとプローブ（単一のクレート）だけでは、Verus の版を上げて
-/// `cargo verus build` が prelude の検証用のコードを公開するようになったとき、利用者の経路で
-/// コンパイル時の検査が効かなくなっても気づけない（#12、PR #47 のレビュー）。
-pub fn builds(expects_error: bool) -> Vec<Build> {
-    if expects_error {
-        vec![Build::Plain, Build::Ebykn]
-    } else {
-        vec![Build::Plain]
+/// 走らせるビルド。どのケースも、素の cargo と `ebykn build` の両方を走らせる。
+///
+/// - `ebykn build`（`--verified` なし）は、検証に失敗した項目があってもビルドする（#80）。`failed` の
+///   項目を持つケース（`stack` など）で、`ebykn build` が検証の失敗で止まれば気づける。
+/// - 素のビルドとプローブ（単一のクレート）だけでは、Verus の版を上げて `cargo verus build` が
+///   prelude の検証用のコードを公開するようになったとき、利用者の経路でコンパイル時の検査が効かなく
+///   なっても気づけない（#12、PR #47 のレビュー）。
+pub fn builds() -> Vec<Build> {
+    vec![Build::Plain, Build::Ebykn]
+}
+
+/// 期待のファイル（なければ `None`）。
+fn read_expected(dir: &Path, file: &str) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(dir.join("expected").join(file)) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("expected/{file} を読めません: {e}")),
     }
 }
 
-/// ケースの期待（`expected/build-error.txt`。なければ `None`）と、`ebykn verify` の後に走らせるビルド。
+/// `ebykn verify` の後に走らせるビルドと、それぞれの期待（失敗の行。`None` なら成功を期待する）。
 /// `verify` はこれだけを使う（テストが実在のケースで固定する）。
-pub fn case_builds(dir: &Path) -> Result<(Option<String>, Vec<Build>), String> {
-    let build_error = match std::fs::read_to_string(dir.join("expected/build-error.txt")) {
-        Ok(t) => Some(t),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("expected/build-error.txt を読めません: {e}")),
-    };
-    let plan = builds(build_error.is_some());
-    Ok((build_error, plan))
+///
+/// - 素の cargo は `expected/build-error.txt`。
+/// - `ebykn build` は `expected/ebykn-build-error.txt` があればそれ、なければ `expected/build-error.txt`。
+///   `ebykn build` は `check`（`verus --no-verify`）を含むので、Verus が受け付けないコードで止まる
+///   （`stopped`）。素の cargo はそれをビルドできる。
+pub fn case_builds(dir: &Path) -> Result<Vec<(Build, Option<String>)>, String> {
+    let plain = read_expected(dir, "build-error.txt")?;
+    let ebykn = read_expected(dir, "ebykn-build-error.txt")?.or_else(|| plain.clone());
+    Ok(builds()
+        .into_iter()
+        .map(|b| match b {
+            Build::Plain => (b, plain.clone()),
+            Build::Ebykn => (b, ebykn.clone()),
+        })
+        .collect())
 }
 
-/// ビルド `what` の結果を、期待（`expected/build-error.txt`。なければ成功を期待する）と比べる。
+/// ビルド `what` の結果を、期待（`expected/build-error.txt` か `expected/ebykn-build-error.txt` の行。
+/// なければ成功を期待する）と比べる。
 pub fn judge_build(
     what: &str,
     expected: Option<&str>,
@@ -158,17 +175,20 @@ pub fn judge_build(
     };
     let lines: Vec<&str> = expected.lines().filter(|l| !l.trim().is_empty()).collect();
     if lines.is_empty() {
-        return Err("expected/build-error.txt が空です".into());
+        return Err(
+            "期待の失敗の行（expected/build-error.txt か expected/ebykn-build-error.txt）が空です"
+                .into(),
+        );
     }
     if success {
         return Err(format!(
-            "{what} が失敗するはずが、通りました（expected/build-error.txt）"
+            "{what} が失敗するはずが、通りました（expected/build-error.txt か expected/ebykn-build-error.txt）"
         ));
     }
     let missing: Vec<&str> = lines.into_iter().filter(|l| !output.contains(l)).collect();
     if !missing.is_empty() {
         return Err(format!(
-            "{what} の出力に expected/build-error.txt の行がありません: {missing:?}\n{output}"
+            "{what} の出力に、期待の失敗（expected/build-error.txt か expected/ebykn-build-error.txt）の行がありません: {missing:?}\n{output}"
         ));
     }
     Ok(())
@@ -249,7 +269,7 @@ pub fn verify(root: &Path, files: &[String]) -> bool {
                 continue;
             }
         }
-        let (build_error, plan) = match case_builds(&dir) {
+        let plan = match case_builds(&dir) {
             Ok(x) => x,
             Err(e) => {
                 eprintln!("error: golden-verify: {case}: {e}");
@@ -257,7 +277,7 @@ pub fn verify(root: &Path, files: &[String]) -> bool {
                 continue;
             }
         };
-        for b in plan {
+        for (b, build_error) in plan {
             let mut cmd = match b {
                 // 書き出したクレートを Verus なしの cargo（リポジトリの toolchain）でもビルドする（OPEN-11）。
                 Build::Plain => {
@@ -386,18 +406,44 @@ mod tests {
     }
 
     #[test]
-    fn fails_unless_ebykn_build_runs_for_cases_that_expect_a_build_error() {
-        // build-error.txt のあるケースは、利用者の経路（ebykn build）でも失敗を確かめる。
-        assert_eq!(builds(true), [Build::Plain, Build::Ebykn]);
-        assert_eq!(builds(false), [Build::Plain]);
+    fn fails_unless_ebykn_build_runs_for_every_case() {
+        // どのケースも、利用者の経路（ebykn build）を走らせる。
+        assert_eq!(builds(), [Build::Plain, Build::Ebykn]);
         // verify が使う case_builds を、実在のケースで確かめる。
         let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden");
-        let (expected, plan) = case_builds(&golden.join("ptr_zst_build")).unwrap();
-        assert!(expected.unwrap().contains("error[E0080]"));
-        assert_eq!(plan, [Build::Plain, Build::Ebykn]);
-        let (expected, plan) = case_builds(&golden.join("stack")).unwrap();
-        assert!(expected.is_none());
-        assert_eq!(plan, [Build::Plain]);
+        let plan = case_builds(&golden.join("ptr_zst_build")).unwrap();
+        assert_eq!(plan.len(), 2);
+        for (b, expected) in &plan {
+            assert!(
+                expected.as_deref().unwrap().contains("error[E0080]"),
+                "{b:?}"
+            );
+        }
+        // `failed` の項目があるケースでも ebykn build を走らせ、成功を期待する（#80）。
+        let stack = golden.join("stack");
+        let status = std::fs::read_to_string(stack.join("expected/status.txt")).unwrap();
+        assert!(status.lines().any(|l| l.starts_with("failed ")), "{status}");
+        assert_eq!(
+            case_builds(&stack).unwrap(),
+            [(Build::Plain, None), (Build::Ebykn, None)]
+        );
+        // `ebykn build` だけが止まるケースは、`ebykn build` にだけ失敗を期待する。
+        let plan = case_builds(&golden.join("stopped")).unwrap();
+        assert_eq!(plan[0], (Build::Plain, None));
+        assert_eq!(plan[1].0, Build::Ebykn);
+        assert!(
+            plan[1].1.as_deref().unwrap().contains("is not supported"),
+            "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn fails_when_ebykn_build_fails_on_a_case_that_should_build() {
+        // 検証の失敗で ebykn build が止まった出力（#80 の症状）は、期待（成功）と合わない。
+        let out = "error: postcondition not satisfied\nerror: could not compile `stack` (lib) due to 2 previous errors\n";
+        let err = judge_build(Build::Ebykn.name(), None, false, out).unwrap_err();
+        assert!(err.contains("ebykn build が失敗しました"), "{err}");
+        assert!(judge_build(Build::Ebykn.name(), None, true, "").is_ok());
     }
 
     #[test]

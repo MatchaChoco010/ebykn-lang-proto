@@ -1,0 +1,2 @@
+`std::process::id` is not supported
+ebykn: `cargo verus build` failed on the generated Verus
