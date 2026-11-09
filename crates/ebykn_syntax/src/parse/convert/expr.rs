@@ -12,8 +12,6 @@ use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawV
 use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
 
-/// 呼び出しの形で書く Verus の証明の関数で、Ebykn にないもの（`unchecked` を使う）。
-
 fn mk(attrs: Vec<ast::Attr>, kind: ast::ExprKind, span: Span) -> ast::Expr {
     ast::Expr { attrs, kind, span }
 }

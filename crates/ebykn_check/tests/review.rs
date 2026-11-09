@@ -325,6 +325,10 @@ fn rereview_macro_tokens_keep_group_boundaries() {
     accepts(&in_pool(
         "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); println!(\"{}\", 2 * x); leak p@; }",
     ));
+    // `take` / `put` は領域添字（`x[..]`、`self@x[..]`）が続くときだけ文のキーワード。
+    accepts(&in_pool(
+        "pub fn f() { let take = 1u64; println!(\"{}\", take as u64); }",
+    ));
     // 領域添字の形は今までどおり拒否する。
     rejects(
         &in_pool(

@@ -291,9 +291,9 @@ pub(super) fn scan_opaque(ts: &TokenStream) {
             && !punct(prev, '.')
             && !punct(next, '!')
             // 構造体のフィールドの名前（`S { requires: 1 }`）は参照ではない。
-            && !(punct(next, ':') && !punct(tts.get(i + 2), ':'))
+            && (!punct(next, ':') || punct(tts.get(i + 2), ':'))
             // パスの途中（`requires::x`）は最後の名前ではない。ターボフィッシュ（`requires::<T>`）は見る。
-            && !(punct(next, ':') && punct(tts.get(i + 2), ':') && !punct(tts.get(i + 3), '<'))
+            && (!punct(next, ':') || !punct(tts.get(i + 2), ':') || punct(tts.get(i + 3), '<'))
             // 裸の名前の値（ローカル変数かもしれない）は見ない。呼び出しとパス付きの綴りを見る。
             && (group(next, Delimiter::Parenthesis)
                 || punct(next, ':')
