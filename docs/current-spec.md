@@ -414,6 +414,26 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
 * 状態：基準で決めた。
 
+### `ebykn sync` の決めごと
+
+`sync` は `proof/` の下の各 `.eykp` を、仕様 §9 のとおり `git merge-file` で更新します（`proof/<p>.eykp` ↔ `src/<p>.eyk` ↔ 基準 `.ebykn/sync/<p>.eyk`）。仕様が定めていない場合は、次のように扱います。
+
+- 基準がない `.eykp`（初めての `sync`、`.eykp` を作ったばかり）は、今の `src/<p>.eyk` を基準として書くだけで、`.eykp` は変えません（`base`）。`.eykp` が古い `src/` の写しなら、取り込まれなかった差は剥がし一致検査（#65）が `E0304` で見つけます。基準を書く前に、剥がした `.eykp` と `src` を比べるようにするのは #97 です。
+- 衝突したときも、基準を今の `src/<p>.eyk` に進めます。進めないと、手で解いた hunk が次の `sync` のたびにまた衝突します。印の行の名前は `proof/<p>.eykp`・`.ebykn/sync/<p>.eyk`・`src/<p>.eyk` です。衝突の文言は、書く前に `.eykp` と基準の両方を git が追跡していて作業ツリーに変更がなかったときだけ、その `sync` の取りやめ方（`git -C <ルート> checkout -- proof/<p>.eykp .ebykn/sync/<p>.eyk`）を示します。`git checkout` はインデックスの版に戻すので、コミットしていない変更があれば一緒に消えるからです。そうでないときは、`git checkout` では取りやめられないと伝えます。
+- `.eykp` に `sync` 自身の衝突の印の行（`<<<<<<< proof/<p>.eykp` か `>>>>>>> src/<p>.eyk`）が残っていれば、何も変えずに失敗にします（`unresolved-markers`）。基準を進めたあとなので、印を残したまま成功にすると、衝突した変更が `.eykp` に入らないまま次に進み、さらに `src` を変えると印が入れ子になります。
+- 対応する `.eykp` のない基準（`.ebykn/sync/**.eyk`）は失敗として報告し、名前を変えたモジュールなら新しい名前に移し、消したモジュールなら削除するよう案内します。残すと、あとで同じ名前を使うモジュールが古い基準から変更を当てます。そうした基準があるあいだは、基準のない `.eykp` にも基準を作りません（`base-held`）。名前を変えたモジュールの新しい名前の `.eykp` に今の `src` を基準として書くと、名前を変えたあとの変更が `.eykp` に届かないからです。
+- 対応する `src/<p>.eyk` がない `.eykp` は変えず、失敗として数えます（`E0301` に当たる）。
+- `git` が動かない、読み書きに失敗した、`git merge-file` が衝突の数でない終了コードを返した（中身が二進の `.eykp` の 255 など）、衝突を数えたのに出力に印がない、のどれかのときは、そのファイルを変えずに失敗として数えます。`.eykp` には取り込んだのに基準を書けなかったときも失敗にし（衝突の数も出す）、基準を直してから `sync` を実行し直すよう案内します。
+- `.eykp` と基準は、同じディレクトリの一時ファイル（`.<名前>.ebykn-sync-tmp`）に書いてから名前を変えて置き換えます。`std::fs::write` のようにファイルを空にしてから書くと、途中で失敗したとき（ディスクの空き、ファイルの大きさの上限など）に途中までの中身が残るためです。置き換えるファイルの mode は引き継ぎ、読み取り専用のファイルは置き換えずに失敗にします。symlink の `.eykp` は、指す先のファイルを置き換えます（symlink はそのまま）。
+- `src/` にあって `proof/` にないモジュールには基準を作りません（`.eykp` は無くてよい。§3.1）。
+- 終了コードは、すべての `.eykp` を衝突も失敗もなく扱え、`.eykp` のない基準もなければ 0、そうでなければ 1 です。引数を付けると使い方の誤りで 2 です。
+- 出力は、`.eykp` ごとに状態（`unchanged` / `merged` / `conflict` / `base` / `error`）の 1 行を標準エラーに出します。理由は `--lang` の言語で出します。`--json` では `{"$message_type":"ebykn-sync","success":..,"files":[..],"orphan_bases":[..],"errors":[..]}` の 1 行を標準出力に出します（`files` の各項目は `proof`・`source`・`base`・`state`。`state` は `unchanged` / `merged` / `conflict` / `base-created` / `base-held` / `unresolved-markers` / `missing-source` / `failed` / `base-not-updated`。`conflict` と `base-not-updated` には衝突の数 `conflicts`、`failed` と `base-not-updated` には理由 `reason`（英語）が付く）。
+- `.ebykn/sync/` はリポジトリに入れます（`ebykn init` の `.gitignore` は `/build/` だけを除く）。基準を共有しないと、ほかの人や証明を担当するエージェントの `sync` が別の基準から変更を当てます。`ebykn init` は `.gitattributes` に `/.ebykn/sync/** linguist-generated=true` を書き、GitHub の PR の差分で基準の写しを畳ませます。
+
+* 元の仕様：§9 の表の 1 行（`git merge-file proof/p.eykp .ebykn/sync/p.eyk src/p.eyk` で更新し、基準を新しい `src` で置き換え、衝突はファイルに残して 1）だけで、基準がないとき、`src` がないとき、失敗したときを定めていない。
+* 根拠：#69（PR #93 のレビュー）。
+* 状態：基準で決めた。
+
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
 Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。どの関数が失敗したかは JSON になく、標準エラーの診断（位置つき）にだけ出ます。そのため、失敗した関数は診断の位置から決めます（上の `failed`）。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。
