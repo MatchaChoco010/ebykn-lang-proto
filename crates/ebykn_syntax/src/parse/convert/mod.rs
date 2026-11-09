@@ -216,26 +216,45 @@ pub(super) fn vis(v: &syn::Visibility) -> ast::Vis {
 }
 
 pub(super) fn generics(g: &syn::Generics) -> ast::Generics {
-    let params = g
+    let params: Vec<ast::GenericParam> = g
         .params
         .iter()
         .map(|p| match p {
             syn::GenericParam::Lifetime(l) => ast::GenericParam::Lifetime {
+                attrs: attrs(&l.attrs),
                 lifetime: lifetime(&l.lifetime),
                 bounds: (!l.bounds.is_empty()).then(|| scanned(&l.bounds)),
             },
             syn::GenericParam::Type(t) => ast::GenericParam::Type {
+                attrs: attrs(&t.attrs),
                 ident: ident(&t.ident),
                 bounds: (!t.bounds.is_empty()).then(|| scanned(&t.bounds)),
                 default: t.default.as_ref().map(ty),
             },
             syn::GenericParam::Const(c) => ast::GenericParam::Const {
+                attrs: attrs(&c.attrs),
                 ident: ident(&c.ident),
                 ty: ty(&c.ty),
                 default: c.default.clone().map(expr),
             },
         })
         .collect();
+    // ジェネリクスの引数の `#[cfg]`：検査は cfg を評価せずに引数の並びを読む（#95）。
+    for p in &params {
+        let (ast::GenericParam::Lifetime { attrs, .. }
+        | ast::GenericParam::Type { attrs, .. }
+        | ast::GenericParam::Const { attrs, .. }) = p;
+        if ast::has_cfg(attrs)
+            && let Some(a) = attrs.first()
+        {
+            push(
+                a.span,
+                Message::Check(crate::diag::CheckMsg::Unimplemented(
+                    crate::diag::Unimpl::CfgOnGenericParam,
+                )),
+            );
+        }
+    }
     ast::Generics {
         params,
         span: g.lt_token.map(|lt| {

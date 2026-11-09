@@ -71,6 +71,32 @@ fn header_imports_names_explicitly() {
     has("pub fn f() {}", "use ebykn_prelude::*; verus!");
 }
 
+/// #95：書き下しは、属性を付けられるどの位置の属性も落とさない。位置ごとに別の印の属性を付け、
+/// すべての印が書き下しに残ることを確かめる（位置を足したら、ここにも足す）。`@..` は Rust の `..`
+/// に畳むので、属性を付ける場所がない（`cfg` は検査が E0003 にし、ほかの属性は意味を持たない）。
+#[test]
+fn attributes_survive_lowering_in_every_position() {
+    let src = "#[allow(m01)] pub struct S<#[allow(m02)] 'a, #[allow(m03)] T, #[allow(m04)] const N: usize> { #[allow(m05)] pub x: u32, pub t: &'a T }
+#[allow(m06)] pub enum E { #[allow(m07)] A { #[allow(m08)] f: u32 }, B(#[allow(m09)] u32) }
+pub struct B { } owns { #[allow(m10)] items: Region<Ptr<u64>> }
+#[allow(m11)] pub fn f<#[allow(m12)] U>(#[allow(m13)] s: S<u8, 1>, b: B) -> u32 {
+    #[allow(m14)] let c = |#[allow(m15)] a: u32| a;
+    let S { #[allow(m16)] x, .. } = s;
+    let B { #[allow(m17)] @items } = b;
+    let v = match x { #[allow(m18)] 0 => 1, _ => 2 };
+    let w = S { #[allow(m19)] x: 1, t: &0u8 };
+    #[allow(m20)] c(v)
+}";
+    let got = lowered_ignoring_errors(src);
+    for i in 1..=20 {
+        let m = format!("m{i:02}");
+        assert!(
+            got.contains(&format!("allow ( {m} )")),
+            "{m} が書き下しにない:\n{got}"
+        );
+    }
+}
+
 /// 検査の誤りを見ずに書き下す（検査が拒む入力で、書き下しが何をするかを確かめる）。
 fn lowered_ignoring_errors(src: &str) -> String {
     let (p, d) = project::single(src);

@@ -1060,6 +1060,26 @@ pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt 
 pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
     use ast::PatKind as P;
     let span = span_of(&p);
+    // パターンの外部属性（クロージャの引数の `#[cfg]` など。黙って落とさない。#95）。
+    let pat_attrs = attrs(match &p {
+        syn::Pat::Const(x) => &x.attrs,
+        syn::Pat::Ident(x) => &x.attrs,
+        syn::Pat::Lit(x) => &x.attrs,
+        syn::Pat::Macro(x) => &x.attrs,
+        syn::Pat::Or(x) => &x.attrs,
+        syn::Pat::Paren(x) => &x.attrs,
+        syn::Pat::Path(x) => &x.attrs,
+        syn::Pat::Range(x) => &x.attrs,
+        syn::Pat::Reference(x) => &x.attrs,
+        syn::Pat::Rest(x) => &x.attrs,
+        syn::Pat::Slice(x) => &x.attrs,
+        syn::Pat::Struct(x) => &x.attrs,
+        syn::Pat::Tuple(x) => &x.attrs,
+        syn::Pat::TupleStruct(x) => &x.attrs,
+        syn::Pat::Type(x) => &x.attrs,
+        syn::Pat::Wild(x) => &x.attrs,
+        _ => &[][..],
+    });
     let kind = match p {
         syn::Pat::Ident(i) => P::Ident {
             by_ref: i.by_ref.is_some(),
@@ -1124,7 +1144,11 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
             P::Wild
         }
     };
-    ast::Pat { kind, span }
+    ast::Pat {
+        attrs: pat_attrs,
+        kind,
+        span,
+    }
 }
 
 fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
@@ -1156,6 +1180,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                                     },
                                 };
                                 ast::Pat {
+                                    attrs: Vec::new(),
                                     span: id.span,
                                     kind: ast::PatKind::Ident {
                                         by_ref,
@@ -1187,6 +1212,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                 })
                 .collect();
             ast::Pat {
+                attrs: Vec::new(),
                 kind: ast::PatKind::Struct {
                     qself: None,
                     path: path(&p),
@@ -1199,6 +1225,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
         Err(e) => {
             push_error(e);
             ast::Pat {
+                attrs: Vec::new(),
                 kind: ast::PatKind::Wild,
                 span,
             }

@@ -861,6 +861,8 @@ impl<'a> Walker<'a> {
 
     /// パターンの束縛：Γ にある名前なら E0507。消去フィールドのパターンを検査する。
     fn bind(&mut self, p: &ast::Pat) {
+        // パターンの属性（クロージャの引数 `|#[cfg(..)] a| ..` など。#95）。
+        self.no_cfg(&p.attrs, p.span);
         self.add_locals(p);
         match &p.kind {
             PatKind::Ident { ident, sub, .. } => {
@@ -910,7 +912,8 @@ impl<'a> Walker<'a> {
                             self.no_cfg(attrs, *span);
                             self.bind(pat)
                         }
-                        FieldPat::Erased { ident, .. } => {
+                        FieldPat::Erased { attrs, ident } => {
+                            self.no_cfg(attrs, ident.span);
                             named.insert(ident.name.clone());
                             match info.and_then(|s| s.erased_kind(&ident.name)) {
                                 Some(k) => {
@@ -929,7 +932,10 @@ impl<'a> Walker<'a> {
                                 ),
                             }
                         }
-                        FieldPat::ErasedRest { .. } => rest = true,
+                        FieldPat::ErasedRest { attrs, span } => {
+                            self.no_cfg(attrs, *span);
+                            rest = true;
+                        }
                     }
                 }
                 if let Some(s) = info

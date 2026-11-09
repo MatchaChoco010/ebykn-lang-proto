@@ -36,6 +36,16 @@ pub fn use_it() -> u64 {
 requires x < 100,
 ensures __eyk_r == __eyk_spec_double(x), { x *2 } pub open spec fn __eyk_spec_double(x: u32) -> u32 { (x *2) as u32 }
 
+pub fn attrs_kept <#[allow(unused)] T > (n: Node) -> (r: u64)
+requires n.val < 10,
+ensures r == n.val + 1, {
+    let Node { #[allow(unused)] val,.. } = n;
+    let c = |#[allow(unused)] a: u64 | -> (b: u64)
+    requires a < 10,
+    ensures b == a + 1, { a + 1 };
+    c(val)
+}
+
 proof fn helper(x: u64)
 ensures x + 0 == x, { vstd::prelude::admit() }
 

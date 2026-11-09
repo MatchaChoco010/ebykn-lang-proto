@@ -193,6 +193,8 @@ pub enum Unimpl {
     NestedAssumption,
     /// 関数の本体の中の `cfg!` と `#[cfg(..)]`（#27 の既定 B）。
     CfgInBody,
+    /// ジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。#95）。
+    CfgOnGenericParam,
     /// std のマクロの引数の中の属性（トークンのまま持つので検査できない。#28）。
     AttrInMacro,
     /// `env!` / `option_env!`（`unchecked fn` の本体の外。#27 の既定）。
@@ -294,6 +296,12 @@ impl Unimpl {
             }
             (Unimpl::TryInBorrowMut, Lang::Ja) => {
                 "`borrow mut` の中の `?` は、関数の戻り値の型を `Option<..>` か `Result<..>` と書いたときだけ扱えます。失敗の経路では権限を戻してから返すので、失敗の値の形が要るためです。`match` で明示的に書きます"
+            }
+            (Unimpl::CfgOnGenericParam, Lang::En) => {
+                "`#[cfg(..)]` on a generic parameter is not supported yet, because Ebykn's checks read the parameter list without evaluating `cfg`; write a separate item for each configuration"
+            }
+            (Unimpl::CfgOnGenericParam, Lang::Ja) => {
+                "ジェネリクスの引数に付けた `#[cfg(..)]` はまだ扱えません。Ebykn の検査は `cfg` を評価せずに引数の並びを読むためです。構成ごとに別の項目に分けます"
             }
             (Unimpl::CfgInBody, Lang::En) => {
                 "`cfg!` and `#[cfg(..)]` inside a function (on statements, expressions, match arms, fields and parameters) are not supported yet, because the code Verus verifies and the code built without Verus could differ; put the conditional code in separate items"

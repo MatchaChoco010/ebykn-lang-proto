@@ -186,6 +186,22 @@ impl Attr {
     }
 }
 
+/// 属性に `#[cfg(..)]` があるか（`#[cfg_attr(条件, cfg(..))]` の中を含む）。rustc と同じく raw の
+/// 綴り（`#[r#cfg]`、`cfg_attr(.., r#cfg(..))`）も数える（#122）。構文木への変換（ジェネリクスの
+/// 引数）と検査の両方が使う（#95）。
+pub fn has_cfg(attrs: &[Attr]) -> bool {
+    fn mentions_cfg(ts: &TokenStream) -> bool {
+        ts.clone().into_iter().any(|t| match t {
+            proc_macro2::TokenTree::Ident(i) => crate::macros::token_is_name(&i, "cfg"),
+            proc_macro2::TokenTree::Group(g) => mentions_cfg(&g.stream()),
+            _ => false,
+        })
+    }
+    attrs
+        .iter()
+        .any(|a| a.is_builtin("cfg") || a.is_builtin("cfg_attr") && mentions_cfg(&a.args))
+}
+
 /// 可視性。
 #[derive(Debug, Clone)]
 pub enum Vis {
@@ -205,15 +221,18 @@ pub struct Generics {
 #[derive(Debug, Clone)]
 pub enum GenericParam {
     Lifetime {
+        attrs: Vec<Attr>,
         lifetime: Lifetime,
         bounds: Option<Tokens>,
     },
     Type {
+        attrs: Vec<Attr>,
         ident: Ident,
         bounds: Option<Tokens>,
         default: Option<Type>,
     },
     Const {
+        attrs: Vec<Attr>,
         ident: Ident,
         ty: Type,
         default: Option<Expr>,
