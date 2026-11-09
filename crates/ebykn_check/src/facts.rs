@@ -32,11 +32,13 @@ pub enum RegionRef {
     At { old: bool, region: Box<RegionRef> },
 }
 
-/// 呼び出しの末尾に足す権限の引数（callee の `uses` の宣言順）。
+/// 呼び出しの末尾に足す消去される引数（callee の `uses` の宣言順）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtraArg {
-    pub var: String,
-    pub mode: PermMode,
+pub enum ExtraArg {
+    /// 権限 `var@`（実行時の引数 `var` に付いて渡る）。
+    Perm { var: String, mode: PermMode },
+    /// 呼び出しの `uses` の後の `index` 番目の領域（#19 の既定 P1）。
+    Region(usize),
 }
 
 #[derive(Debug, Default)]
@@ -45,8 +47,11 @@ pub struct Facts {
     pub derefs: BTreeMap<SpanKey, String>,
     /// `X.free()`（`X ∈ Γ`）。値は `X`。
     pub frees: BTreeMap<SpanKey, String>,
-    /// 権限を渡す呼び出し（`Call` / `MethodCall` の位置）。
+    /// 権限か領域を渡す呼び出し（`Call` / `MethodCall` の位置）。
     pub calls: BTreeMap<SpanKey, Vec<ExtraArg>>,
+    /// 呼び出しで渡す領域変数のうち、`uses r: &Region<..>` / `&mut Region<..>` で受けた参照
+    /// （書き下しで `&mut *r` と借り直す）。鍵は `RegionArg` の位置。
+    pub region_arg_refs: std::collections::BTreeSet<SpanKey>,
     /// 権限を受け取る `let X = Ptr::new(..);` / `let X = f(..);`（`f` が `gives`）。値は `X`。
     pub perm_lets: BTreeMap<SpanKey, String>,
     /// 論理の領域添字 `r[p]`（`Index` の位置）。

@@ -4,7 +4,8 @@ mod support;
 use ebykn_syntax::diag::Lang;
 use support::*;
 
-/// §4 の表の語は、表の位置の外では識別子として使える。
+/// §4 の表の語は、表の位置の外では識別子として使える。`uses` は予約語で、
+/// `crates/ebykn_syntax/tests/region_call.rs` が拒むことを確かめる（#19 の既定 P1）。
 #[test]
 fn contextual_keywords_are_identifiers_elsewhere() {
     let words = [
@@ -17,7 +18,6 @@ fn contextual_keywords_are_identifiers_elsewhere() {
         "returns",
         "decreases",
         "no_panic",
-        "uses",
         "gives",
         "by",
         "invariant",

@@ -184,6 +184,29 @@ pub fn region(r: &RegionIndex) -> String {
     format!("{base}[{}]", expr(&r.index))
 }
 
+/// 呼び出しの `uses` の領域（#19 の既定 P1）。なければ空。
+fn region_args(uses: &[ebykn_syntax::ast::RegionArg]) -> String {
+    if uses.is_empty() {
+        return String::new();
+    }
+    let rs: Vec<String> = uses
+        .iter()
+        .map(|u| {
+            let m = match u.mode {
+                ebykn_syntax::ast::PermMode::Move => "",
+                ebykn_syntax::ast::PermMode::Shared => "&",
+                ebykn_syntax::ast::PermMode::Mut => "&mut ",
+            };
+            let r = match &u.region {
+                Region::SelfField { field, .. } => format!("self@{}", ident(field)),
+                Region::Var(i) => ident(i),
+            };
+            format!("{m}{r}")
+        })
+        .collect();
+    format!(" (uses {})", rs.join(", "))
+}
+
 pub fn expr(e: &Expr) -> String {
     use ExprKind as K;
     let s = match &e.kind {
@@ -214,15 +237,26 @@ pub fn expr(e: &Expr) -> String {
             Some(x) => format!("(return {})", expr(x)),
             None => "(return)".into(),
         },
-        K::Call { func, args } => {
-            format!("(call {} {})", expr(func), list(args)).replace(" )", ")")
+        K::Call { func, args, uses } => {
+            format!("(call {} {}{})", expr(func), list(args), region_args(uses))
+                .replace("  ", " ")
+                .replace(" )", ")")
         }
         K::MethodCall {
             receiver,
             method,
             args,
+            uses,
             ..
-        } => format!("(.{} {} {})", ident(method), expr(receiver), list(args)).replace(" )", ")"),
+        } => format!(
+            "(.{} {} {}{})",
+            ident(method),
+            expr(receiver),
+            list(args),
+            region_args(uses)
+        )
+        .replace("  ", " ")
+        .replace(" )", ")"),
         K::Cast { expr: x, ty: t } => format!("(as {} {})", expr(x), ty(t)),
         K::Closure(c) => {
             let ps: Vec<String> = c.params.iter().map(pat).collect();

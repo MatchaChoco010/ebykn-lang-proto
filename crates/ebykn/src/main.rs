@@ -20,7 +20,8 @@ Ebykn: .eyk / .eykp を Verus のソースに書き下すトランスパイラ
   verify [item] check と Verus による検証。項目ごとの状態と、証明なしの前提（admit / unchecked）を出す。
                 Ebykn が出した前提のほかに紛れ込んだ前提がないかを --no-cheating で確かめる
   build         check と cargo verus build（--verified は M5）
-  sync          証明ファイルの追従（M3 で実装）
+  sync          src/ の変更を proof/ の .eykp に 3-way merge で取り込む（git merge-file）。
+                衝突はファイルに残し、終了コード 1
   status        検証の状態（M5 で実装）
 
 オプション:
@@ -95,9 +96,41 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
         ["build", ..] => usage("build の引数が違います"),
-        ["sync", ..] => not_yet(&opts, "sync", "M3"),
+        ["sync"] => sync(&opts),
+        ["sync", ..] => usage("sync は引数を取りません"),
         ["status", ..] => not_yet(&opts, "status", "M5"),
         _ => usage(&format!("不明な引数です: {}", opts.rest.join(" "))),
+    }
+}
+
+/// `sync`（仕様 §9）。終了コードは、すべての `.eykp` を衝突なく扱えたら 0、そうでなければ 1。
+fn sync(opts: &Opts) -> ExitCode {
+    let Some(root) = std::env::current_dir().ok().and_then(|d| find_root(&d)) else {
+        say(
+            opts,
+            &format!("error: `{MANIFEST}` not found in this directory or any parent"),
+            &format!("error: このディレクトリにも親にも `{MANIFEST}` がありません"),
+        );
+        return ExitCode::from(1);
+    };
+    let report = ebykn::sync::sync(&root);
+    for l in report.lines(opts.lang) {
+        eprintln!("{l}");
+    }
+    if opts.json {
+        println!("{}", report.json());
+    }
+    if report.files.is_empty() && report.errors.is_empty() {
+        say(
+            opts,
+            "no `.eykp` under `proof/`; nothing to sync",
+            "`proof/` に `.eykp` がないので、何もしませんでした",
+        );
+    }
+    if report.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 

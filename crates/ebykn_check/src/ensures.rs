@@ -123,7 +123,7 @@ struct Visitor<'o> {
 /// `old(e)` / `final(e)` なら `e`。
 fn old_or_final(e: &ast::Expr) -> Option<&ast::Expr> {
     match &e.kind {
-        ExprKind::Call { func, args } if args.len() == 1 => match &func.kind {
+        ExprKind::Call { func, args, .. } if args.len() == 1 => match &func.kind {
             ExprKind::Path { qself: None, path }
                 if path
                     .as_ident()
@@ -261,7 +261,7 @@ impl Visitor<'_> {
                     self.expr(x);
                 }
             }
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, args, .. } => {
                 self.expr(func);
                 self.exprs(args);
             }

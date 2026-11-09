@@ -160,7 +160,13 @@ fn perm_derefs_and_extra_call_arguments() {
     assert_eq!(c.facts.derefs.values().collect::<Vec<_>>(), ["p", "p"]);
     let calls: Vec<_> = c.facts.calls.values().cloned().collect();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0][0].var, "p");
+    assert_eq!(
+        calls[0][0],
+        ebykn_check::facts::ExtraArg::Perm {
+            var: "p".into(),
+            mode: ebykn_syntax::ast::PermMode::Mut
+        }
+    );
 }
 
 #[test]

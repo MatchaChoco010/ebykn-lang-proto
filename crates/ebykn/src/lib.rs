@@ -8,6 +8,7 @@ use ebykn_check::{Checked, sort_diags};
 use ebykn_syntax::diag::{Diagnostic, Lang};
 
 pub mod no_cheating;
+pub mod sync;
 pub mod verify;
 pub mod verus;
 
@@ -216,6 +217,11 @@ pub fn init(dir: &Path, name: &str) -> Result<PathBuf, String> {
     write(project::MANIFEST, &manifest)?;
     write("src/lib.eyk", INIT_LIB)?;
     write(".gitignore", "/build/\n")?;
+    // `ebykn sync` の基準（`.ebykn/sync/`）はリポジトリに入れる。PR の差分では写しなので畳ませる。
+    write(
+        ".gitattributes",
+        "/.ebykn/sync/** linguist-generated=true\n",
+    )?;
     Ok(root)
 }
 

@@ -141,9 +141,36 @@ jobs:
       # §6.2 の参照モデル（formal/linearity）から判定の表を作り直し、formal/oracle/ と比べる。
       - run: cargo xtask formal-oracle
 
+  # 報告スライドの道具（xtask/src/slides/pin.rs で固定した Typst とフォント）で、スキルの見本を組む。
+  # はみ出し・密度・見出し・リンクの数は slides-build が検査する。slides-selftest は、見本を 1 か所ずつ壊して
+  # 組み、その検査が本物のテンプレートで失敗できることを確かめる。
+  slides:
+    runs-on: ubuntu-latest
+    env:
+      # xtask は XDG_CACHE_HOME を優先する。キャッシュするパスと食い違わないよう明示する。
+      XDG_CACHE_HOME: /home/runner/.cache
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # 固定値だけを置いた pin.rs を鍵にする（xtask のほかの変更では取り直さない）。
+      # 取得したものの sha256 は slides-install と slides-build が毎回確かめる。
+      - name: 報告スライドの道具のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.XDG_CACHE_HOME }}/ebykn/typst
+            ${{ env.XDG_CACHE_HOME }}/ebykn/fonts
+          key: slides-${{ hashFiles('xtask/src/slides/pin.rs') }}
+      - run: cargo xtask slides-install
+      # target/ は rust-cache が前回の実行から戻すので、前回の写しを消してから写す（残っていると cp -r が中に入れ子で写す）。
+      - run: rm -rf target/reports/example && mkdir -p target/reports && cp -r .claude/skills/ebykn-report-slides/example target/reports/example
+      - run: cargo xtask slides-build target/reports/example
+      - run: cargo xtask slides-selftest
+
   # ブランチ保護が見る必須チェックはこれだけ。ジョブを足したら needs にも足す。
   ci-required:
-    needs: [fmt, clippy, test, gates, book, verus]
+    needs: [fmt, clippy, test, gates, book, verus, slides]
     if: always()
     runs-on: ubuntu-latest
     steps:

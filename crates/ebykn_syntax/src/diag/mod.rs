@@ -65,6 +65,10 @@ pub enum Code {
     E0516,
     /// `Ptr<T>` の `T` がゼロサイズ型（仕様 §10.1 にない。`docs/current-spec.md` §10.1）。
     E0517,
+    /// 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（仕様 §10.1 にない。#19）。
+    E0518,
+    /// 呼び出しで渡す領域の状態の誤り（仕様 §10.1 にない。#19）。
+    E0519,
     /// 絞り込み型を展開しない位置で使用（警告）。
     W0601,
 }
@@ -98,6 +102,8 @@ impl Code {
             Code::E0515 => "E0515",
             Code::E0516 => "E0516",
             Code::E0517 => "E0517",
+            Code::E0518 => "E0518",
+            Code::E0519 => "E0519",
             Code::W0601 => "W0601",
         }
     }
@@ -151,6 +157,10 @@ pub enum Message {
     ReservedRename { written: String },
     /// その位置には書けないもの（文法にない組み合わせ）。
     NotAllowedHere { written: String },
+    /// 予約語（`uses`。#19 の既定 P1）を名前に使った。
+    ReservedWord { word: String },
+    /// 呼び出しの引数の末尾でない位置の `uses`（#19 の既定 P1）。
+    UsesOutsideCall,
     /// E0101。
     ReservedPrefix { ident: String },
     /// E0102。
@@ -202,6 +212,8 @@ pub enum Expected {
     SpecOrLemmaFn,
     /// `and { .. }` / `or { .. }` の中の式（一つ以上）。
     AndOrExpr,
+    /// 呼び出しの `uses` の後の領域（`r`、`&r`、`&mut r`、`self@x`）。
+    UsesArg,
 }
 
 impl Expected {
@@ -245,6 +257,12 @@ impl Expected {
                 "at least one expression in `and { .. }` / `or { .. }`"
             }
             (Expected::AndOrExpr, Lang::Ja) => "`and { .. }` / `or { .. }` の中に一つ以上の式",
+            (Expected::UsesArg, Lang::En) => {
+                "a region after `uses` (`r`, `&r`, `&mut r`, `&mut self@x`), separated by `,` and closed by the `)` of the call"
+            }
+            (Expected::UsesArg, Lang::Ja) => {
+                "`uses` の後に、`,` で並べて呼び出しの `)` で閉じる領域（`r`、`&r`、`&mut r`、`&mut self@x`）"
+            }
         }
     }
 }
@@ -313,6 +331,18 @@ impl Message {
             (Message::PropsOnly { written }, Ja) => format!(
                 "構文エラー: `{written}` は性質ファイルにだけ書けます（性質ファイルはまだ読めません）"
             ),
+            (Message::ReservedWord { word }, En) => format!(
+                "syntax error: `{word}` is a keyword in Ebykn and cannot be used as a name; write `r#{word}` to use it as a name"
+            ),
+            (Message::ReservedWord { word }, Ja) => format!(
+                "構文エラー: `{word}` は Ebykn の予約語で、名前には使えません。名前に使うなら `r#{word}` と書きます"
+            ),
+            (Message::UsesOutsideCall, En) => {
+                "syntax error: `uses` passes regions only at the end of the arguments of a call (`f(x, uses &mut r)`)".into()
+            }
+            (Message::UsesOutsideCall, Ja) => {
+                "構文エラー: `uses` で領域を渡せるのは、呼び出しの引数の末尾だけです（`f(x, uses &mut r)`）".into()
+            }
             (Message::ChainedComparison, En) => {
                 "syntax error: comparison operators cannot be chained; write `a < b && b < c`"
                     .into()
