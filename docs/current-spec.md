@@ -472,6 +472,21 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#6（PR #13）、#61。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
 * 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`drop` から呼べる関数は判断待ち（#94）。
 
+### §7.2 実行関数の `decreases` は任意
+
+本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` と `#[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、前の属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
+
+- `decreases` を書いたループと再帰は、この属性の下でも Verus が確かめます（減らなければ `failed`）。
+- `spec fn`・`lemma fn`・純粋関数（`fn f(..) -> T = e;`。spec の側を持つ）の再帰は、今までどおり `decreases` が要ります。定義の整合性に要るためです（設計ノート §4.3）。
+- そのため、実行関数の `verified` は停止を含みません。戻ったときに契約を満たし、戻るまでに算術のあふれや権限の誤りがないことを示します。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先の関数のものを含む）に届けば、止まらないことがあります。停止を含まないことは、`ebykn verify` の注記と `--json` の `termination` で示します（§9「`ebykn verify` の項目の状態と出力」）。
+- 前の属性だけだと、Verus は関数の `decreases` を書いた実行関数に、停止を保証しないという警告をいつも出し（ループの `decreases` には出しません）、`#[verifier::allow(..)]` を案内します。`.eyk` には `#[verifier::..]` を書けない（E0102）ので、利用者はこの案内に従えません。そのため、後の属性でこの警告を消します。
+- どちらの属性も `--no-cheating` で拒まれないので、`verify` の紛れ込んだ前提の照合で許す拒否は増えません。
+- `tests/golden/exec_decreases/` と、プローブ `exec_no_decreases*.rs`（`OPEN.md` の「M0 の実測」）で固定してあります。
+
+* 元の仕様：§7.2 の表は実行関数の `decreases` を書いたとおり写すだけで、書かない場合を定めていない。設計ノート §4.3 は「`spec fn` の再帰は必須、実行関数は任意」と決めているが、固定した Verus では書かないと検証の前に止まっていた。
+* 根拠：#81。条件付きの正しさ（設計ノート §3.1 の A1）は、書いた契約を満たすことを保証する。停止は、`decreases` を書いて選ぶ性質（§4.3）。
+* 状態：基準で決めた。
+
 ### §7.3 構造体と資源の書き下し
 
 - `put r[p];` は `proof { <r>.insert(__eyk_perm_p); }` です。`borrow mut` の末尾の `insert` も `proof { }` に入れます。実行コードに文として置くと、proof のモードの関数を呼べないエラーになります。
@@ -557,6 +572,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
+- 実行関数の `verified` は停止を含みません（§7.2「実行関数の `decreases` は任意」）。`verified` の実行関数があるときは、そのことを標準エラーに英日の文言で出します（`crates/ebykn/src/verus.rs` の `termination_note`）。文言は、`verified` が停止を含まず、戻ったときに契約を満たすという意味であること、`decreases` が示すのはそれを書いたループや再帰が整礎であることだけで、`decreases` のないコードに届けば止まらないことがあることを述べます。
+- `--json` では、本体を検証する実行関数の項目に `"termination": "not_proven"` を付けます（`{"item":"k::count","status":"verified","termination":"not_proven"}`）。`ensures false` の実行関数（`loop {}`）を呼べば何でも示せるので、機械で読む側が、停止を示していない `verified` を見分けられるようにするためです。`spec fn`・`lemma fn`・純粋関数の項目には付けません。
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
@@ -581,7 +598,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
-* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
+* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）、#81（PR #116）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。実行関数の `verified` が停止を含まないことは、人が読む出力と `--json` の両方で示す。
 * 状態：基準で決めた。
 
 ### 生成クレートの成果物は `build/verus/target`

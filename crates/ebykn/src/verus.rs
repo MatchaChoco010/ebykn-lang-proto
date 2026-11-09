@@ -809,27 +809,57 @@ pub fn cfg_assumption_message(cfg_uses: &[String]) -> Option<(String, String)> {
     ))
 }
 
+/// 実行関数の `verified` が停止を含まないことの注記（#81）。表示する項目に `verified` の実行関数
+/// （`exec`。`Output::exec`）があるときだけ返す。
+///
+/// `decreases` が示すのは、それを書いたループや再帰が整礎であることだけで、関数が停止することではない。
+/// `decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先のものを含む）に届けば止まらない
+/// ことがある。Verus は、関数の `decreases` を書いた実行関数に停止を保証しないという警告をいつも出すが、
+/// `.eyk` では従えない `#[verifier::allow(..)]` を案内するので、書き下しがその属性を付けて警告を消し
+/// （`ebykn_lower` の `EXEC_NO_DECREASES`）、この注記で断る。
+pub fn termination_note(
+    items: &[ItemStatus],
+    exec: &[String],
+    lang: ebykn_syntax::diag::Lang,
+) -> Option<&'static str> {
+    if !items
+        .iter()
+        .any(|s| s.status == "verified" && exec.contains(&s.item))
+    {
+        return None;
+    }
+    Some(match lang {
+        ebykn_syntax::diag::Lang::En => TERMINATION_NOTE_EN,
+        ebykn_syntax::diag::Lang::Ja => TERMINATION_NOTE_JA,
+    })
+}
+
+/// [`termination_note`] の英語の文言。
+pub const TERMINATION_NOTE_EN: &str = "`verified` for an executable function does not include termination: it means the function meets its contract whenever it returns. `decreases` shows only that the loop or recursion it is written on is well-founded; code that reaches a loop or recursion without `decreases` may not terminate";
+
+/// [`termination_note`] の日本語の文言。
+pub const TERMINATION_NOTE_JA: &str = "実行関数の `verified` は停止を含みません。戻ったときに契約を満たすという意味です。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` のないループや再帰に届けば、止まらないことがあります";
+
 /// `verify --json` の結果（1 行）。
+///
+/// `exec` は本体を検証する実行関数（`Output::exec`）。その項目には `"termination": "not_proven"` を付ける。
+/// 実行関数の `verified` は停止を含まない（#81）ので、機械で読む側もそれを見分けられるようにする。
 pub fn status_json(
     items: &[ItemStatus],
     summary: Summary,
     cheating: &Cheating,
     cfg_uses: &[String],
     success: bool,
+    exec: &[String],
 ) -> String {
     let items: Vec<serde_json::Value> = items
         .iter()
-        .map(|i| match &i.via {
-            Some((kind, path)) => serde_json::json!({
-                "item": i.item,
-                "status": i.status,
-                "macro": path,
-                "kind": match kind {
-                    ebykn_syntax::macros::MacroKind::Derive => "derive",
-                    ebykn_syntax::macros::MacroKind::Attribute => "attribute",
-                },
-            }),
-            None => serde_json::json!({"item": i.item, "status": i.status}),
+        .map(|i| {
+            let mut v = item_json(i);
+            if exec.contains(&i.item) {
+                v["termination"] = "not_proven".into();
+            }
+            v
         })
         .collect();
     let results = match summary {
@@ -872,6 +902,22 @@ pub fn status_json(
         "results": results,
     })
     .to_string()
+}
+
+/// `verify --json` の項目一つ。
+fn item_json(i: &ItemStatus) -> serde_json::Value {
+    match &i.via {
+        Some((kind, path)) => serde_json::json!({
+            "item": i.item,
+            "status": i.status,
+            "macro": path,
+            "kind": match kind {
+                ebykn_syntax::macros::MacroKind::Derive => "derive",
+                ebykn_syntax::macros::MacroKind::Attribute => "attribute",
+            },
+        }),
+        None => serde_json::json!({"item": i.item, "status": i.status}),
+    }
 }
 
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
@@ -1136,6 +1182,67 @@ mod tests {
         );
     }
 
+    fn item(item: &str, status: &'static str) -> ItemStatus {
+        ItemStatus {
+            item: item.into(),
+            status,
+            via: None,
+        }
+    }
+
+    /// 実行関数の `verified` が停止を含まないことの注記（#81）は、`verified` の実行関数があるときだけ出し、
+    /// `decreases` のある関数でも停止を含まないと断る（`decreases` を書いたループや再帰だけが止まる、
+    /// と言いすぎない）。
+    #[test]
+    fn termination_note_only_for_verified_exec_functions() {
+        let exec = vec!["k::count".to_string(), "k::spin".to_string()];
+        let verified = [item("k::count", "verified"), item("k::sum", "verified")];
+        let en = termination_note(&verified, &exec, Lang::En).expect("verified の実行関数がある");
+        assert!(en.contains("does not include termination"), "{en}");
+        assert!(en.contains("may not terminate"), "{en}");
+        assert!(!en.contains("termination is proven"), "{en}");
+        let ja = termination_note(&verified, &exec, Lang::Ja).expect("verified の実行関数がある");
+        assert!(ja.contains("停止を含みません"), "{ja}");
+        assert!(ja.contains("止まらないことがあります"), "{ja}");
+        // 実行関数が verified でなければ（failed・unchecked）、spec の側だけが verified なら、出さない。
+        assert_eq!(
+            termination_note(
+                &[item("k::count", "failed"), item("k::sum", "verified")],
+                &exec,
+                Lang::En
+            ),
+            None
+        );
+        assert_eq!(
+            termination_note(&[item("k::sum", "verified")], &exec, Lang::En),
+            None
+        );
+        assert_eq!(termination_note(&verified, &[], Lang::En), None);
+    }
+
+    /// `verify --json` は、実行関数の項目に `"termination":"not_proven"` を付ける（#81）。
+    #[test]
+    fn json_marks_exec_items_as_termination_not_proven() {
+        let exec = vec!["k::count".to_string()];
+        let items = [item("k::count", "verified"), item("k::sum", "verified")];
+        let ran = Summary::Ran {
+            verified: 2,
+            errors: 0,
+        };
+        let json = status_json(&items, ran, &Cheating::Clean, &[], true, &exec);
+        assert!(
+            json.contains(r#"{"item":"k::count","status":"verified","termination":"not_proven"}"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#"{"item":"k::sum","status":"verified"}"#),
+            "{json}"
+        );
+        // 実行関数の一覧がなければ付かない（壊す操作が当たったことを確かめる）。
+        let json = status_json(&items, ran, &Cheating::Clean, &[], true, &[]);
+        assert!(!json.contains("termination"), "{json}");
+    }
+
     fn facts() -> ItemFacts {
         ItemFacts {
             admitted: false,
@@ -1165,9 +1272,15 @@ mod tests {
         let names = vec!["my_flag".to_string(), "test".to_string()];
         let text = status_text(&[], ran(0), &Cheating::Clean, &names);
         assert!(text.contains("assumed cfg my_flag, test\n"), "{text}");
-        let json: serde_json::Value =
-            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &names, true))
-                .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&status_json(
+            &[],
+            ran(0),
+            &Cheating::Clean,
+            &names,
+            true,
+            &[],
+        ))
+        .unwrap();
         assert_eq!(
             json["cfg_assumption"],
             serde_json::json!({"names": ["my_flag", "test"], "note": CFG_ASSUMPTION_EN})
@@ -1192,7 +1305,8 @@ mod tests {
         let text = status_text(&[], ran(0), &Cheating::Clean, &[]);
         assert!(!text.contains("assumed cfg"), "{text}");
         let json: serde_json::Value =
-            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &[], true)).unwrap();
+            serde_json::from_str(&status_json(&[], ran(0), &Cheating::Clean, &[], true, &[]))
+                .unwrap();
         assert!(json["cfg_assumption"].is_null(), "{json}");
         assert!(cfg_assumption_message(&[]).is_none());
     }
@@ -1316,6 +1430,7 @@ mod tests {
             admitted: vec!["k::l".into()],
             unchecked: vec![],
             external: vec![],
+            exec: vec![],
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),
@@ -1389,7 +1504,7 @@ mod tests {
             status_text(&st, stopped, &Cheating::NotRun, &[]),
             "unknown k::f\nfailed k::g\nadmit k::l\nresults not verified: Verus stopped before verification (1 errors)\n"
         );
-        let json = status_json(&st, stopped, &Cheating::NotRun, &[], false);
+        let json = status_json(&st, stopped, &Cheating::NotRun, &[], false, &[]);
         assert!(
             json.contains(r#"{"item":"k::f","status":"unknown"}"#) && !json.contains("verified\""),
             "{json}"
@@ -1464,7 +1579,7 @@ mod tests {
                 "macro tokio::main on k5::one"
             ]
         );
-        let json = status_json(&shown, ran2, &Cheating::Clean, &[], true);
+        let json = status_json(&shown, ran2, &Cheating::Clean, &[], true, &[]);
         assert!(
             json.contains(
                 r#"{"item":"k5::Foo","kind":"derive","macro":"serde::Serialize","status":"macro"}"#
@@ -1665,7 +1780,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             "results not verified: Verus stopped before verification (1 errors)\n"
         );
         assert!(!text.contains("0 errors"), "{text}");
-        let json = status_json(&[], r.summary(), &Cheating::NotRun, &[], false);
+        let json = status_json(&[], r.summary(), &Cheating::NotRun, &[], false, &[]);
         assert!(json.contains("\"ran\":false"), "{json}");
         // 件数がない（Verus が JSON を出さなかった）ときも同じ。
         let mut none = missing_run(false);
@@ -1684,12 +1799,12 @@ error: could not compile `drop` (lib) due to 1 previous error
             status_text(&[], ran, &Cheating::Clean, &names),
             "assumed cfg my_flag, test\nresults 1 verified, 0 errors\n"
         );
-        let json = status_json(&[], ran, &Cheating::Clean, &names, true);
+        let json = status_json(&[], ran, &Cheating::Clean, &names, true, &[]);
         assert!(
             json.contains("\"cfg_assumption\":{\"names\":[\"my_flag\",\"test\"]"),
             "{json}"
         );
-        let none = status_json(&[], ran, &Cheating::Clean, &[], true);
+        let none = status_json(&[], ran, &Cheating::Clean, &[], true, &[]);
         assert!(none.contains("\"cfg_assumption\":null"), "{none}");
     }
 
@@ -1712,7 +1827,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             text,
             "smuggled build/verus/src/lib.rs:22:19 `assume`/`admit` not allowed with `--no-cheating`\nresults 1 verified, 0 errors\n"
         );
-        let json = status_json(&[], ran, &smuggled, &[], false);
+        let json = status_json(&[], ran, &smuggled, &[], false, &[]);
         assert!(
             json.contains("\"location\":\"build/verus/src/lib.rs:22:19\""),
             "{json}"
@@ -1722,13 +1837,13 @@ error: could not compile `drop` (lib) due to 1 previous error
         let unread = Cheating::Unreadable(no_cheating::Unreadable::NoErrors);
         assert!(status_text(&[], ran, &unread, &[]).contains("smuggled unreadable: "));
         // 「読めない」と「走らせていない」は state で見分ける。
-        let unread_json = status_json(&[], ran, &unread, &[], false);
+        let unread_json = status_json(&[], ran, &unread, &[], false, &[]);
         assert!(unread_json.contains("\"checked\":false"), "{unread_json}");
         assert!(
             unread_json.contains("\"state\":\"unreadable\""),
             "{unread_json}"
         );
-        let not_run = status_json(&[], ran, &Cheating::NotRun, &[], false);
+        let not_run = status_json(&[], ran, &Cheating::NotRun, &[], false, &[]);
         assert!(not_run.contains("\"state\":\"not_run\""), "{not_run}");
         assert_eq!(
             status_text(&[], ran, &Cheating::Clean, &[]),
@@ -1757,7 +1872,7 @@ error: could not compile `drop` (lib) due to 1 previous error
                 errors: 2
             }
         );
-        let json = status_json(&[], failed.summary(), &Cheating::Clean, &[], false);
+        let json = status_json(&[], failed.summary(), &Cheating::Clean, &[], false, &[]);
         assert!(
             json.contains("\"ran\":true") && json.contains("\"errors\":2"),
             "{json}"
