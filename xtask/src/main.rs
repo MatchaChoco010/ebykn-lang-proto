@@ -1,5 +1,6 @@
 //! リポジトリのゲートと開発用コマンド（`cargo xtask <サブコマンド>`）。
 
+mod fetch;
 mod gates;
 #[cfg(test)]
 mod testutil;
@@ -22,7 +23,7 @@ const USAGE: &str = "\
   check-gate-tests  各ゲートに失敗を主張するテスト（fails_*）がある
   check-verus-pin   固定した Verus の値が読め、Verus のクレートが固定した vstd を使う
 
-  verus-install     固定した Verus をキャッシュに入れ、要求される toolchain を入れる
+  verus-install     固定した Verus をキャッシュに入れ（一時的なエラーは再試行）、要求される toolchain を入れる
   verus-verify      ebykn_prelude と手書きの stack を Verus で検証し、Verus なしでもビルドする
   verus-probes      設計ノート §7.2 のプローブを走らせ、期待と比べる
 ";

@@ -12,6 +12,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   MDBOOK_VERSION: 0.5.4
+  # mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz の sha256。版を上げたら書き換える。
+  MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
 
 jobs:
   fmt:
@@ -50,11 +52,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # 取得した tar.gz を版と sha256 を鍵にして置く。キャッシュは成功したジョブでだけ保存される。
+      - name: mdBook のキャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mdbook/${{ env.MDBOOK_VERSION }}
+          key: mdbook-${{ env.MDBOOK_VERSION }}-${{ env.MDBOOK_SHA256 }}
+      # 一時的なエラー（curl --retry の 408・429・500・502・503・504・時間切れと、接続の拒否）は 10 秒おきに 4 回まで再試行する
+      # （xtask/src/fetch.rs と同じ回数と待ち時間）。404 などは再試行しない。sha256 はキャッシュから戻したものも毎回確かめる。
       - name: Install mdBook ${{ env.MDBOOK_VERSION }}
         run: |
-          mkdir -p "$HOME/.local/bin"
-          curl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$HOME/.local/bin"
+          dir="$HOME/.cache/mdbook/$MDBOOK_VERSION"
+          tgz="$dir/mdbook.tar.gz"
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p "$dir" "$HOME/.local/bin"
+          if [ ! -f "$tgz" ]; then
+            if ! curl -sSfL --retry 4 --retry-delay 10 --retry-connrefused -o "$tgz.part" "$url"; then
+              echo "::error::mdBook ${MDBOOK_VERSION} を取得できません（$url）"
+              exit 1
+            fi
+            mv "$tgz.part" "$tgz"
+          fi
+          if ! echo "${MDBOOK_SHA256}  $tgz" | sha256sum -c --quiet -; then
+            echo "::error::mdBook ${MDBOOK_VERSION} の sha256 が固定値 ${MDBOOK_SHA256} と違います（実際 $(sha256sum "$tgz" | cut -d' ' -f1)）"
+            exit 1
+          fi
+          tar -xzf "$tgz" -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: mdbook --version
       - run: mdbook build book

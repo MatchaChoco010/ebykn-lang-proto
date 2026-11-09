@@ -7,6 +7,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::fetch;
+
 /// Verus で検証するクレート。`verus-verify` は各クレートを Verus で検証し、Verus なしの cargo でもビルドする。
 /// vstd に依存するクレートはすべてここに載せ、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
 pub const CRATES: &[&str] = &["crates/ebykn_prelude", "tests/golden/stack/expected/verus"];
@@ -236,17 +238,12 @@ fn try_install(root: &Path) -> Result<PathBuf, String> {
             "https://github.com/verus-lang/verus/releases/download/{}/{}",
             pin.release, pin.asset
         );
-        run(Command::new("curl")
-            .args(["-sSfL", "-o"])
-            .arg(&zip)
-            .arg(&url))?;
-        let got = sha256_of(&zip)?;
-        if got != pin.sha256 {
+        let checked = fetch::download(&format!("Verus {}", pin.release), &url, &zip)
+            .and_then(|()| sha256_of(&zip))
+            .and_then(|got| fetch::check_sha256(&pin.asset, &got, &pin.sha256));
+        if let Err(e) = checked {
             let _ = std::fs::remove_dir_all(&dir);
-            return Err(format!(
-                "{} の sha256 が固定値と違います（期待 {}、実際 {got}）",
-                pin.asset, pin.sha256
-            ));
+            return Err(e);
         }
         run(Command::new("unzip")
             .args(["-q", "-o"])
