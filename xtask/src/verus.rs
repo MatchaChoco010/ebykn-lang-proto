@@ -213,6 +213,20 @@ fn sha256_of(file: &Path) -> Result<String, String> {
         .ok_or_else(|| "sha256sum の出力を読めません".to_string())
 }
 
+/// 固定したリリースの資産を `download` で `zip` に取り、sha256 を固定値と比べる。
+fn fetch_asset(
+    pin: &Pin,
+    zip: &Path,
+    download: impl FnOnce(&str, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = format!(
+        "https://github.com/verus-lang/verus/releases/download/{}/{}",
+        pin.release, pin.asset
+    );
+    download(&url, zip)?;
+    fetch::check_sha256(&pin.asset, &sha256_of(zip)?, &pin.sha256)
+}
+
 /// 固定した Verus をキャッシュに入れ、Verus が要求する toolchain を rustup で入れる。
 pub fn install(root: &Path) -> bool {
     match try_install(root) {
@@ -234,14 +248,8 @@ fn try_install(root: &Path) -> Result<PathBuf, String> {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let zip = dir.join(&pin.asset);
-        let url = format!(
-            "https://github.com/verus-lang/verus/releases/download/{}/{}",
-            pin.release, pin.asset
-        );
-        let checked = fetch::download(&format!("Verus {}", pin.release), &url, &zip)
-            .and_then(|()| sha256_of(&zip))
-            .and_then(|got| fetch::check_sha256(&pin.asset, &got, &pin.sha256));
-        if let Err(e) = checked {
+        let what = format!("Verus {}", pin.release);
+        if let Err(e) = fetch_asset(&pin, &zip, |url, dest| fetch::download(&what, url, dest)) {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(e);
         }
@@ -535,13 +543,38 @@ mod tests {
     fn fails_when_cargo_is_called_outside_cargo_command() {
         // verify_steps を通らない cargo の呼び出しは --locked の検査をすり抜ける。
         let src = real("xtask/src/verus.rs");
-        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        let body = without_tests(&src);
+        assert_ne!(body.len(), src.len(), "verus.rs に mod tests がない");
         let needle = ["Command::new(", "\"cargo\")"].concat();
         assert_eq!(
             body.matches(needle.as_str()).count(),
             1,
             "cargo の呼び出しは cargo_command だけにする"
         );
+    }
+
+    #[test]
+    fn fails_when_the_fetched_asset_is_not_the_pinned_one() {
+        let pin = read_pin(&real("Cargo.toml")).unwrap();
+        let dir = std::env::temp_dir().join(format!("ebykn-xtask-asset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join(&pin.asset);
+        let mut asked = None;
+        let r = fetch_asset(&pin, &zip, |url, dest| {
+            asked = Some(url.to_string());
+            std::fs::write(dest, "途中で切れた zip").map_err(|e| e.to_string())
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let e = r.unwrap_err();
+        assert!(e.contains("sha256") && e.contains(&pin.asset), "{e}");
+        let url = asked.unwrap();
+        assert!(
+            url.ends_with(&format!("/{}/{}", pin.release, pin.asset)),
+            "{url}"
+        );
+        // 取得の失敗はそのまま返し、sha256 まで進まない。
+        let r = fetch_asset(&pin, &zip, |_, _| Err("取れない".to_string()));
+        assert_eq!(r, Err("取れない".to_string()));
     }
 
     #[test]

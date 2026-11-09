@@ -4,7 +4,8 @@
 //! それ以外（404 などの 4xx、書き込みの失敗）は再試行せずに失敗にする。
 //! 取れなかったときは、何を・どこから取れなかったかを示して失敗する。
 //!
-//! CI の mdBook の取得（`.github/workflows/ci.yml` の `book`）も同じ回数と待ち時間にそろえる。
+//! CI の mdBook の取得（`.github/workflows/ci.yml` の `book`）は xtask を使わず curl の `--retry` で再試行する。
+//! 時間の上限（`CURL_ARGS`）はそちらと同じにする（`fails_without_time_limits_on_curl` が確かめる）。
 
 use std::path::Path;
 use std::process::Command;
@@ -100,27 +101,51 @@ pub fn download(what: &str, url: &str, dest: &Path) -> Result<(), String> {
         .map_err(|e| format!("{what} を取得できません（{url}）: {e}"))
 }
 
+/// curl に渡す引数（取得先と保存先の前まで）。CI の mdBook の取得（`.github/workflows/ci.yml`）も同じ時間の上限を使う。
+///
+/// - `-f` は付けない（付けると HTTP のステータスが終了コード 22 にまとまり、4xx と 5xx を分けられない）。
+/// - `--connect-timeout 30`：接続できないまま待ち続けない。
+/// - `--speed-limit 1024 --speed-time 60`：60 秒のあいだ毎秒 1024 バイトを下回ったら止める（終了コード 28 になり、再試行する）。
+///   これがないと、転送の途中で止まった接続をいつまでも待つ。
+const CURL_ARGS: &[&str] = &[
+    "-sSL",
+    "--connect-timeout",
+    "30",
+    "--speed-limit",
+    "1024",
+    "--speed-time",
+    "60",
+    "-w",
+    "%{http_code}",
+    "-o",
+];
+
 /// curl の呼び出しはここでだけ作る（再試行の判定を通らない取得を作らない。テストが数える）。
-/// `-f` は付けない（付けると HTTP のステータスが終了コード 22 にまとまり、4xx と 5xx を分けられない）。
 fn curl_once(url: &str, dest: &Path) -> Result<Outcome, String> {
     let mut cmd = Command::new("curl");
-    cmd.args(["-sSL", "-w", "%{http_code}", "-o"])
-        .arg(dest)
-        .arg(url);
+    cmd.args(CURL_ARGS).arg(dest).arg(url);
     eprintln!("$ {cmd:?}");
     let out = cmd
         .output()
         .map_err(|e| format!("curl を起動できません: {e}"))?;
     eprint!("{}", String::from_utf8_lossy(&out.stderr));
-    let text = String::from_utf8_lossy(&out.stdout);
-    let http = text
-        .trim()
-        .parse()
-        .map_err(|_| format!("curl の %{{http_code}} を読めません: {text:?}"))?;
-    Ok(Outcome {
-        exit: out.status.code(),
-        http,
-    })
+    outcome(out.status.code(), &String::from_utf8_lossy(&out.stdout))
+}
+
+/// curl の終了コードと `%{http_code}` の出力から `Outcome` を作る。
+///
+/// 終了コードを先に見る。curl は失敗の種類によって `%{http_code}` に何も出さない（終了コード 3 など）ので、
+/// 失敗したときに出力が読めなくても、応答がなかった（0）として終了コードで判定する。
+/// 成功したのに出力が読めないときは、読めない入力として失敗にする。
+fn outcome(exit: Option<i32>, stdout: &str) -> Result<Outcome, String> {
+    let http = match (exit, stdout.trim().parse()) {
+        (_, Ok(http)) => http,
+        (Some(0), Err(_)) => {
+            return Err(format!("curl の %{{http_code}} を読めません: {stdout:?}"));
+        }
+        (_, Err(_)) => 0,
+    };
+    Ok(Outcome { exit, http })
 }
 
 /// 取得したものの sha256 が固定値と同じか。
@@ -189,6 +214,19 @@ mod tests {
     }
 
     #[test]
+    fn fails_unless_a_cut_transfer_is_retried() {
+        // 途中で切れた転送は、HTTP が 200 でも終了コードが 0 ではない（手元のサーバーで exit 18 と 200）。
+        for code in [18, 56] {
+            let o = Outcome {
+                exit: Some(code),
+                http: 200,
+            };
+            assert!(matches!(next(o, 1), Next::Retry(_)), "{o:?}");
+            assert!(matches!(next(o, ATTEMPTS), Next::Fail(_)), "{o:?}");
+        }
+    }
+
+    #[test]
     fn succeeds_after_a_transient_error() {
         let (r, calls, waits) = run(&[ok(504), exit(7), ok(200)]);
         assert_eq!(r, Ok(()));
@@ -241,11 +279,57 @@ mod tests {
 
     #[test]
     fn fails_when_curl_output_is_unreadable() {
-        let r = retry(
-            || Err("curl の %{http_code} を読めません".to_string()),
-            |_| {},
-        );
+        for text in ["", "abc", "200 300"] {
+            let e = outcome(Some(0), text).unwrap_err();
+            assert!(e.contains("読めません"), "{text:?}: {e}");
+        }
+        assert_eq!(outcome(Some(0), "200\n"), Ok(ok(200)));
+        let r = retry(|| outcome(Some(0), ""), |_| panic!("待った"));
         assert!(r.unwrap_err().contains("読めません"));
+    }
+
+    #[test]
+    fn fails_on_the_exit_code_when_curl_prints_no_status() {
+        // 終了コード 3（URL の形の誤り）では、curl は %{http_code} に何も出さない。
+        assert_eq!(outcome(Some(3), ""), Ok(exit(3)));
+        let Next::Fail(e) = next(outcome(Some(3), "").unwrap(), 1) else {
+            panic!("終了コード 3 を再試行した");
+        };
+        assert!(e.contains("終了コード 3"), "{e}");
+        // 接続の失敗は 000 を出す。
+        assert_eq!(outcome(Some(7), "000"), Ok(exit(7)));
+        assert_eq!(
+            outcome(None, ""),
+            Ok(Outcome {
+                exit: None,
+                http: 0
+            })
+        );
+    }
+
+    #[test]
+    fn fails_without_time_limits_on_curl() {
+        // 時間の上限がないと、途中で止まった転送を待ち続け、再試行にも来ない。
+        let args = CURL_ARGS.join(" ");
+        for want in [
+            "--connect-timeout 30",
+            "--speed-limit 1024",
+            "--speed-time 60",
+        ] {
+            assert!(args.contains(want), "{want} がない: {args}");
+        }
+        assert!(
+            !CURL_ARGS.contains(&"-f"),
+            "-f は 4xx と 5xx を分けられなくする"
+        );
+        let ci = crate::testutil::real(".github/workflows/ci.yml");
+        for want in [
+            "--connect-timeout 30",
+            "--speed-limit 1024",
+            "--speed-time 60",
+        ] {
+            assert!(ci.contains(want), "ci.yml の mdBook の取得に {want} がない");
+        }
     }
 
     #[test]
@@ -279,7 +363,7 @@ mod tests {
         let mut count = 0;
         for path in &sources {
             let src = std::fs::read_to_string(path).unwrap();
-            let body = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let body = crate::testutil::without_tests(&src);
             let n = body.matches(needle.as_str()).count();
             assert!(
                 n == 0 || path.ends_with("fetch.rs"),

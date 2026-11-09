@@ -79,3 +79,9 @@ pub fn assert_fails(report: &Report, needle: &str) {
 pub fn assert_passes(report: &Report) {
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 }
+
+/// ソースのうちテストのモジュール（`#[cfg(test)]` の直後の `mod tests`）より前の部分。
+/// `#[cfg(test)] mod testutil;` のような宣言では切らない。`mod tests` がなければ全体を返す。
+pub fn without_tests(src: &str) -> &str {
+    &src[..src.find("#[cfg(test)]\nmod tests").unwrap_or(src.len())]
+}
