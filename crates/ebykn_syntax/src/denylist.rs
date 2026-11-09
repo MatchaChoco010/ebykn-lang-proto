@@ -321,20 +321,14 @@ pub fn for_each_attr_cfg_pred(
     for_each_cfg_pred(kind, &rest, f);
 }
 
-/// 属性が cfg で項目や式を消しうるか：述語の位置（[`for_each_cfg_pred`]）に `cfg(..)` があるか、
-/// `cfg_attr` の条件に識別子 `cfg` がある（`cfg_attr(all(cfg), ..)`。rustc は拒否するが、cfg とみなす）。
-/// `#[cfg_attr(test, allow(cfg))]` の lint の名前は述語の位置にないので数えない（#155）。raw の綴り
-/// （`r#cfg`）も同じ名前（#122）。
+/// 属性が cfg で項目や式を消しうるか：[`for_each_cfg_pred`] が `cfg` の述語（`cfg_attr` の条件でない
+/// もの）を渡すか。項目や式を消せるのは `cfg` だけで、`cfg_attr` の条件が決めるのは並びの属性を付けるか
+/// どうかだけなので、条件は数えない（`cfg_attr(all(cfg), allow(unused))` の条件の `cfg` は、rustc が
+/// 警告だけで受理する名前）。`#[cfg_attr(test, allow(cfg))]` の lint の名前も述語の位置にないので数えない
+/// （#155）。raw の綴り（`r#cfg`）も同じ名前（#122）。
 pub fn attr_has_cfg(a: &crate::ast::Attr) -> bool {
-    fn mentions_cfg(ts: &proc_macro2::TokenStream) -> bool {
-        ts.clone().into_iter().any(|t| match t {
-            proc_macro2::TokenTree::Ident(i) => crate::macros::token_is_name(&i, "cfg"),
-            proc_macro2::TokenTree::Group(g) => mentions_cfg(&g.stream()),
-            _ => false,
-        })
-    }
     let mut found = false;
-    for_each_attr_cfg_pred(a, &mut |pred, cond| found |= !cond || mentions_cfg(pred));
+    for_each_attr_cfg_pred(a, &mut |_, cond| found |= !cond);
     found
 }
 

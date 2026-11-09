@@ -1,7 +1,8 @@
-//! どの属性を cfg とみなすか（#155）。cfg とみなすのは、述語の位置（`cfg(..)` の述語、`cfg_attr` の条件、
-//! `cfg_attr` の並びの中の `cfg(..)` / `cfg_attr(..)`）に cfg があるときだけ。`cfg_attr` の並びの中の
-//! ほかの属性の引数（`allow(cfg)` の lint の名前）は述語ではないので、cfg とみなさない。判定は拒否リストの
-//! 判定と同じ走査（`ebykn_syntax::denylist::for_each_cfg_pred`）で行う。
+//! どの属性を cfg とみなすか（#155）。cfg とみなすのは、属性そのものが `cfg` か、`cfg_attr` の並びの中
+//! （入れ子の `cfg_attr` の並びの中を含む）に `cfg` があるときだけ。`cfg_attr` の条件は並びの属性を付けるか
+//! どうかだけを決め、並びの中のほかの属性の引数（`allow(cfg)` の lint の名前）は述語ではないので、そこにある
+//! 識別子 `cfg` では cfg とみなさない。判定は拒否リストの判定と同じ走査
+//! （`ebykn_syntax::denylist::for_each_cfg_pred`）で行う。
 
 mod support;
 use support::*;
@@ -16,7 +17,7 @@ const POSITIONS: &[&str] = &[
     "{PRELUDE}pub fn f() -> u64 { let q = Ptr::new(Node { val: 3 }); let x = (*q).val; $A let n = q.free(); x }",
 ];
 
-/// cfg とみなす属性（述語の位置に cfg がある）。
+/// cfg とみなす属性（属性そのものか並びの中に `cfg` がある）。
 const CFG: &[&str] = &[
     "#[cfg(test)]",
     "#[r#cfg(test)]",
@@ -29,15 +30,12 @@ const CFG: &[&str] = &[
     // 入れ子の `cfg_attr`
     "#[cfg_attr(test, cfg_attr(unix, cfg(any())))]",
     "#[cfg_attr(test, r#cfg_attr(unix, r#cfg(any())))]",
-    // 引数の群のない `cfg`（rustc は拒否する。cfg とみなす側に倒す）
+    // 並びの中の、引数の群のない `cfg`（rustc は拒否する。cfg とみなす）
     "#[cfg_attr(test, cfg)]",
     "#[cfg_attr(test, cfg = \"x\")]",
-    // `cfg_attr` の条件の中の識別子 `cfg`（rustc は拒否する。cfg とみなす側に倒す）
-    "#[cfg_attr(all(cfg), allow(unused))]",
-    "#[cfg_attr(test, cfg_attr(any(r#cfg), allow(unused)))]",
 ];
 
-/// cfg とみなさない属性（述語の位置に cfg がない）。
+/// cfg とみなさない属性（`cfg` が条件か、ほかの属性の引数にしかない）。
 const NOT_CFG: &[&str] = &[
     "#[allow(unused)]",
     "#[cfg_attr(test, allow(unused))]",
@@ -48,6 +46,10 @@ const NOT_CFG: &[&str] = &[
     "#[cfg_attr(test, allow(cfg), allow(unused))]",
     "#[cfg_attr(test, cfg_attr(unix, allow(cfg)))]",
     "#[r#cfg_attr(test, allow(cfg))]",
+    // `cfg_attr` の条件の中の識別子 `cfg`（条件は並びの属性を付けるかどうかだけを決める。rustc は
+    // unexpected cfg condition name の警告だけで受理する）
+    "#[cfg_attr(all(cfg), allow(unused))]",
+    "#[cfg_attr(test, cfg_attr(any(r#cfg), allow(unused)))]",
 ];
 
 const WANT: &str = "E0003";

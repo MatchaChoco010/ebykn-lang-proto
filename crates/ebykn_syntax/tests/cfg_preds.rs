@@ -7,7 +7,7 @@ mod support;
 use ebykn_syntax::{ast, denylist};
 use support::*;
 
-/// cfg とみなす属性（述語の位置に cfg がある）。
+/// cfg とみなす属性（属性そのものか並びの中に `cfg` がある）。
 const CFG: &[&str] = &[
     "cfg(test)",
     "r#cfg(test)",
@@ -21,11 +21,9 @@ const CFG: &[&str] = &[
     "cfg_attr(test, cfg_attr(unix, cfg(any())))",
     "cfg_attr(test, cfg)",
     "cfg_attr(test, ::cfg(any()))",
-    "cfg_attr(all(cfg), allow(unused))",
-    "cfg_attr(test, cfg_attr(any(r#cfg), allow(unused)))",
 ];
 
-/// cfg とみなさない属性（述語の位置に cfg がない）。
+/// cfg とみなさない属性（`cfg` が条件か、ほかの属性の引数にしかない）。
 const NOT_CFG: &[&str] = &[
     "allow(unused)",
     "allow(cfg)",
@@ -38,6 +36,9 @@ const NOT_CFG: &[&str] = &[
     "cfg_attr",
     "cfg_attr = \"cfg\"",
     "x::cfg(test)",
+    // `cfg_attr` の条件の中の識別子 `cfg`（条件は並びの属性を付けるかどうかだけを決める）
+    "cfg_attr(all(cfg), allow(unused))",
+    "cfg_attr(test, cfg_attr(any(r#cfg), allow(unused)))",
 ];
 
 fn attr(body: &str) -> ast::Attr {
@@ -79,7 +80,7 @@ fn the_ast_and_the_tokens_visit_the_same_predicates() {
 }
 
 #[test]
-fn cfg_in_a_predicate_position_is_a_cfg() {
+fn a_cfg_attribute_is_a_cfg() {
     for body in CFG {
         assert!(ast::has_cfg(&[attr(body)]), "cfg とみなすべき: #[{body}]");
     }
