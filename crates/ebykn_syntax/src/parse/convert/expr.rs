@@ -6,10 +6,11 @@ use verus_syn as syn;
 use verus_syn::parse::Parser as _;
 
 use super::{
-    attrs, binding, generic_arg, ident, lifetime, lit, mac, member, path, qself, tokens, ty,
+    attrs, binding, binding_as, generic_arg, ident, lifetime, lit, mac, member, path, qself,
+    tokens, ty,
 };
 use crate::ast;
-use crate::diag::Message;
+use crate::diag::{BindingForm, Message};
 use crate::parse::hook::{self, RawAtom, RawRegion, RawRegionIndex, RawStmt, RawVerbatimExpr};
 use crate::parse::{item, push, push_error, sp, span_of, span_of_tokens};
 use crate::span::Span;
@@ -1060,6 +1061,11 @@ pub(in crate::parse) fn stmt_verbatim(ts: TokenStream, span: Span) -> ast::Stmt 
 }
 
 pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
+    pat_as(p, BindingForm::Name)
+}
+
+/// [`pat`] の、最上位の名前の束縛を `form` の書き方として読む版（構造体のパターンの省略形）。
+fn pat_as(p: syn::Pat, form: BindingForm) -> ast::Pat {
     use ast::PatKind as P;
     let span = span_of(&p);
     // パターンの外部属性（クロージャの引数の `#[cfg]` など。黙って落とさない。#95）。
@@ -1086,7 +1092,7 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
         syn::Pat::Ident(i) => P::Ident {
             by_ref: i.by_ref.is_some(),
             mutable: i.mutability.is_some(),
-            ident: binding(&i.ident),
+            ident: binding_as(&i.ident, form),
             sub: i.subpat.map(|(_, s)| Box::new(pat(*s))),
         },
         syn::Pat::Wild(_) => P::Wild,
@@ -1116,11 +1122,17 @@ pub(in crate::parse) fn pat(p: syn::Pat) -> ast::Pat {
                 .into_iter()
                 .map(|f| {
                     let span = span_of(&f);
+                    let shorthand = f.colon_token.is_none();
+                    let form = if shorthand {
+                        BindingForm::Shorthand
+                    } else {
+                        BindingForm::Name
+                    };
                     ast::FieldPat::Field {
                         attrs: attrs(&f.attrs),
                         member: member(&f.member),
-                        shorthand: f.colon_token.is_none(),
-                        pat: pat(*f.pat),
+                        shorthand,
+                        pat: pat_as(*f.pat, form),
                         span,
                     }
                 })
@@ -1174,14 +1186,22 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                         pat: p,
                         span,
                     } => {
-                        let m = member(&m);
                         let shorthand = p.is_none();
+                        // 省略形（`S { r#type, @g }`）はフィールドの名前で局所の名前を束縛する（#119）。
+                        let bound = match (&m, &p) {
+                            (syn::Member::Named(i), None) => {
+                                Some(binding_as(i, BindingForm::Shorthand))
+                            }
+                            _ => None,
+                        };
+                        let m = member(&m);
                         let sub = match p {
                             Some(p) => pat(p),
                             None => {
-                                let id = match &m {
-                                    ast::Member::Named(i) => i.clone(),
-                                    ast::Member::Unnamed { span, .. } => ast::Ident {
+                                let id = match (&m, bound) {
+                                    (_, Some(i)) => i,
+                                    (ast::Member::Named(i), None) => i.clone(),
+                                    (ast::Member::Unnamed { span, .. }, None) => ast::Ident {
                                         name: String::new(),
                                         raw: false,
                                         span: *span,
@@ -1209,7 +1229,7 @@ fn pat_verbatim(ts: TokenStream, span: Span) -> ast::Pat {
                     }
                     hook::RawFieldPat::Erased { attrs: a, ident: i } => ast::FieldPat::Erased {
                         attrs: attrs(&a),
-                        ident: binding(&i),
+                        ident: binding_as(&i, BindingForm::Erased),
                     },
                     hook::RawFieldPat::ErasedRest { attrs: a, span: s } => {
                         ast::FieldPat::ErasedRest {

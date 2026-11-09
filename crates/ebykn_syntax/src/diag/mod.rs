@@ -203,7 +203,7 @@ pub enum Message {
     /// E0102。
     VerifierAttr,
     /// E0103。局所の名前を束縛する位置の、Rust の予約語の raw の綴り（#119）。
-    RawKeywordBinding { word: String },
+    RawKeywordBinding { word: String, form: BindingForm },
     /// E0401。
     ErasedOnNonNamed {
         section: &'static str,
@@ -218,6 +218,17 @@ pub enum Message {
     VerusBuiltin { name: String, written: String },
     /// 構文解析では判定できず検査に任せる名前（診断としては出さない。[`crate::Parsed::deferred`]）。
     Deferred(crate::reserved::DeferredName),
+}
+
+/// [`Message::RawKeywordBinding`] の束縛の書き方。書き方ごとに直し方の案内が違う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingForm {
+    /// 名前を書いて束縛する（`let r#type`、引数、量化子の変数、戻り値の名前など）。
+    Name,
+    /// 構造体のパターンの省略形（`S { r#type }`）。フィールドの名前で束縛する。
+    Shorthand,
+    /// 消去フィールドのパターン（`S { @r#type }`）。別の名前で束縛する書き方がない。
+    Erased,
 }
 
 /// [`Message::Expected`] の対象。
@@ -433,12 +444,34 @@ impl Message {
             (Message::EditionKeyword { word, since }, Ja) => format!(
                 "構文エラー: `{word}` は Rust {since} 以降（`Ebykn.toml` の `edition`）の予約語で、名前には使えません。関数・型・モジュール・フィールドの名前に使うなら `r#{word}` と書き、局所の名前（変数、引数、パターンの束縛）には `{word}_` などの別の名前を使います"
             ),
-            (Message::RawKeywordBinding { word }, En) => format!(
-                "`r#{word}` cannot be used as a local name (variable, parameter, pattern binding, quantified variable, return value name, region, const generic parameter) because Verus cannot verify it; use another name such as `{word}_`"
-            ),
-            (Message::RawKeywordBinding { word }, Ja) => format!(
-                "`r#{word}` は局所の名前（変数、引数、パターンの束縛、量化子の変数、戻り値の名前、領域、const generics の引数）には使えません。Verus が検証できないためです。`{word}_` などの別の名前を使います"
-            ),
+            (Message::RawKeywordBinding { word, form }, En) => {
+                let fix = match form {
+                    BindingForm::Name => format!("use another name such as `{word}_`"),
+                    BindingForm::Shorthand => {
+                        format!("bind the field to another name, such as `r#{word}: {word}_`")
+                    }
+                    BindingForm::Erased => format!(
+                        "an erased field pattern binds the field's own name, so rename the field, or read it as `x@r#{word}` without binding it"
+                    ),
+                };
+                format!(
+                    "`r#{word}` cannot be used as a local name (variable, parameter, pattern binding, quantified variable, return value name, region, const generic parameter) because Verus cannot verify it; {fix}"
+                )
+            }
+            (Message::RawKeywordBinding { word, form }, Ja) => {
+                let fix = match form {
+                    BindingForm::Name => format!("`{word}_` などの別の名前を使います"),
+                    BindingForm::Shorthand => {
+                        format!("`r#{word}: {word}_` のように、別の名前で束縛します")
+                    }
+                    BindingForm::Erased => format!(
+                        "消去フィールドのパターンはフィールドの名前で束縛するので、フィールドの名前を変えるか、束縛せずに `x@r#{word}` で読みます"
+                    ),
+                };
+                format!(
+                    "`r#{word}` は局所の名前（変数、引数、パターンの束縛、量化子の変数、戻り値の名前、領域、const generics の引数）には使えません。Verus が検証できないためです。{fix}"
+                )
+            }
             (Message::UsesOutsideCall, En) => {
                 "syntax error: `uses` passes regions only at the end of the arguments of a call (`f(x, uses &mut r)`)".into()
             }

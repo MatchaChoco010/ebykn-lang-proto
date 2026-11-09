@@ -95,15 +95,19 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 ### Rust の予約語の raw の綴りは、局所の名前に使えない
 
-Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#gen` など）は、局所の名前に使えません（`E0103`）。局所の名前とは、`let`・`match`・`if let`・`for`・関数とクロージャの引数のパターンの束縛（構造体のパターンの省略形 `S { r#type }` と消去フィールドの `@r#type` を含む）、量化子の変数、名前付きの戻り値（`-> (r#type: T)`）、`uses` の領域の名前、const generics の引数です。診断は、`type_` のような別の名前を案内します。
+Rust の予約語を `r#` で名前にしたもの（`r#type`、`r#match`、`r#gen` など）は、局所の名前に使えません（`E0103`）。局所の名前とは、`let`・`match`・`if let`・`for`・関数とクロージャの引数のパターンの束縛（構造体のパターンの省略形 `S { r#type }` と消去フィールドの `@r#type` を含む）、量化子の変数、名前付きの戻り値（`-> (r#type: T)`）、`uses` の領域の名前、const generics の引数です。診断は、書き方ごとに書き換え方を案内します。
 
+- 名前を書いて束縛するところは、`type_` のような別の名前にします。
+- 構造体のパターンの省略形（`S { r#type }`、`S { r#type, @g }`）は、`S { r#type: type_ }` のように別の名前で束縛します。
+- 消去フィールドのパターン（`@r#type`）には、別の名前で束縛する書き方がありません。`spec` / `owns` のフィールドの名前を変えるか、束縛せずに `x@r#type` で読みます。
 - 対象の語は `crates/ebykn_syntax/src/reserved.rs` の `RAW_KEYWORDS` です。厳格な予約語と将来のための予約語（`abstract`、`yield` など）と、版で予約語になった `async`・`await`・`dyn`・`try`（2018）、`gen`（2024）です。版で予約語になった語は、`Ebykn.toml` の `edition` がその版より前なら拒否しません（2021 の `r#gen` は通ります）。`edition` が数として読めなければ拒否します。
 - 予約語でない名前の raw の綴り（`r#foo`、弱いキーワードの `r#union`・`r#raw`、Verus の句の `r#requires`）は通ります。
 - 関数・型・モジュール・トレイト・型の別名・構造体のフィールド・型の引数の名前は、raw の綴りのまま通します（Verus が通すので、`fn r#gen` や `s.r#type` はそのまま書けます）。`const`・`static`・列挙子・列挙子のフィールドの raw の名前は、Verus が予約語でない `r#foo` でも拒否します。これは別の問題で、#147 で扱います。
 - 中を読まないトークン列（マクロの引数など）の中の束縛は見ません。そこに書いたものは、Verus の `function body check` のままです。
+- パターンの名前は字句で判定するので、予約語の raw の綴りの unit struct をパターンに書くと（`pub struct r#type;` の後の `let r#type = x;`）、Rust ではパスのパターンでも `E0103` になります。`r#type {}` か `crate::r#type` と書きます。
 
 * 元の仕様：§4 は識別子を Rust のものとし、raw の綴りに触れない。
-* 根拠：#119。固定した Verus は、予約語を `r#` で名前にした局所の名前を SMT の記号に `r#type@` のまま書き、z3 が読めないので、検証条件に出ると `function body check` で失敗する（`spec fn` の引数なら定義が効かず、使う側が `postcondition not satisfied` になる）。`ebykn check` は通るので、`verify` で初めて分かり、文言から原因が分からない（`tests/verus-probes/raw_keyword_local.rs`）。書き下しで別の名前に変えない理由は `OPEN.md` の 2026-11-10 の行。
+* 根拠：#119。固定した Verus は、予約語を `r#` で名前にした局所の名前を SMT の記号に `r#type@` のまま書き、z3 が読めないので、検証条件に出ると `function body check` で失敗する（`spec fn` の引数なら定義が効かず、使う側が `postcondition not satisfied` になる）。`ebykn check` は通るので、`verify` で初めて分かり、文言から原因が分からない（`tests/verus-probes/raw_keyword_local.rs`。2021 の `r#gen` が通ることは `raw_keyword_local_2021.rs`）。書き下しで別の名前に変えない理由は `OPEN.md` の 2026-11-10 の行。
 * 状態：基準で決めた。
 
 ### `borrow` は式の位置にも書ける
@@ -598,7 +602,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
 | `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
-| `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119 | 基準で決めた |
+| `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |
 | `E0519` | 呼び出しで渡す領域の状態の誤り：移動した領域を使う、借りた領域か `self@x` を移動で渡す、`&` で借りた領域を `&mut` で渡す、同じ呼び出しで同じ領域を `&mut` か移動を含めて二度渡す（§5.2） | 同上 | #19 | 判断待ちの既定 |

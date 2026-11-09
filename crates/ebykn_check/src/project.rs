@@ -443,7 +443,7 @@ fn parse_file(
 fn keeps_edition_keyword(d: &Diagnostic, edition: &str) -> bool {
     match &d.message {
         Message::EditionKeyword { since, .. } => edition_reserves(edition, *since),
-        Message::RawKeywordBinding { word } => {
+        Message::RawKeywordBinding { word, .. } => {
             raw_keyword_since(word).is_none_or(|since| edition_reserves(edition, since))
         }
         _ => true,

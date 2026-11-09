@@ -40,6 +40,9 @@ const BINDINGS: &[&str] = &[
     "pub struct S { pub NAME: u64 }\npub fn f(s: S) -> u64 { let S { NAME } = s; NAME }",
     "pub struct Node { pub val: u64 }\npub fn f() uses NAME: Region<Ptr<Node>> { }",
     "pub struct S { pub x: u64 } spec { NAME: int }\npub fn f(s: S) { let S { x, @NAME } = s; }",
+    // 消去フィールドを含む構造体のパターンの省略形（PR #148 のレビュー）。
+    "pub struct S { pub NAME: u64 } spec { g: int }\npub fn f(s: S) -> u64 { let S { NAME, @g } = s; NAME }",
+    "pub struct S { pub NAME: u64 } spec { g: int }\npub fn f(s: S) { let S { ref NAME, @.. } = s; }",
 ];
 
 /// 束縛でない位置（関数・型・モジュール・フィールド・型の引数の名前）。Verus はこれらを通す。
@@ -48,6 +51,7 @@ const NOT_BINDINGS: &[&str] = &[
     "pub struct S { pub NAME: u64 }\npub fn f(s: S) -> u64 { s.NAME }",
     "pub struct S { pub NAME: u64 }\npub fn f() -> S { S { NAME: 1 } }",
     "pub struct S { pub NAME: u64 }\npub fn f(s: S) -> u64 { let S { NAME: y } = s; y }",
+    "pub struct S { pub NAME: u64 } spec { g: int }\npub fn f(s: S) -> u64 { let S { NAME: y, @g } = s; y }",
     "pub fn f<NAME>(x: NAME) -> NAME { x }",
     "mod NAME {}",
     "pub struct NAME {}",
@@ -83,7 +87,7 @@ fn keeps_raw_keywords_elsewhere() {
             );
         }
     }
-    // 予約語でない名前では、全体が通る。
+    // 予約語の名前でも、束縛でない位置では全体が通る。
     for t in NOT_BINDINGS {
         accepts(&fill(t, "r#type"));
     }
@@ -108,6 +112,27 @@ fn accepts_raw_non_keywords_at_bindings() {
     for t in BINDINGS {
         accepts(&fill(t, "r#foo"));
     }
+}
+
+/// 束縛の書き方ごとに、そのとおりに書き換えられる直し方を案内する（PR #148 のレビュー）。
+#[test]
+fn says_what_to_write_for_each_form() {
+    let s = "pub struct S { pub r#type: u64 } spec { g: int }\n";
+    rejects(
+        &format!("{s}pub fn f(s: S) -> u64 {{ let S {{ r#type }} = s; r#type }}"),
+        "E0103",
+        "such as `r#type: type_`",
+    );
+    rejects(
+        &format!("{s}pub fn f(s: S) -> u64 {{ let S {{ r#type, @g }} = s; r#type }}"),
+        "E0103",
+        "such as `r#type: type_`",
+    );
+    rejects(
+        "pub struct S { pub x: u64 } spec { r#type: int }\npub fn f(s: S) { let S { x, @r#type } = s; }",
+        "E0103",
+        "rename the field, or read it as `x@r#type`",
+    );
 }
 
 #[test]
