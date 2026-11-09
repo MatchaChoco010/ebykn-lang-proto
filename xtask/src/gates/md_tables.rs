@@ -1,11 +1,14 @@
 //! `check-md-tables`：Markdown の表が途中で切れていない。
 //!
 //! 表の途中に空行があると、表はそこで終わり、後ろの `|` の行はただの段落として表示される。
+//! 表の直後に空行がないと、続く地の文の行も表の行として表示される。
 //! 列の数が見出しと違う行は、足りないセルが空で埋められ、余ったセルは捨てられる。
 //! 見出しと区切りの行の列の数が違えば、表にならない。どれも黙って表示が変わる。
 //!
-//! 表として見るのは `|` で始まる行（行頭の空白を除く）だけで、コードフェンスの中は見ない。
-//! セルは `\|` を除く `|` で区切る。GFM では、インラインコードの中の `|` もセルを区切る。
+//! 表は、見出しの行と区切りの行（`| --- |`）の並びで見つける。表の行は `|` で始める決まりにし、
+//! 行頭に `|` のない表は失敗にする。行頭の `|` がないと、表の行と地の文を見分けられないため。
+//! 引用の中（`>`）は `>` を剥がして同じように見る。コードフェンスの中は見ない。
+//! セルは、直前が `\` でない `|` で区切る。GFM では、インラインコードの中の `|` もセルを区切る。
 
 use super::{Repo, Report, fence_close, fence_open};
 
@@ -77,28 +80,48 @@ struct Found {
     problems: Vec<(usize, String)>,
 }
 
+/// 行。引用の `>` を剥がした中身と引用の深さ。コードフェンスの中（開きと閉じの行を含む）は `Code`。
+#[derive(Clone, Copy)]
+enum Line<'a> {
+    Code,
+    Text { depth: usize, text: &'a str },
+}
+
 fn check(text: &str) -> Result<Found, String> {
-    // コードフェンスの中（開きと閉じの行を含む）は `None`。
-    let mut lines: Vec<Option<&str>> = Vec::new();
+    let mut lines: Vec<Line> = Vec::new();
     let mut fence: Option<(char, usize, usize)> = None;
-    for (i, line) in text.lines().enumerate() {
+    for (i, raw) in text.lines().enumerate() {
+        let (depth, line) = unquote(raw);
         if let Some((c, n, _)) = fence {
             if fence_close(line, c, n) {
                 fence = None;
             }
-            lines.push(None);
-        } else if let Some((c, n, _)) = fence_open(line) {
+            lines.push(Line::Code);
+        } else if let Some((c, n, _)) = fence_open(line.trim_start()) {
+            // 字下げは問わない（リストの項目の中のフェンスは 4 文字以上字下げする）。
             fence = Some((c, n, i + 1));
-            lines.push(None);
+            lines.push(Line::Code);
         } else {
-            lines.push(Some(line));
+            lines.push(Line::Text { depth, text: line });
         }
     }
     if let Some((_, _, no)) = fence {
         return Err(format!("{no} 行目のコードフェンスが閉じていません"));
     }
 
-    let row = |i: usize| lines.get(i).copied().flatten().filter(|l| is_row(l));
+    let text_at = |i: usize| match lines.get(i) {
+        Some(Line::Text { depth, text }) => Some((*depth, *text)),
+        _ => None,
+    };
+    let blank = |t: &str| t.trim().is_empty();
+    // 同じ深さの、空でない行のかたまりの終わり（`from` から数える）。
+    let block_end = |from: usize, depth: usize, pred: &dyn Fn(&str) -> bool| {
+        let mut end = from;
+        while text_at(end).is_some_and(|(d, t)| d == depth && !blank(t) && pred(t)) {
+            end += 1;
+        }
+        end
+    };
     let mut found = Found {
         tables: 0,
         problems: Vec::new(),
@@ -107,63 +130,90 @@ fn check(text: &str) -> Result<Found, String> {
     let mut prev_table_end: Option<usize> = None;
     let mut i = 0;
     while i < lines.len() {
-        let Some(line) = lines[i] else {
+        let Some((depth, line)) = text_at(i) else {
             prev_table_end = None;
             i += 1;
             continue;
         };
-        if line.trim().is_empty() {
+        if blank(line) {
             i += 1;
             continue;
         }
-        if !is_row(line) {
+        let delim = text_at(i + 1)
+            .filter(|&(d, t)| {
+                d == depth && is_delimiter(t) && (t.contains('|') || line.contains('|'))
+            })
+            .map(|(_, t)| t);
+        let Some(delim) = delim else {
+            if is_row(line) {
+                // 表にならない `|` の行のかたまりは、1 つの段落として 1 回だけ報告する。
+                let why = match prev_table_end {
+                    Some(last) => format!(
+                        "{} 行目の空行で表が切れ、この行から後ろは表として表示されません。空行を消してください",
+                        last + 2
+                    ),
+                    None => "`|` で始まる行が表になっていません（見出しの行の次に区切りの行 `| --- |` がない）"
+                        .to_string(),
+                };
+                found.problems.push((i + 1, why));
+                i = block_end(i, depth, &|t| is_row(t));
+            } else {
+                if line.contains('|') && is_delimiter(line) {
+                    found.problems.push((
+                        i + 1,
+                        "区切りの行の形ですが、直前に見出しの行がないので表になりません"
+                            .to_string(),
+                    ));
+                }
+                i += 1;
+            }
             prev_table_end = None;
-            i += 1;
             continue;
-        }
-        // `|` で始まる行のかたまり [i, end)。
-        let mut end = i;
-        while row(end).is_some() {
-            end += 1;
-        }
-        let is_table = end - i >= 2 && is_delimiter(lines[i + 1].unwrap_or_default());
-        if !is_table {
-            let why = match prev_table_end {
-                Some(last) => format!(
-                    "{} 行目の空行で表が切れ、この行から後ろは表として表示されません。空行を消してください",
-                    last + 2
-                ),
-                None => "`|` で始まる行が表になっていません（見出しの行の次に区切りの行 `| --- |` がない）"
-                    .to_string(),
-            };
-            found.problems.push((i + 1, why));
-            prev_table_end = None;
-            i = end;
-            continue;
-        }
+        };
         found.tables += 1;
+        if !is_row(line) || !is_row(delim) {
+            found.problems.push((
+                i + 1,
+                "表の見出しの行と区切りの行は `|` で始めてください（行頭の `|` で、表の行と地の文を見分けて検査します）"
+                    .to_string(),
+            ));
+            prev_table_end = None;
+            i = block_end(i, depth, &|_| true);
+            continue;
+        }
         let head = cells(line).len();
-        let delim = cells(lines[i + 1].unwrap_or_default()).len();
-        if head != delim {
+        let delim_n = cells(delim).len();
+        if head != delim_n {
             found.problems.push((
                 i + 1,
                 format!(
-                    "見出しの列の数（{head}）と区切りの行の列の数（{delim}）が違うので、表になりません"
+                    "見出しの列の数（{head}）と区切りの行の列の数（{delim_n}）が違うので、表になりません"
                 ),
             ));
-        } else {
-            for (j, l) in lines.iter().enumerate().take(end).skip(i + 2) {
-                let n = cells(l.unwrap_or_default()).len();
-                if n != head {
-                    found.problems.push((
-                        j + 1,
-                        format!(
-                            "列の数（{n}）が見出し（{} 行目）の {head} と違います。セルの中の `|` は `\\|` と書きます",
-                            i + 1
-                        ),
-                    ));
-                }
+            prev_table_end = None;
+            i = block_end(i, depth, &|_| true);
+            continue;
+        }
+        let end = block_end(i + 2, depth, &|t| is_row(t));
+        for j in i + 2..end {
+            let n = text_at(j).map_or(0, |(_, t)| cells(t).len());
+            if n != head {
+                found.problems.push((
+                    j + 1,
+                    format!(
+                        "列の数（{n}）が見出し（{} 行目）の {head} と違います。セルの中の `|` は `\\|` と書きます",
+                        i + 1
+                    ),
+                ));
             }
+        }
+        // 表は空行か、ファイルの終わりで閉じる。空行がなければ、続く行も表の行として表示される。
+        if !matches!(text_at(end), Some((_, t)) if blank(t)) && end < lines.len() {
+            found.problems.push((
+                end + 1,
+                "表の直後に空行がないので、この行も表の行として表示されることがあります。表の直後に空行を入れてください"
+                    .to_string(),
+            ));
         }
         prev_table_end = Some(end - 1);
         i = end;
@@ -171,29 +221,32 @@ fn check(text: &str) -> Result<Found, String> {
     Ok(found)
 }
 
+/// 引用の `>` を剥がす。深さと中身を返す。
+fn unquote(line: &str) -> (usize, &str) {
+    let (mut depth, mut s) = (0, line);
+    while let Some(rest) = s.trim_start().strip_prefix('>') {
+        s = rest.strip_prefix(' ').unwrap_or(rest);
+        depth += 1;
+    }
+    (depth, s)
+}
+
 fn is_row(line: &str) -> bool {
     line.trim_start().starts_with('|')
 }
 
-/// セル。前後の `|` を除き、`\|` では区切らない。
+/// セル。前後の `|` を除き、直前が `\` の `|` では区切らない（GFM は `\\|` も `\` と `\|` と読む）。
 fn cells(line: &str) -> Vec<&str> {
     let t = line.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
     let mut out = Vec::new();
-    let (mut start, mut escaped) = (0, false);
+    let (mut start, mut prev) = (0, None);
     for (i, c) in t.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
+        if c == '|' && prev != Some('\\') {
+            out.push(&t[start..i]);
+            start = i + 1;
         }
-        match c {
-            '\\' => escaped = true,
-            '|' => {
-                out.push(&t[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
+        prev = Some(c);
     }
     if !t[start..].trim().is_empty() {
         out.push(&t[start..]);
@@ -275,7 +328,78 @@ mod tests {
             .find(|l| is_delimiter(l))
             .expect("区切りの行がない");
         let broken = mutate(&src, &format!("{delim}\n"), &format!("{delim} --- |\n"));
-        assert_fails(&repo(&broken).run(run), "表になりません");
+        assert_fails(&repo(&broken).run(run), "区切りの行の列の数");
+    }
+
+    /// 実ファイルの表の最後の行（直後が空行）。
+    fn last_row(src: &str) -> String {
+        let lines: Vec<&str> = src.lines().collect();
+        (1..lines.len() - 1)
+            .find(|&k| is_row(lines[k]) && is_row(lines[k - 1]) && lines[k + 1].is_empty())
+            .map(|k| lines[k].to_string())
+            .expect("直後が空行の表の行がない")
+    }
+
+    #[test]
+    fn fails_when_prose_follows_a_table_without_a_blank_line() {
+        let src = real(FILE);
+        let last = last_row(&src);
+        let broken = mutate(&src, &format!("{last}\n\n"), &format!("{last}\n地の文\n\n"));
+        assert_fails(&repo(&broken).run(run), "表の直後に空行がない");
+    }
+
+    #[test]
+    fn fails_when_a_fence_follows_a_table_without_a_blank_line() {
+        let src = real(FILE);
+        let last = last_row(&src);
+        let broken = mutate(
+            &src,
+            &format!("{last}\n\n"),
+            &format!("{last}\n```text\nx\n```\n\n"),
+        );
+        assert_fails(&repo(&broken).run(run), "表の直後に空行がない");
+    }
+
+    #[test]
+    fn fails_on_a_table_without_leading_pipes() {
+        let src = real(FILE);
+        let lines: Vec<&str> = src.lines().collect();
+        let k = (1..lines.len())
+            .find(|&k| is_delimiter(lines[k]))
+            .expect("区切りの行がない");
+        let (head, delim) = (lines[k - 1], lines[k]);
+        let broken = mutate(
+            &src,
+            &format!("{head}\n{delim}\n"),
+            &format!("{}\n{}\n", &head[1..], &delim[1..]),
+        );
+        assert_fails(&repo(&broken).run(run), "`|` で始めてください");
+        let pipeless = format!("{src}\na | b\n--- | ---\n1 | 2 | 3\n");
+        assert_fails(&repo(&pipeless).run(run), "`|` で始めてください");
+    }
+
+    #[test]
+    fn fails_on_a_stray_delimiter_row() {
+        let broken = format!("{}\n段落\n\n--- | ---\n", real(FILE));
+        assert_fails(&repo(&broken).run(run), "直前に見出しの行がない");
+    }
+
+    #[test]
+    fn fails_on_a_broken_table_in_a_quote() {
+        let cols = format!("{}\n> | a | b |\n> | --- | --- |\n> | 1 |\n", real(FILE));
+        assert_fails(&repo(&cols).run(run), "が見出し");
+        let split = format!("{}\n> | a |\n> | --- |\n> | 1 |\n>\n> | 2 |\n", real(FILE));
+        assert_fails(&repo(&split).run(run), "空行で表が切れ");
+    }
+
+    #[test]
+    fn fails_when_inline_triple_backticks_precede_a_broken_table() {
+        // 行頭の ```x``` はインラインコードで、フェンスを開かない（後ろの表を隠さない）。
+        let broken = format!(
+            "{}\n```x``` を書く\n\n| a |\n| --- |\n| 1 | 2 |\n",
+            real(FILE)
+        );
+        assert_fails(&repo(&broken).run(run), "が見出し");
     }
 
     #[test]
@@ -303,10 +427,21 @@ mod tests {
 | a | b |
 | :-- | --: |
 | `x \\| y` | 2 |
+| x\\\\| y | 3 |
 
 | c |
 | --- |
 | 3 |
+
+> | 引用 | の表 |
+> | --- | --- |
+> | 4 | 5 |
+
+1. リストの項目
+
+    ```text
+    | 字下げしたフェンス
+    ```
 
 ```text
 | 表 | ではない |
@@ -317,7 +452,7 @@ mod tests {
         let r = repo(text).run(run);
         assert_passes(&r);
         assert!(
-            r.notes.iter().any(|n| n.contains("1 ファイルの 2 個の表")),
+            r.notes.iter().any(|n| n.contains("1 ファイルの 3 個の表")),
             "{:?}",
             r.notes
         );

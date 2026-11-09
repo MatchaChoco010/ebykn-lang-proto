@@ -114,7 +114,10 @@ pub fn fence_open(line: &str) -> Option<(char, usize, &str)> {
         return None;
     }
     let n = t.chars().take_while(|&x| x == c).count();
-    (n >= 3).then(|| (c, n, t[n..].trim()))
+    let info = t[n..].trim();
+    // バッククォートのフェンスの情報文字列はバッククォートを含まない（CommonMark）。
+    // 含めば、行頭のインラインコード（```foo```）でフェンスではない。
+    (n >= 3 && !(c == '`' && info.contains('`'))).then_some((c, n, info))
 }
 
 /// `open` で開いたフェンスを閉じる行か。
