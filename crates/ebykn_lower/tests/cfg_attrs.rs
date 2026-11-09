@@ -32,6 +32,8 @@ const POSITIONS: &[&str] = &[
     "pub struct T<#[cfg_attr($P, allow(unused))] A> { pub a: A }",
     "pub fn f() -> u32 { let c = |#[cfg_attr($P, allow(unused))] a: u32| a; c(1) }",
     "pub struct S { pub x: u32 }\npub fn f(s: S) -> u32 { match s { S { #[cfg_attr($P, allow(unused))] x: 0 } => 1, _ => 2 } }",
+    // lint の名前の並びの `cfg` は述語ではない（#155）。
+    "pub struct S { pub x: u32 }\npub fn f(s: S) -> u32 { let S { #[cfg_attr($P, allow(cfg))] x, .. } = s; x }",
 ];
 
 const MARK: &str = "\"zz\"";
