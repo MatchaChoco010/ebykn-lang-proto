@@ -249,22 +249,58 @@ fn collect_rs(dir: &Path, rel: &str, out: &mut Vec<String>) {
     }
 }
 
+/// ケースの比べ方。`expected/verus/` があれば書き下しを比べる。なければ検査が失敗するケース
+/// （診断だけを比べる）でなければならない。書き下せるのに `expected/verus/` がないケースは失敗にする
+/// （黙って飛ばさない）。
+fn compare_case(dir: &Path) -> Result<&'static str, String> {
+    if dir.join("expected/verus").is_dir() {
+        return compare_lowered(dir).map(|_| "verus");
+    }
+    if check_project(dir).has_errors() {
+        return Ok("diag");
+    }
+    Err(format!(
+        "{}: 検査を通るのに expected/verus/ がありません（書き下しを比べられません）",
+        dir.display()
+    ))
+}
+
 #[test]
 fn lowered_verus_matches_expected() {
-    let cases: Vec<PathBuf> = cases()
-        .into_iter()
-        .filter(|c| c.join("expected/verus").is_dir())
-        .collect();
-    let names: Vec<String> = cases
-        .iter()
-        .map(|c| c.file_name().unwrap().to_string_lossy().into_owned())
-        .collect();
-    assert!(names.iter().any(|n| n == "stack"), "{names:?}");
-    let errors: Vec<String> = cases
-        .iter()
-        .filter_map(|c| compare_lowered(c).err())
-        .collect();
+    let mut kinds = Vec::new();
+    let mut errors = Vec::new();
+    for c in cases() {
+        let name = c.file_name().unwrap().to_string_lossy().into_owned();
+        match compare_case(&c) {
+            Ok(k) => kinds.push(format!("{name}:{k}")),
+            Err(e) => errors.push(e),
+        }
+    }
     assert!(errors.is_empty(), "{}", errors.join("\n"));
+    for want in [
+        "stack:verus",
+        "lowering:verus",
+        "assumed:verus",
+        "linearity:diag",
+    ] {
+        assert!(kinds.iter().any(|k| k == want), "{want} がない: {kinds:?}");
+    }
+}
+
+#[test]
+fn fails_when_a_lowerable_case_has_no_expected_verus() {
+    let tmp = std::env::temp_dir().join(format!("ebykn-golden-nov-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::copy(
+        golden_root().join("stack/Ebykn.toml"),
+        tmp.join("Ebykn.toml"),
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/lib.eyk"), "pub fn f() {}\n").unwrap();
+    let r = compare_case(&tmp);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(r.unwrap_err().contains("expected/verus/ がありません"));
 }
 
 #[test]

@@ -1,0 +1,17 @@
+// verify が verified と表示する根拠（Verus の func-details）を確かめる例（PR #26 のレビュー）。
+// Verus が見ない項目（#[cfg] で消える、#[test]）を verified と出さず、証明なしの前提を必ず出す。
+
+// unchecked の前提。これを呼ぶ caller は、前提のもとで verified。
+unchecked fn liar(x: u64) -> (r: u64) ensures r == 7, { x }
+pub fn caller(x: u64) -> (r: u64) ensures r == 7, { liar(x) }
+
+// 本体のない補題（admit）。
+lemma fn helper(x: u64) ensures x + 0 == x;
+
+// Verus のときだけ消える項目。Verus は見ないので unknown（verify は失敗する）。
+#[cfg(not(verus_keep_ghost))]
+pub fn hidden(x: u32) -> (r: u32) ensures r == 0, { x }
+
+// #[test] は #[verifier::external] になり、Verus は見ない。
+#[test]
+fn t() {}

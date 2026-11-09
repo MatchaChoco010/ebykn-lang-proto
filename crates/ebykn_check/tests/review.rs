@@ -414,3 +414,33 @@ fn duplicate_definitions_are_e0003() {
     // 名前空間が違えば重複ではない（Rust と同じ）。
     accepts("pub mod g {}\npub fn g() {}\n");
 }
+
+// ---- PR #26 のレビュー ----
+
+#[test]
+fn nested_assumptions_are_e0003() {
+    // B2：関数の本体の中の unchecked fn / lemma fn は、verify が一覧に出せない。
+    rejects(
+        "pub fn outer(x: u32) -> (r: u32) ensures r == 7, { unchecked fn liar(y: u32) -> (z: u32) ensures z == 7, { y } liar(x) }",
+        "E0003",
+        "inside a function body are not supported yet, because `verify`",
+    );
+    rejects(
+        "pub fn outer() { lemma fn l() ensures false; }",
+        "E0003",
+        "`unchecked fn` and `lemma fn`",
+    );
+    accepts("pub fn outer() { fn helper() {} helper(); }");
+}
+
+#[test]
+fn first_last_in_logical_macro_tokens_are_e0003() {
+    // B5：#11 の置き換えはトークンのまま持つマクロの引数に届かない。
+    rejects(
+        "spec fn nonempty(s: Seq<Option<int>>) -> bool = matches!(s.first(), Some(_));",
+        "E0003",
+        "`.first()` / `.last()`",
+    );
+    // 実行文脈の `Vec::first` はそのまま。
+    accepts("pub fn f(v: Vec<u64>) -> bool { matches!(v.first(), Some(_)) }");
+}

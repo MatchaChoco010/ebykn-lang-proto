@@ -1,0 +1,6 @@
+unchecked assumed::liar
+verified assumed::caller
+admit assumed::helper
+unknown assumed::hidden
+external assumed::t
+results 2 verified, 0 errors

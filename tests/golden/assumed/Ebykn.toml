@@ -1,0 +1,10 @@
+[package]
+name = "assumed"
+version = "0.1.0"
+edition = "2024"
+
+[verus]
+release = "release/0.2026.11.02.8bf68ee"
+commit = "8bf68ee741df833ea5d0fe6a2255126fdea87e47"
+
+[dependencies]

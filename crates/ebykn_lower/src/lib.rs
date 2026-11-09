@@ -52,6 +52,8 @@ pub struct Output {
     pub admitted: Vec<String>,
     /// `unchecked` の項目。
     pub unchecked: Vec<String>,
+    /// `#[test]` の項目（`#[verifier::external]`。Verus は見ない）。
+    pub external: Vec<String>,
 }
 
 /// 書き下しの間に集めるもの。
@@ -59,6 +61,7 @@ pub struct Output {
 pub(crate) struct Report {
     admitted: Vec<String>,
     unchecked: Vec<String>,
+    external: Vec<String>,
 }
 
 /// 書き下しの文脈。式ごとに複製して使う（[`Cx::sub`]）。
@@ -179,6 +182,7 @@ pub fn lower(project: &Project, checked: &Checked) -> Result<Output, String> {
     let r = report.into_inner();
     out.admitted = r.admitted;
     out.unchecked = r.unchecked;
+    out.external = r.external;
     Ok(out)
 }
 

@@ -638,6 +638,13 @@ impl Cx<'_> {
 
     fn closure(&mut self, c: &ast::Closure) -> String {
         let params: Vec<String> = c.params.iter().map(|p| self.pat(p)).collect();
+        let saved = (self.rename.clone(), self.mut_params.clone());
+        for p in &c.params {
+            if let Some(i) = ebykn_check::index::pat_ident(p) {
+                self.rename.remove(&i.name);
+                self.mut_params.remove(&i.name);
+            }
+        }
         let ret = c
             .ret
             .as_ref()
@@ -647,12 +654,14 @@ impl Cx<'_> {
             })
             .unwrap_or_default();
         let contract = self.clauses_simple(&c.contract);
-        format!(
+        let s = format!(
             "{}|{}|{ret}{contract} {}",
             if c.capture { "move " } else { "" },
             params.join(", "),
             self.expr(&c.body)
-        )
+        );
+        (self.rename, self.mut_params) = saved;
+        s
     }
 
     /// クロージャの契約（`requires` / `ensures` だけ）。
@@ -758,18 +767,27 @@ impl Cx<'_> {
         let prev = std::mem::replace(&mut self.logic, true);
         let mut names = Vec::new();
         let mut conds = Vec::new();
+        // 束縛した名前は、外の `gives` の付け替えと `final` の包みを隠す（シャドウ）。
+        let saved = (self.rename.clone(), self.mut_params.clone());
         for b in binders {
             let n = ident(&b.ident);
             match &b.kind {
                 BinderKind::Typed(t) => names.push(format!("{n}: {}", self.ty(t))),
-                BinderKind::Bare => names.push(n),
+                BinderKind::Bare => names.push(n.clone()),
                 BinderKind::In(r) => {
-                    names.push(n.clone());
                     conds.push(self.membership(&n, r));
+                    // 範囲の束縛子には型を付ける（端のリテラルの接尾辞、なければ `int`）。
+                    match range_type(r) {
+                        Some(t) => names.push(format!("{n}: {t}")),
+                        None => names.push(n.clone()),
+                    }
                 }
             }
+            self.rename.remove(&b.ident.name);
+            self.mut_params.remove(&b.ident.name);
         }
         let body_s = self.expr(body);
+        (self.rename, self.mut_params) = saved;
         self.logic = prev;
         let low = |e: &Expr, ops: &[BinOp]| matches!(&e.kind, ExprKind::Binary { op, .. } if ops.contains(op));
         let q = match kind {
@@ -817,29 +835,13 @@ impl Cx<'_> {
             }
             _ => {
                 let s = atom(self, r);
-                if self.is_map(r) {
+                if self.facts.map_binders.contains(&SpanKey::from(r.span)) {
                     format!("{s}.dom().contains({x})")
                 } else {
                     format!("{s}.contains({x})")
                 }
             }
         }
-    }
-
-    /// 式が `Map` 型の消去フィールド（`x@f` で `f: Map<..>`）か。型を知る範囲だけで決める。
-    fn is_map(&self, e: &Expr) -> bool {
-        let ExprKind::Erased { base, field } = &e.kind else {
-            return false;
-        };
-        let is_self = matches!(&base.kind, ExprKind::Path { qself: None, path } if path.as_ident().is_some_and(|i| i.is("self")));
-        if !is_self {
-            return false;
-        }
-        self.self_struct
-            .and_then(|s| s.erased_ty(&field.name))
-            .is_some_and(|t| {
-                matches!(&t.kind, TypeKind::Path { path, .. } if path.segments.last().is_some_and(|s| s.ident.is("Map")))
-            })
     }
 
     /// 論理文脈の領域（`self.r@` / 領域変数）。
@@ -922,8 +924,13 @@ impl Cx<'_> {
                 if let Some(x) = self.facts.perm_lets.get(&key).cloned() {
                     let init = l.init.as_ref().map(|e| self.expr(e)).unwrap_or_default();
                     self.perms.insert(x.clone(), PermKind::Owned);
+                    // 型注釈は残す（`let p: Ptr<u8> = ..` の `u8` が値の型を決める）。
+                    let ty =
+                        l.ty.as_ref()
+                            .map(|t| format!(": ({}, Tracked<_>)", self.ty(t)))
+                            .unwrap_or_default();
                     return format!(
-                        "{attrs}let ({}, Tracked({})) = {init};",
+                        "{attrs}let ({}, Tracked({})){ty} = {init};",
                         self.pat(&l.pat),
                         perm_var(&x)
                     );
@@ -989,6 +996,29 @@ impl Cx<'_> {
             }
         }
     }
+}
+
+/// 範囲 `a..b` の束縛子の型：端のリテラルの接尾辞（`3int`、`10u64`）、なければ `int`。範囲でなければ `None`。
+fn range_type(r: &Expr) -> Option<String> {
+    let r = match &r.kind {
+        ExprKind::Paren(x) => &**x,
+        _ => r,
+    };
+    let ExprKind::Range { start, end, .. } = &r.kind else {
+        return None;
+    };
+    const TYPES: &[&str] = &[
+        "int", "nat", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+        "i128", "isize",
+    ];
+    for e in [start, end].into_iter().flatten() {
+        if let ExprKind::Lit(l) = &e.kind
+            && let Some(t) = TYPES.iter().find(|t| l.text.ends_with(*t))
+        {
+            return Some(t.to_string());
+        }
+    }
+    Some("int".into())
 }
 
 fn restore(m: &mut BTreeMap<String, PermKind>, k: &str, saved: Option<PermKind>) {

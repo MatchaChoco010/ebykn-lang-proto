@@ -155,7 +155,9 @@ impl Printer {
                         || (c == '@' && matches!(prev, Prev::Word | Prev::Close))
                         || (c == '!' && matches!(prev, Prev::Word) && is_group(next))
                         || (c == ':' && matches!(prev, Prev::Word | Prev::Close));
-                    if !tight_before && needs_space(prev, true) {
+                    // 離れていた二つの記号はつなげない（`a & &b` を `a &&b` にしない）。
+                    let apart = matches!(prev, Prev::Punct(_) | Prev::Op);
+                    if !tight_before && (needs_space(prev, true) || apart) {
                         self.space();
                     }
                     self.write(&c.to_string());
@@ -303,7 +305,8 @@ mod tests {
         let chars = |v: &[(String, bool)]| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
         assert_eq!(chars(&a), chars(&b), "{out}");
         for (x, y) in a.iter().zip(&b) {
-            assert!(!x.1 || y.1, "結合が切れた: {} in {out}", x.0);
+            // 結合を切らず、離れていた記号を結合させない（どちらも字句の意味が変わる）。
+            assert_eq!(x.1, y.1, "記号の結合が変わった: {} in {out}", x.0);
         }
     }
 
@@ -328,6 +331,7 @@ mod tests {
 
     #[test]
     fn keeps_tokens_and_joint_punctuation() {
+        same_tokens("let y = a & &b; let z = !!c; let w = - -d; f(&&e);");
         same_tokens(
             "fn f(x: u64) -> (r: u64) requires x > 0, ensures r ==> x <==> y, { let a = x; a }",
         );

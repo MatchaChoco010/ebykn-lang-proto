@@ -54,6 +54,8 @@ pub struct Facts {
     pub erased: BTreeMap<SpanKey, ErasedKind>,
     /// 関数に足す契約（関数名の識別子の位置）。
     pub expansions: BTreeMap<SpanKey, FnExpansion>,
+    /// 量化子の `x in e` の `e` のうち、型が `Map<..>` と分かるもの（§7.4 の `e.dom().contains(x)`）。
+    pub map_binders: std::collections::BTreeSet<SpanKey>,
     /// `impl Invariant for T` の入れ子（`T` → フィールド、型、包み）。
     pub nested: BTreeMap<ItemPath, Vec<(String, ItemPath, Wrap)>>,
 }

@@ -128,6 +128,10 @@ pub enum Unimpl {
     PermInMacro,
     /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
     CfgDuplicate,
+    /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
+    NestedAssumption,
+    /// 論理文脈の、中を読まないマクロの引数の中の `.first()` / `.last()`（#11 の置き換えが届かない）。
+    MacroFirstLast,
 }
 
 impl Unimpl {
@@ -190,6 +194,18 @@ impl Unimpl {
             }
             (Unimpl::CfgDuplicate, Lang::Ja) => {
                 "この名前はモジュールの中で二度以上定義されています（`#[cfg]` で分けた定義など）。Ebykn の索引はまだ `#[cfg]` を評価しないので、どちらの定義が残るかを決められません"
+            }
+            (Unimpl::NestedAssumption, Lang::En) => {
+                "`unchecked fn` and `lemma fn` inside a function body are not supported yet, because `verify` could not list them as assumptions; move them to the module level"
+            }
+            (Unimpl::NestedAssumption, Lang::Ja) => {
+                "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
+            }
+            (Unimpl::MacroFirstLast, Lang::En) => {
+                "`.first()` / `.last()` in the arguments of this macro in a logical context are not supported yet (Ebykn does not read them, so they would mean vstd's `first` instead of `first_opt`); compute the value outside the macro"
+            }
+            (Unimpl::MacroFirstLast, Lang::Ja) => {
+                "論理文脈のこのマクロの引数の中の `.first()` / `.last()` はまだ扱えません（Ebykn が読まないので、`first_opt` ではなく vstd の `first` の意味になります）。値はマクロの外で求めます"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"

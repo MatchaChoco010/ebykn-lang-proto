@@ -602,6 +602,35 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// 式の型が `Map<..>` と書いてあるか（型を書いた変数・引数、型を書いた消去フィールド）。
+    fn is_map(&self, e: &Expr) -> bool {
+        let map = |t: &ast::Type| {
+            let t = match &t.kind {
+                ast::TypeKind::Ref { elem, .. } => elem,
+                _ => t,
+            };
+            matches!(&t.kind, ast::TypeKind::Path { path, .. } if path.segments.last().is_some_and(|s| s.ident.is("Map")))
+        };
+        match &e.kind {
+            ExprKind::Paren(x) => self.is_map(x),
+            ExprKind::Path { qself: None, path } => path
+                .as_ident()
+                .and_then(|i| self.var_types.get(&i.name))
+                .is_some_and(map),
+            ExprKind::Erased { base, field } => {
+                let info = if is_self(base) {
+                    self.self_struct()
+                } else {
+                    ident_of(base)
+                        .and_then(|i| self.var_types.get(&i.name))
+                        .and_then(|t| self.struct_of_type(t))
+                };
+                info.and_then(|s| s.erased_ty(&field.name)).is_some_and(map)
+            }
+            _ => false,
+        }
+    }
+
     fn struct_of_type(&self, ty: &ast::Type) -> Option<&'a StructInfo> {
         let ty = match &ty.kind {
             ast::TypeKind::Ref { elem, .. } => elem,
@@ -942,6 +971,9 @@ impl<'a> Walker<'a> {
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
                         self.expr(x);
+                        if self.is_map(x) {
+                            self.facts.map_binders.insert(x.span.into());
+                        }
                     }
                 }
                 self.expr(body);
@@ -1519,6 +1551,12 @@ impl<'a> Walker<'a> {
     /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
     /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
+        if self.logic && first_last_in_tokens(m.tokens.clone()) {
+            self.diags.push(
+                m.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::MacroFirstLast)),
+            );
+        }
         if self.perm_in_tokens(m.tokens.clone()) {
             self.diags.push(
                 m.span,
@@ -1683,6 +1721,21 @@ impl<'a> Walker<'a> {
         }
         d
     }
+}
+
+/// トークン列に `.first()` / `.last()`（引数なし）があるか。
+fn first_last_in_tokens(ts: proc_macro2::TokenStream) -> bool {
+    use proc_macro2::{Delimiter, TokenTree};
+    let tts: Vec<TokenTree> = ts.into_iter().collect();
+    tts.iter().enumerate().any(|(i, t)| match t {
+        TokenTree::Group(g) => first_last_in_tokens(g.stream()),
+        TokenTree::Ident(id) => {
+            (id == "first" || id == "last")
+                && matches!(i.checked_sub(1).and_then(|j| tts.get(j)), Some(TokenTree::Punct(p)) if p.as_char() == '.')
+                && matches!(tts.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().is_empty())
+        }
+        _ => false,
+    })
 }
 
 fn is_compound_assign(op: ast::BinOp) -> bool {

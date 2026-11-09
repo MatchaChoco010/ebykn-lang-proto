@@ -21,7 +21,8 @@ pub struct Verus {
 }
 
 /// 固定した Verus を探し、`verus --version` で版を確かめる。
-pub fn find() -> Result<Verus, String> {
+pub fn find(lang: ebykn_syntax::diag::Lang) -> Result<Verus, String> {
+    let ja = lang == ebykn_syntax::diag::Lang::Ja;
     let pin = verus_pin();
     let dir = match std::env::var_os("EBYKN_VERUS") {
         Some(d) if !d.is_empty() => PathBuf::from(d),
@@ -40,31 +41,67 @@ pub fn find() -> Result<Verus, String> {
     };
     let verus = dir.join("verus");
     if !verus.is_file() {
-        return Err(format!(
-            "the pinned Verus ({}) was not found at `{}`; install it with `cargo xtask verus-install` or set `EBYKN_VERUS` to its directory",
-            pin.release,
-            dir.display()
-        ));
+        return Err(if ja {
+            format!(
+                "固定した Verus（{}）が `{}` にありません。`cargo xtask verus-install` で入れるか、`EBYKN_VERUS` にそのディレクトリを指定します",
+                pin.release,
+                dir.display()
+            )
+        } else {
+            format!(
+                "the pinned Verus ({}) was not found at `{}`; install it with `cargo xtask verus-install` or set `EBYKN_VERUS` to its directory",
+                pin.release,
+                dir.display()
+            )
+        });
     }
     let out = Command::new(&verus)
         .args(["--version", "--output-json"])
         .env("RUSTUP_TOOLCHAIN", &pin.toolchain)
         .output()
-        .map_err(|e| format!("cannot run `{}`: {e}", verus.display()))?;
+        .map_err(|e| {
+            if ja {
+                format!("`{}` を起動できません: {e}", verus.display())
+            } else {
+                format!("cannot run `{}`: {e}", verus.display())
+            }
+        })?;
     let text = String::from_utf8_lossy(&out.stdout);
-    for (key, want) in [
-        ("version", &pin.version),
-        ("commit", &pin.commit),
-        ("toolchain", &pin.toolchain),
-    ] {
-        if !text.contains(&format!("\"{key}\": \"{want}")) {
-            return Err(format!(
-                "the Verus at `{}` is not the pinned one ({key} must be `{want}`):\n{text}",
+    if let Err(key) = check_version(&text, &pin) {
+        return Err(if ja {
+            format!(
+                "`{}` の Verus は固定したものではありません（{key} が違います）:\n{text}",
                 dir.display()
-            ));
-        }
+            )
+        } else {
+            format!(
+                "the Verus at `{}` is not the pinned one ({key} differs):\n{text}",
+                dir.display()
+            )
+        });
     }
     Ok(Verus { dir, pin })
+}
+
+/// `verus --version --output-json` の版・コミットが固定値と完全に一致し、toolchain が固定値で始まるか
+/// （toolchain の値には「overridden by environment variable」が続く）。違えば違った鍵を返す。
+pub fn check_version(text: &str, pin: &VerusPin) -> Result<(), &'static str> {
+    let field = |key: &str| -> Option<String> {
+        let at = text.find(&format!("\"{key}\": \""))? + key.len() + 5;
+        let rest = &text[at..];
+        Some(rest[..rest.find('"')?].to_string())
+    };
+    if field("version").as_deref() != Some(pin.version.as_str()) {
+        return Err("version");
+    }
+    if field("commit").as_deref() != Some(pin.commit.as_str()) {
+        return Err("commit");
+    }
+    let tc = field("toolchain").unwrap_or_default();
+    if tc != pin.toolchain && !tc.starts_with(&format!("{} ", pin.toolchain)) {
+        return Err("toolchain");
+    }
+    Ok(())
 }
 
 /// `ebykn_prelude` の置き場所。環境変数 `EBYKN_PRELUDE` か、`ebykn` をビルドしたリポジトリの
@@ -141,10 +178,12 @@ pub struct Run {
     pub success: bool,
     /// Verus（と cargo）の出力。生成コードの位置に `（生成コード）` を付けてある。
     pub text: String,
-    /// `verification results:: N verified, M errors`。
+    /// 検証の件数（`--output-json` の `verification-results` か、`verification results::` の行）。
     pub results: Option<(u64, u64)>,
-    /// エラーの位置（`build/verus/` からの相対パス、行）。
-    pub errors: Vec<(String, usize)>,
+    /// エラーごとの主な位置（`build/verus/` からの相対パスと行）。生成コードの外か位置がないものは `None`。
+    pub errors: Vec<Option<(String, usize)>>,
+    /// Verus が検証した関数（`--output-json` の `func-details` の鍵）。
+    pub checked: Option<std::collections::BTreeSet<String>>,
 }
 
 pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
@@ -169,7 +208,14 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         .env("PATH", path);
     match mode {
         Mode::NoVerify => cmd.args(["verus", "focus", "--", "--no-verify"]),
-        Mode::Verify => cmd.args(["verus", "focus", "--", "--triggers-mode", "silent"]),
+        Mode::Verify => cmd.args([
+            "verus",
+            "focus",
+            "--",
+            "--triggers-mode",
+            "silent",
+            "--output-json",
+        ]),
         Mode::Build => cmd.args(["verus", "build"]),
     };
     // 前の成果物が残っていると cargo が Verus を呼ばない（結果の行が出ない）ので、このクレートだけ消す。
@@ -185,46 +231,102 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
     let out = cmd
         .output()
         .map_err(|e| format!("cannot run `cargo verus`: {e}"))?;
-    let raw = strip_ansi(&format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    ));
-    let mut errors = Vec::new();
+    let stdout = strip_ansi(&String::from_utf8_lossy(&out.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    let json = parse_json(&stdout);
+    let (text, errors) = read_diagnostics(&format!("{stdout}{stderr}"), json.is_some());
+    let results = match &json {
+        Some(j) => j.results,
+        None => results_line(&format!("{stdout}{stderr}")),
+    };
+    Ok(Run {
+        success: out.status.success(),
+        results,
+        text,
+        errors,
+        checked: json.map(|j| j.checked),
+    })
+}
+
+/// `--output-json` の出力。
+struct Json {
+    results: Option<(u64, u64)>,
+    checked: std::collections::BTreeSet<String>,
+}
+
+/// 標準出力の JSON（`{` から最後の `}` まで）を読む。
+fn parse_json(stdout: &str) -> Option<Json> {
+    let start = stdout.find('{')?;
+    let end = stdout.rfind('}')?;
+    let v: serde_json::Value = serde_json::from_str(&stdout[start..=end]).ok()?;
+    let checked = v
+        .get("func-details")?
+        .as_object()?
+        .keys()
+        .cloned()
+        .collect();
+    let r = v.get("verification-results");
+    let num = |k: &str| r.and_then(|r| r.get(k)).and_then(|x| x.as_u64());
+    let results = match (num("verified"), num("errors")) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    };
+    Some(Json { results, checked })
+}
+
+/// 診断を読む：生成コードの位置に `（生成コード）` を付け、エラーごとの主な位置を集める。
+/// `json` のときは標準出力の JSON の部分を本文から除く。
+fn read_diagnostics(raw: &str, json: bool) -> (String, Vec<Option<(String, usize)>>) {
+    let mut errors: Vec<Option<(String, usize)>> = Vec::new();
     let mut text = String::new();
-    let mut in_error = false;
+    // 今のエラーの主な位置をまだ読んでいないか。
+    let mut pending = false;
+    let mut depth = 0i64;
     for line in raw.lines() {
-        let t = line.trim_start();
-        if t.starts_with("error") {
-            in_error = true;
-        } else if t.starts_with("warning") || t.starts_with("note:") && !line.starts_with(' ') {
-            in_error = false;
-        }
-        if let Some(loc) = t.strip_prefix("--> ")
-            && let Some((file, rest)) = loc.split_once(':')
-            && file.starts_with("src/")
-        {
-            let line_no = rest
-                .split(':')
-                .next()
-                .and_then(|n| n.parse().ok())
-                .unwrap_or(0);
-            if in_error {
-                errors.push((file.to_string(), line_no));
+        if json {
+            // JSON の部分（`{` で始まり、`}` で閉じるまで）を飛ばす。
+            if depth > 0 || line.starts_with('{') {
+                depth += line.matches('{').count() as i64 - line.matches('}').count() as i64;
+                continue;
             }
-            let indent = &line[..line.len() - t.len()];
-            text.push_str(&format!("{indent}--> build/verus/{loc}（生成コード）\n"));
-            continue;
+        }
+        let t = line.trim_start();
+        let top = !line.starts_with(' ');
+        if top && (t.starts_with("error:") || t.starts_with("error[")) {
+            // 全体のまとめの行（`could not compile`、`aborting due to`）は個々のエラーではない。
+            let summary = t.contains("could not compile") || t.contains("aborting due to");
+            if !summary {
+                errors.push(None);
+                pending = true;
+            }
+        } else if top && (t.starts_with("warning") || t.starts_with("note")) {
+            pending = false;
+        }
+        if let Some(loc) = t.strip_prefix("--> ") {
+            let (file, rest) = loc.split_once(':').unwrap_or((loc, ""));
+            if pending {
+                pending = false;
+                if file.starts_with("src/") {
+                    let line_no = rest
+                        .split(':')
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    if let Some(last) = errors.last_mut() {
+                        *last = Some((file.to_string(), line_no));
+                    }
+                }
+            }
+            if file.starts_with("src/") {
+                let indent = &line[..line.len() - t.len()];
+                text.push_str(&format!("{indent}--> build/verus/{loc}（生成コード）\n"));
+                continue;
+            }
         }
         text.push_str(line);
         text.push('\n');
     }
-    Ok(Run {
-        success: out.status.success(),
-        results: results_line(&raw),
-        text,
-        errors,
-    })
+    (text, errors)
 }
 
 /// 端末の制御文字（`ESC [ .. 文字`）を除く。
@@ -272,49 +374,136 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStatus {
     pub item: String,
-    /// `verified` / `failed` / `admit` / `unchecked` / `unknown`（エラーがあるのに、どの項目のものか
-    /// 決められなかったとき。`verified` と表示しない）。
+    /// [`decide`] の結果。
     pub status: &'static str,
 }
 
-/// エラーの位置から、項目ごとの状態を決める。`error_count` は Verus が数えたエラーの数。
-/// エラーがあるのに、どのエラーの位置もどの項目にも入らなければ、`verified` の代わりに `unknown` にする。
+/// 一つの項目の事実。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemFacts {
+    /// 本体のない `lemma fn`（`admit()`）。
+    pub admitted: bool,
+    pub unchecked: bool,
+    /// `#[test]`（`#[verifier::external]`。Verus は見ない）。
+    pub external: bool,
+    /// Verus のエラーがこの項目の行にある。
+    pub error: bool,
+    /// Verus の `func-details` にこの項目の関数がある（Verus が見た）。
+    pub checked: bool,
+    /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）。
+    pub stray_errors: bool,
+}
+
+/// 項目の状態を決める（PR #26 のレビューの方針）。`verified` と表示してよいのは、Verus が見た関数
+/// （`func-details` にある）で、その項目にエラーがなく、どの項目にも割り当てられないエラーがないときだけ。
+///
+/// - `admit` / `unchecked` / `external`：証明なしの前提。`verify` は必ず一覧に出す。
+/// - `failed`：その項目にエラーがある。
+/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、割り当てられないエラーがある。
+///   `verify` を成功にしない。
+pub fn decide(f: ItemFacts) -> &'static str {
+    if f.admitted {
+        "admit"
+    } else if f.unchecked {
+        "unchecked"
+    } else if f.external {
+        "external"
+    } else if f.error {
+        "failed"
+    } else if !f.checked || f.stray_errors {
+        "unknown"
+    } else {
+        "verified"
+    }
+}
+
+/// 全項目の状態を決める。`checked` は Verus の `func-details` の鍵（`None` なら一覧がない）。
 pub fn statuses(
     files: &[OutFile],
     output: &Output,
-    errors: &[(String, usize)],
-    error_count: u64,
+    errors: &[Option<(String, usize)>],
+    checked: Option<&std::collections::BTreeSet<String>>,
 ) -> Vec<ItemStatus> {
-    let attributed = errors.iter().any(|(file, line)| {
+    let in_item = |file: &str, line: usize| {
         files
             .iter()
-            .any(|f| f.rel == *file && f.items.iter().any(|(s, e, _)| s <= line && line <= e))
+            .any(|f| f.rel == file && f.items.iter().any(|(s, e, _)| *s <= line && line <= *e))
+    };
+    let stray = errors.iter().any(|e| match e {
+        Some((file, line)) => !in_item(file, *line),
+        None => true,
     });
-    let unknown = error_count > 0 && !attributed;
     let mut out = Vec::new();
     for f in files {
         for (start, end, item) in &f.items {
-            let failed = errors
+            let error = errors
                 .iter()
+                .flatten()
                 .any(|(file, line)| *file == f.rel && start <= line && line <= end);
-            let status = if output.admitted.contains(item) {
-                "admit"
-            } else if output.unchecked.contains(item) {
-                "unchecked"
-            } else if failed {
-                "failed"
-            } else if unknown {
-                "unknown"
-            } else {
-                "verified"
+            let facts = ItemFacts {
+                admitted: output.admitted.contains(item),
+                unchecked: output.unchecked.contains(item),
+                external: output.external.contains(item),
+                error,
+                checked: checked.is_some_and(|c| c.contains(&verus_name(item))),
+                stray_errors: stray,
             };
             out.push(ItemStatus {
                 item: item.clone(),
-                status,
+                status: decide(facts),
             });
         }
     }
     out
+}
+
+/// Verus の `func-details` の鍵での項目の名前（クレート名の `-` は `_`）。
+pub fn verus_name(item: &str) -> String {
+    match item.split_once("::") {
+        Some((k, rest)) => format!("{}::{rest}", k.replace('-', "_")),
+        None => item.replace('-', "_"),
+    }
+}
+
+/// 証明なしの前提（`admit` / `unchecked` / `external`）か。
+pub fn assumed(s: &ItemStatus) -> bool {
+    matches!(s.status, "admit" | "unchecked" | "external")
+}
+
+/// `verify item..` で出す項目：指定した項目（パスかその末尾）と、証明なしの前提の全部（絞り込みに
+/// よらない。前提を隠さない）。指定した項目が一つもなければ `None`。
+pub fn select(all: &[ItemStatus], items: &[&str]) -> Option<Vec<ItemStatus>> {
+    let wanted = |i: &str| {
+        items.is_empty()
+            || items
+                .iter()
+                .any(|w| i == *w || i.ends_with(&format!("::{w}")))
+    };
+    if !items.is_empty() && !all.iter().any(|s| wanted(&s.item)) {
+        return None;
+    }
+    Some(
+        all.iter()
+            .filter(|s| wanted(&s.item) || assumed(s))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// `verify --json` の結果（1 行）。
+pub fn status_json(items: &[ItemStatus], results: Option<(u64, u64)>, success: bool) -> String {
+    let items: Vec<serde_json::Value> = items
+        .iter()
+        .map(|i| serde_json::json!({"item": i.item, "status": i.status}))
+        .collect();
+    let results = results.map(|(v, e)| serde_json::json!({"verified": v, "errors": e}));
+    serde_json::json!({
+        "$message_type": "ebykn-verify",
+        "success": success,
+        "items": items,
+        "results": results,
+    })
+    .to_string()
 }
 
 /// `verify` の結果の文章（`expected/status.txt` と比べる形）。
@@ -343,6 +532,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    fn facts() -> ItemFacts {
+        ItemFacts {
+            admitted: false,
+            unchecked: false,
+            external: false,
+            error: false,
+            checked: true,
+            stray_errors: false,
+        }
+    }
+
+    #[test]
+    fn filtering_keeps_every_assumption() {
+        let st = |item: &str, status: &'static str| ItemStatus {
+            item: item.into(),
+            status,
+        };
+        let all = vec![
+            st("g1::liar", "unchecked"),
+            st("g1::caller", "verified"),
+            st("g1::other", "verified"),
+        ];
+        let shown = select(&all, &["caller"]).unwrap();
+        assert_eq!(
+            shown,
+            [st("g1::liar", "unchecked"), st("g1::caller", "verified")]
+        );
+        assert!(select(&all, &["nothing"]).is_none());
+        assert_eq!(select(&all, &[]).unwrap(), all);
+    }
+
+    #[test]
+    fn verified_needs_verus_evidence() {
+        assert_eq!(decide(facts()), "verified");
+        // Verus が見なかった（#[cfg] で消えた、func-details にない）。
+        assert_eq!(
+            decide(ItemFacts {
+                checked: false,
+                ..facts()
+            }),
+            "unknown"
+        );
+        // 割り当てられないエラーがある。
+        assert_eq!(
+            decide(ItemFacts {
+                stray_errors: true,
+                ..facts()
+            }),
+            "unknown"
+        );
+        assert_eq!(
+            decide(ItemFacts {
+                error: true,
+                ..facts()
+            }),
+            "failed"
+        );
+        assert_eq!(
+            decide(ItemFacts {
+                external: true,
+                ..facts()
+            }),
+            "external"
+        );
+        assert_eq!(
+            decide(ItemFacts {
+                unchecked: true,
+                error: true,
+                ..facts()
+            }),
+            "unchecked"
+        );
+        assert_eq!(
+            decide(ItemFacts {
+                admitted: true,
+                ..facts()
+            }),
+            "admit"
+        );
+    }
+
     #[test]
     fn status_marks_failed_items_by_error_lines() {
         let files = vec![OutFile {
@@ -358,31 +628,60 @@ mod tests {
             files: files.clone(),
             admitted: vec!["k::l".into()],
             unchecked: vec![],
+            external: vec![],
         };
-        let st = statuses(&files, &output, &[("src/lib.rs".into(), 7)], 1);
+        let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let st = statuses(
+            &files,
+            &output,
+            &[Some(("src/lib.rs".into(), 7))],
+            Some(&checked),
+        );
         assert_eq!(
             status_text(&st, Some((1, 1))),
             "verified k::f\nfailed k::g\nadmit k::l\nresults 1 verified, 1 errors\n"
         );
+        // 項目に入らないエラーがあれば、失敗していない項目は unknown。
+        let st = statuses(&files, &output, &[None], Some(&checked));
+        assert_eq!(st[0].status, "unknown");
+        // func-details がなければ unknown。
+        let st = statuses(&files, &output, &[], None);
+        assert_eq!(st[0].status, "unknown");
     }
 
     #[test]
-    fn fails_closed_when_errors_cannot_be_attributed() {
-        let files = vec![OutFile {
-            rel: "src/lib.rs".into(),
-            text: String::new(),
-            items: vec![(1, 5, "k::f".into())],
-        }];
-        let output = Output {
-            files: files.clone(),
-            admitted: vec![],
-            unchecked: vec![],
+    fn reads_diagnostics_and_skips_the_json() {
+        let raw = "{\n  \"func-details\": {\n    \"k::f\": {}\n  }\n}\nerror: postcondition not satisfied\n  --> src/lib.rs:33:13\n   |\nnote: x\n  --> /p/prelude.rs:3:1\nerror: precondition\n  --> /abs/other.rs:1:1\nerror: could not compile `k`\n";
+        let (text, errors) = read_diagnostics(raw, true);
+        assert_eq!(errors, [Some(("src/lib.rs".into(), 33)), None]);
+        assert!(!text.contains("func-details"), "{text}");
+        assert!(
+            text.contains("--> build/verus/src/lib.rs:33:13（生成コード）"),
+            "{text}"
+        );
+        let j = parse_json("noise\n{\"func-details\": {\"k::f\": {}}, \"verification-results\": {\"verified\": 3, \"errors\": 1}}\n").unwrap();
+        assert_eq!(j.results, Some((3, 1)));
+        assert!(j.checked.contains("k::f"));
+    }
+
+    #[test]
+    fn version_must_match_exactly() {
+        let pin = crate::verus_pin();
+        let out = |v: &str| {
+            format!(
+                "{{\"verus\": {{\"version\": \"{v}\", \"toolchain\": \"{} (overridden by environment variable RUSTUP_TOOLCHAIN)\", \"commit\": \"{}\"}}}}",
+                pin.toolchain, pin.commit
+            )
         };
-        // エラーが 1 件あるのに位置を読めなかった：verified と言わない。
-        let st = statuses(&files, &output, &[], 1);
-        assert_eq!(st[0].status, "unknown");
-        // エラーがなければ verified。
-        assert_eq!(statuses(&files, &output, &[], 0)[0].status, "verified");
+        assert_eq!(check_version(&out(&pin.version), &pin), Ok(()));
+        // 前方一致では通さない。
+        assert_eq!(
+            check_version(&out(&format!("{}x", pin.version)), &pin),
+            Err("version")
+        );
     }
 
     #[test]

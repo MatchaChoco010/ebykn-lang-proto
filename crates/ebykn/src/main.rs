@@ -144,7 +144,7 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let verus = match ebykn::verus::find() {
+    let verus = match ebykn::verus::find(opts.lang) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("ebykn: error: {e}");
@@ -205,33 +205,30 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let error_count = r.results.map_or(0, |(_, e)| e);
-    let all = ebykn::verus::statuses(&output.files, &output, &r.errors, error_count);
-    let wanted = |i: &str| {
-        items.is_empty()
-            || items
-                .iter()
-                .any(|w| i == *w || i.ends_with(&format!("::{w}")))
-    };
-    let shown: Vec<_> = all.iter().filter(|s| wanted(&s.item)).cloned().collect();
-    if !items.is_empty() && shown.is_empty() {
+    let all = ebykn::verus::statuses(&output.files, &output, &r.errors, r.checked.as_ref());
+    let Some(shown) = ebykn::verus::select(&all, items) else {
         say(
             opts,
             "no item matches the given paths",
             "指定したパスに当たる項目がありません",
         );
         return ExitCode::from(2);
-    }
-    print!("{}", ebykn::verus::status_text(&shown, r.results));
-    let unproven: Vec<_> = shown
+    };
+    let unproven: Vec<_> = all.iter().filter(|s| ebykn::verus::assumed(s)).collect();
+    let fails = shown
         .iter()
-        .filter(|s| matches!(s.status, "admit" | "unchecked"))
-        .collect();
+        .any(|s| matches!(s.status, "failed" | "unknown"))
+        || !r.success;
+    if opts.json {
+        println!("{}", ebykn::verus::status_json(&shown, r.results, !fails));
+    } else {
+        print!("{}", ebykn::verus::status_text(&shown, r.results));
+    }
     if !unproven.is_empty() {
         say(
             opts,
             &format!(
-                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked): {}",
+                "{} item(s) are assumed without proof (admit: lemma without a body; unchecked; external: #[test], not seen by Verus): {}",
                 unproven.len(),
                 unproven
                     .iter()
@@ -240,7 +237,7 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
                     .join(", ")
             ),
             &format!(
-                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked）: {}",
+                "{} 個の項目は証明なしの前提です（admit：本体のない補題、unchecked、external：Verus が見ない #[test]）: {}",
                 unproven.len(),
                 unproven
                     .iter()
@@ -250,11 +247,14 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             ),
         );
     }
-    if shown
-        .iter()
-        .any(|s| matches!(s.status, "failed" | "unknown"))
-        || !r.success
-    {
+    if shown.iter().any(|s| s.status == "unknown") {
+        say(
+            opts,
+            "`unknown`: Verus did not verify these items (for example, removed by `#[cfg]`), or an error could not be attributed to an item",
+            "`unknown`：Verus がこの項目を検証していない（`#[cfg]` で消えた、など）か、どの項目のものか決められないエラーがあります",
+        );
+    }
+    if fails {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS

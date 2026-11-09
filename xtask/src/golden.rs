@@ -10,7 +10,7 @@ use std::process::Command;
 
 /// `ebykn verify` の出力と終了コードを、期待（`expected/status.txt`）と比べる。
 ///
-/// 出力は期待と行ごとに等しく、終了コードは「failed の行がなく、エラーが 0 件」のときだけ成功。
+/// 出力は期待と行ごとに等しく、終了コードは「failed / unknown の行がなく、エラーが 0 件」のときだけ成功。
 pub fn judge(expected: &str, stdout: &str, success: bool) -> Result<(), String> {
     if expected.trim().is_empty() {
         return Err("expected/status.txt が空です".into());
@@ -20,7 +20,9 @@ pub fn judge(expected: &str, stdout: &str, success: bool) -> Result<(), String> 
             "ebykn verify の出力が expected/status.txt と違います\n--- 期待\n{expected}--- 実際\n{stdout}"
         ));
     }
-    let failed = expected.lines().any(|l| l.starts_with("failed "));
+    let failed = expected
+        .lines()
+        .any(|l| l.starts_with("failed ") || l.starts_with("unknown "));
     let errors = expected
         .lines()
         .find_map(|l| l.strip_prefix("results "))
@@ -165,6 +167,13 @@ mod tests {
         let ok = "verified k::f\nresults 1 verified, 0 errors\n";
         assert!(judge(ok, ok, false).is_err());
         assert_eq!(judge(ok, ok, true), Ok(()));
+    }
+
+    #[test]
+    fn fails_when_unknown_items_exit_successfully() {
+        let s = "unknown k::f\nresults 0 verified, 0 errors\n";
+        assert!(judge(s, s, true).is_err());
+        assert_eq!(judge(s, s, false), Ok(()));
     }
 
     #[test]

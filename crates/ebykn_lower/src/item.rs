@@ -70,6 +70,7 @@ fn item_pieces(cx: &Cx, item: &ast::Item, indent: usize, out: &mut Vec<Piece>) {
             }
         }
         ItemKind::Impl(imp) => impl_pieces(cx, item, imp, indent, out),
+        ItemKind::Trait(t) => trait_pieces(cx, item, t, indent, out),
         _ => {
             let (text, name) = item_text(cx, item);
             if !text.is_empty() {
@@ -149,40 +150,19 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
                 None,
             )
         }
+        // trait は [`trait_pieces`]。関数の本体の中の trait はここ（項目の行を持たない）。
         ItemKind::Trait(t) => {
-            let mut parts = Vec::new();
-            for ti in &t.items {
-                match &ti.kind {
-                    TraitItemKind::Fn(f) => {
-                        let mut c = cx.clone();
-                        let sig = sig_text(&mut c, &f.sig, &f.contract, &FnExpansion::default());
-                        let body = match &f.body {
-                            Some(ast::FnBody::Block(b)) => c.block(b),
-                            _ => ";".into(),
-                        };
-                        parts.push(format!("{}{sig} {body}", attrs(&ti.attrs)));
-                    }
-                    TraitItemKind::Rust(tk) => parts.push(tk.tokens.to_string()),
-                    // 契約のある trait は検査が E0003 にする（M4）。
-                    TraitItemKind::SpecFn(_) | TraitItemKind::LemmaFn(_) => {}
-                }
-            }
-            (
-                format!(
-                    "{a}{v}{}{}trait {}{}{}{} {{ {} }}",
-                    t.unsafety.map(|_| "unsafe ").unwrap_or_default(),
-                    t.auto.map(|_| "auto ").unwrap_or_default(),
-                    ident(&t.ident),
-                    generics(cx, &t.generics),
-                    t.supertraits
-                        .as_ref()
-                        .map(|s| format!(": {}", s.tokens))
-                        .unwrap_or_default(),
-                    where_clause(&t.where_clause),
-                    parts.join(" ")
-                ),
-                None,
-            )
+            let mut pieces = Vec::new();
+            trait_pieces(cx, item, t, 0, &mut pieces);
+            let text = pieces
+                .into_iter()
+                .map(|p| match p {
+                    Piece::Raw(s) => s,
+                    Piece::Tokens { text, .. } => text,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (text, None)
         }
         ItemKind::TypeAlias(t) => (
             format!(
@@ -393,6 +373,12 @@ fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<
         }
     }
     for u in contract.uses() {
+        // `uses r: &mut Region<..>` の `r` も `ensures` で `final(r)` にする（#10 の既定）。
+        if let UsesItem::Named { ident: i, ty, .. } = u
+            && matches!(ty.kind, TypeKind::Ref { mutable: true, .. })
+        {
+            c.mut_params.insert(i.name.clone());
+        }
         if let UsesItem::Perm { mode, ident: i, .. } = u {
             let k = match mode {
                 PermMode::Move => PermKind::Owned,
@@ -641,6 +627,10 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, _in_trait: bool) -> String {
     let mut a = attrs(&item.attrs);
     if is_test(&item.attrs) {
         a = format!("#[verifier::external] {a}");
+        cx.report
+            .borrow_mut()
+            .external
+            .push(cx.item_path(&f.sig.ident.name));
     }
     if f.unchecked.is_some() {
         a = format!("#[verifier::external_body] {a}");
@@ -777,6 +767,56 @@ fn lemma_text(cx: &Cx, a: &str, v: &str, f: &ast::LemmaFn, name: &str) -> String
     // 本体は `.eykp`（M3）。`.eykp` がなければ `admit()`（§7.2）。`verify` が一覧に出す。
     cx.report.borrow_mut().admitted.push(name.to_string());
     format!("{a}{v}proof {sig} {{ vstd::prelude::admit() }}")
+}
+
+// ---- trait ----
+
+/// trait（契約のないもの。契約のある trait は検査が E0003 にする）。本体のある既定のメソッドは
+/// 検証の結果を出す項目にする（`stack::Tr::m`）。
+fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &mut Vec<Piece>) {
+    let pad = "    ".repeat(indent);
+    out.push(Piece::Raw(format!(
+        "{pad}{}{}{}{}trait {}{}{}{} {{",
+        attrs(&item.attrs),
+        vis(&item.vis),
+        t.unsafety.map(|_| "unsafe ").unwrap_or_default(),
+        t.auto.map(|_| "auto ").unwrap_or_default(),
+        ident(&t.ident),
+        generics(cx, &t.generics),
+        t.supertraits
+            .as_ref()
+            .map(|s| format!(": {}", s.tokens))
+            .unwrap_or_default(),
+        where_clause(&t.where_clause),
+    )));
+    let mut c = cx.clone();
+    let mut p = cx.module.clone();
+    p.push(t.ident.name.clone());
+    c.self_ty = Some(p);
+    for ti in &t.items {
+        match &ti.kind {
+            TraitItemKind::Fn(f) => {
+                let mut fc = fn_cx(&c, &f.sig, &f.contract);
+                let sig = sig_text(&mut fc, &f.sig, &f.contract, &FnExpansion::default());
+                let (body, name) = match &f.body {
+                    Some(ast::FnBody::Block(b)) => {
+                        (fc.block(b), Some(c.item_path(&f.sig.ident.name)))
+                    }
+                    _ => (";".into(), None),
+                };
+                out.push(tokens(
+                    format!("{}{sig} {body}", attrs(&ti.attrs)),
+                    name,
+                    indent + 1,
+                ));
+            }
+            TraitItemKind::Rust(tk) => out.push(tokens(tk.tokens.to_string(), None, indent + 1)),
+            // 契約のある trait は検査が E0003 にする（M4）。
+            TraitItemKind::SpecFn(_) | TraitItemKind::LemmaFn(_) => {}
+        }
+    }
+    out.push(Piece::Raw(format!("{pad}}}")));
+    out.push(Piece::Raw(String::new()));
 }
 
 // ---- impl ----

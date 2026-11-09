@@ -118,7 +118,7 @@ pub fn total(v: Vec < u64 >) -> u64 {
 #[verifier::when_used_as_spec(__eyk_spec_quant)] pub fn quant(s: Seq < u64 >) -> (__eyk_r: bool)
 ensures __eyk_r == __eyk_spec_quant(s), { true } pub open spec fn __eyk_spec_quant(s: Seq < u64 >) -> bool { true }
 
-pub open spec fn all_pos(s: Seq < int >) -> bool { (forall | i | 0 <= i < s.len() ==> s[i] > 0) }
+pub open spec fn all_pos(s: Seq < int >) -> bool { (forall | i: int | 0 <= i < s.len() ==> s[i] > 0) }
 
 pub open spec fn some_pos(s: Seq < int >) -> bool { (exists | x | s.contains(x) && ((x == 1) || (x == 2))) }
 

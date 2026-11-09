@@ -213,7 +213,7 @@ fn lemmas_without_bodies_are_admitted_and_listed() {
 fn quantifiers_and_and_or() {
     has(
         "pub spec fn f(s: Seq<int>) -> bool = forall i in 0..s.len(), s[i] > 0;",
-        "(forall|i| 0 <= i < s.len() ==> s[i] > 0)",
+        "(forall|i: int| 0 <= i < s.len() ==> s[i] > 0)",
     );
     has(
         "pub spec fn f(s: Seq<int>) -> bool = exists x in s, x > 0 || x < -5;",
@@ -252,4 +252,153 @@ fn cargo_toml_has_panic_abort_and_rewrites_paths() {
     ] {
         assert!(t.contains(want), "{want:?} がない:\n{t}");
     }
+}
+
+// ---- PR #26 のレビュー ----
+
+const INV: &str = "pub struct S { a: u64 }\nimpl Invariant for S { spec fn invariant(&self) -> bool = self.a > 0; }\n";
+
+#[test]
+fn option_positions_are_implications() {
+    // §6.4：`Option<T>` は `x is Some ==> P[x.unwrap()]`（`&&` ではない）。
+    let src = format!("{INV}pub fn f(x: Option<S>) {{}}");
+    has(&src, "requires (x is Some ==> x.unwrap().invariant()),");
+    let src = format!(
+        "{INV}pub struct T {{ o: Option<S> }}\nimpl Invariant for T {{ spec fn invariant(&self) -> bool = true; }}"
+    );
+    // 入れ子の `Option<U>` のフィールド。
+    has(
+        &src,
+        "pub open spec fn invariant(&self) -> bool { (true) && ((self.o is Some ==> self.o.unwrap().invariant())) }",
+    );
+}
+
+#[test]
+fn extra_arguments_follow_the_callee_order() {
+    let src = format!(
+        "{PRE}fn g(p: Ptr<Node>, q: Ptr<Node>) uses &mut p@, &q@ {{ }}\nfn f(p: Ptr<Node>, q: Ptr<Node>) uses &mut p@, &q@ {{ g(p, q); }}"
+    );
+    has(
+        &src,
+        "g(p, q, Tracked(&mut *__eyk_perm_p), Tracked(&*__eyk_perm_q));",
+    );
+}
+
+#[test]
+fn map_membership_uses_dom() {
+    // §7.4：`Map` は `r.dom().contains(x)`。型を書いた引数と消去フィールド。
+    has(
+        "pub spec fn f(m: Map<int, int>) -> bool = forall k in m, m[k] > 0;",
+        "(forall|k| m.dom().contains(k) ==> m[k] > 0)",
+    );
+    has(
+        "pub struct W { a: u64 } spec { m: Map<int, int> }\nimpl W { pub closed spec fn f(&self) -> bool = forall k in self@m, k > 0; }",
+        "(forall|k| self.m@.dom().contains(k) ==> k > 0)",
+    );
+    has(
+        "pub spec fn f(s: Seq<int>) -> bool = forall k in s, k > 0;",
+        "(forall|k| s.contains(k) ==> k > 0)",
+    );
+}
+
+#[test]
+fn old_of_a_permission_read() {
+    let src =
+        format!("{PRE}fn f(p: Ptr<Node>) uses &mut p@ ensures (*p).val == old(*p).val + 1, {{ }}");
+    has(
+        &src,
+        "ensures (final(__eyk_perm_p).value()).val == old(__eyk_perm_p).value().val + 1,",
+    );
+}
+
+#[test]
+fn tests_are_external_and_listed() {
+    let src = "#[test]\nfn t() {}";
+    has(src, "#[verifier::external] #[test] fn t() {}");
+    let (p, _) = project::single(src);
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    assert_eq!(out.external, ["single::t"]);
+}
+
+#[test]
+fn gives_returns_carry_the_permission() {
+    let src = format!(
+        "{PRE}fn mk(c: bool) -> (q: Ptr<Node>) gives q@ ensures q@.is_init(), {{ let q = Ptr::new(Node {{ val: 1 }}); if c {{ return q; }} q }}"
+    );
+    has(&src, "return (q, Tracked(__eyk_perm_q))");
+    // 本体の末尾も（`let` のパターン、`return`、末尾の 3 か所）。
+    let got = lowered(&src);
+    assert_eq!(
+        got.matches(&squash("(q, Tracked(__eyk_perm_q))")).count(),
+        3,
+        "{got}"
+    );
+    has(
+        &src,
+        "-> (__eyk_ret: (Ptr<Node>, Tracked<PointsTo<Node>>)) ensures __eyk_ret.1@.is_init(), __eyk_ret.1@.pptr() == __eyk_ret.0,",
+    );
+    // 束縛子は gives の付け替えを隠す（シャドウ）。
+    let src = format!(
+        "{PRE}fn mk(o: Ptr<Node>) -> (q: Ptr<Node>) gives q@ ensures forall q: Ptr<Node>, q == o, {{ let q = Ptr::new(Node {{ val: 1 }}); q }}"
+    );
+    has(&src, "(forall|q: Ptr<Node>| q == o)");
+}
+
+#[test]
+fn typed_lets_keep_their_annotation() {
+    // B4：`let p: Ptr<u8> = Ptr::new(..)` の型注釈を残す。
+    let src = "pub fn f() -> u8 { let p: Ptr<u8> = Ptr::new(255); let v = p.free(); v }";
+    has(
+        src,
+        "let (p, Tracked(__eyk_perm_p)): (Ptr<u8>, Tracked<_>) = Ptr::new(255);",
+    );
+    let src = format!(
+        "{PRE}fn mk() -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: 1 }}); q }}\nfn f() {{ let q: Ptr<Node> = mk(); leak q@; }}"
+    );
+    has(
+        &src,
+        "let (q, Tracked(__eyk_perm_q)): (Ptr<Node>, Tracked<_>) = mk();",
+    );
+    let src = "pub fn f() { let c: Cell<u8> = Cell::new(1); leak c@; }";
+    has(
+        src,
+        "let (c, Tracked(__eyk_perm_c)): (Cell<u8>, Tracked<_>) = Cell::new(1);",
+    );
+}
+
+#[test]
+fn named_mut_regions_are_final_in_ensures() {
+    // S3：`uses r: &mut Region<..>` も #10 の既定で `final(r)`。
+    let src = format!(
+        "{PRE}fn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures r.contains(p), {{ }}"
+    );
+    has(&src, "ensures final(r).contains(p),");
+}
+
+#[test]
+fn range_binders_are_typed() {
+    // S4：範囲の束縛子に型を付ける（端の接尾辞、なければ int）。
+    has(
+        "pub spec fn f() -> bool = forall i in 0..3u64, i < 2;",
+        "(forall|i: u64| 0 <= i < 3u64 ==> i < 2)",
+    );
+    has(
+        "pub spec fn f(n: int) -> bool = exists i in 0..=n, i > 0;",
+        "(exists|i: int| 0 <= i <= n && i > 0)",
+    );
+}
+
+#[test]
+fn trait_default_methods_are_items() {
+    // S1：trait の既定のメソッドも、検証の結果を出す項目。
+    let (p, _) = project::single("pub trait Tr { fn f(&self) -> u64 { 1 } fn g(&self); }");
+    let c = ebykn_check::check(&p);
+    let out = lower(&p, &c).unwrap();
+    let names: Vec<&str> = out.files[0]
+        .items
+        .iter()
+        .map(|(_, _, n)| n.as_str())
+        .collect();
+    assert_eq!(names, ["single::Tr::f"]);
 }
