@@ -3,6 +3,7 @@
 //! 固定値はルートの `Cargo.toml` の `[workspace.metadata.verus]` に置く。Verus はリポジトリの外の
 //! キャッシュ（`$XDG_CACHE_HOME/ebykn/verus/<版>/`、無ければ `~/.cache/ebykn/verus/<版>/`）に入れる。
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -328,6 +329,71 @@ pub fn results_line(text: &str) -> Option<(u64, u64)> {
 }
 
 /// 各クレートを固定した Verus で検証し（`--no-cheating`）、Verus なしの cargo でもビルドする（OPEN-11）。
+/// `verus-verify` が一つのクレートについて順に呼ぶ cargo。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// 前回の成果物が残っていると cargo が Verus を呼ばず、結果の行が出ない。対象のクレートだけ消す。
+    Clean,
+    /// 固定した Verus で検証する。
+    Verify,
+    /// Verus なしの cargo（リポジトリの toolchain）でビルドする（OPEN-11）。
+    Plain,
+}
+
+/// 各段階の cargo の引数。どれも `--locked` を付け、追跡している `Cargo.lock` を書き換えさせない
+/// （`cargo clean -p` も依存を解決するので、付けないと lock を作り直す）。
+fn verify_steps(root: &Path, name: &str) -> Vec<(Step, Vec<OsString>)> {
+    let os = |xs: &[&str]| xs.iter().map(OsString::from).collect::<Vec<_>>();
+    let with = |mut a: Vec<OsString>, p: PathBuf, rest: &[&str]| {
+        a.push(p.into_os_string());
+        a.extend(os(rest));
+        a
+    };
+    vec![
+        // `cargo verus focus` は target-dir の下の verus-partial に成果物を置く。
+        (
+            Step::Clean,
+            with(
+                os(&["clean", "--quiet", "--locked", "-p", name, "--target-dir"]),
+                root.join("target/verus"),
+                &[],
+            ),
+        ),
+        (
+            Step::Clean,
+            with(
+                os(&["clean", "--quiet", "--locked", "-p", name, "--target-dir"]),
+                root.join("target/verus/verus-partial"),
+                &[],
+            ),
+        ),
+        (
+            Step::Verify,
+            with(
+                os(&["verus", "focus", "--locked", "--target-dir"]),
+                root.join("target/verus"),
+                &["--", "--no-cheating", "--triggers-mode", "silent"],
+            ),
+        ),
+        (
+            Step::Plain,
+            with(
+                os(&["build", "--quiet", "--locked", "--target-dir"]),
+                root.join("target/verus-plain"),
+                &[],
+            ),
+        ),
+    ]
+}
+
+/// cargo の呼び出しはここでだけ作る（`verify_steps` を通らない呼び出しを作らない。テストが数える）。
+fn cargo_command(args: &[OsString], dir: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
+    clean_cargo(&mut cmd).args(args).current_dir(dir);
+    cmd
+}
+
+/// 各クレートを固定した Verus で検証し（`--no-cheating`）、Verus なしの cargo でもビルドする（OPEN-11）。
 pub fn verify(root: &Path) -> bool {
     let pin = match root_pin(root).and_then(|p| installed(&p).map(|b| (p, b))) {
         Ok(x) => x,
@@ -342,9 +408,8 @@ pub fn verify(root: &Path) -> bool {
     )))
     .expect("PATH を組み立てられる");
     let mut ok = true;
-    for krate in CRATES {
+    'crates: for krate in CRATES {
         let dir = root.join(krate);
-        // 前回の成果物が残っていると cargo が Verus を呼ばず、結果の行が出ない。対象のクレートだけ消す。
         let name = match package_name(&dir) {
             Ok(n) => n,
             Err(e) => {
@@ -353,71 +418,67 @@ pub fn verify(root: &Path) -> bool {
                 continue;
             }
         };
-        // `cargo verus focus` は target-dir の下の verus-partial に成果物を置く。
-        let cleaned = ["target/verus", "target/verus/verus-partial"]
-            .iter()
-            .try_for_each(|t| {
-                let mut clean = Command::new("cargo");
-                clean_cargo(&mut clean)
-                    .args(["clean", "--quiet", "-p", &name, "--target-dir"])
-                    .arg(root.join(t))
-                    .current_dir(&dir)
-                    .env("RUSTUP_TOOLCHAIN", &pin.toolchain);
-                run(&mut clean)
-            });
-        if let Err(e) = cleaned {
-            eprintln!("error: verus-verify: {krate}: {e}");
-            ok = false;
-            continue;
-        }
-        let mut cmd = Command::new("cargo");
-        clean_cargo(&mut cmd)
-            .args(["verus", "focus", "--locked", "--target-dir"])
-            .arg(root.join("target/verus"))
-            .args(["--", "--no-cheating", "--triggers-mode", "silent"])
-            .current_dir(&dir)
-            .env("PATH", &path)
-            .env("RUSTUP_TOOLCHAIN", &pin.toolchain);
-        eprintln!("$ (cd {krate} && cargo verus focus --locked -- --no-cheating)");
-        let out = match cmd.output() {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("error: verus-verify: cargo を起動できません: {e}");
-                return false;
+        for (step, args) in verify_steps(root, &name) {
+            let mut cmd = cargo_command(&args, &dir);
+            if step != Step::Plain {
+                cmd.env("RUSTUP_TOOLCHAIN", &pin.toolchain);
             }
-        };
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        eprint!("{text}");
-        match judge(results_line(&text), out.status.success()) {
-            Ok(n) => eprintln!("ok: verus-verify: {krate}: {n} verified, 0 errors"),
-            Err(e) => {
-                eprintln!(
-                    "error: verus-verify: {krate}: 検証が通りません（{e}、終了 {}）",
-                    out.status
-                );
-                ok = false;
-                continue;
-            }
-        }
-        // Verus なしの cargo（リポジトリの toolchain）でビルドできること。
-        let mut plain = Command::new("cargo");
-        clean_cargo(&mut plain)
-            .args(["build", "--quiet", "--locked", "--target-dir"])
-            .arg(root.join("target/verus-plain"))
-            .current_dir(&dir);
-        match run(&mut plain) {
-            Ok(()) => eprintln!("ok: verus-verify: {krate}: Verus なしの cargo build"),
-            Err(e) => {
-                eprintln!("error: verus-verify: {krate}: Verus なしでビルドできません: {e}");
-                ok = false;
+            match step {
+                Step::Clean => {
+                    if let Err(e) = run(&mut cmd) {
+                        eprintln!("error: verus-verify: {krate}: {e}");
+                        ok = false;
+                        continue 'crates;
+                    }
+                }
+                Step::Verify => {
+                    cmd.env("PATH", &path);
+                    eprintln!("$ (cd {krate} && cargo {})", join(&args));
+                    let out = match cmd.output() {
+                        Ok(o) => o,
+                        Err(e) => {
+                            eprintln!("error: verus-verify: cargo を起動できません: {e}");
+                            return false;
+                        }
+                    };
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    eprint!("{text}");
+                    match judge(results_line(&text), out.status.success()) {
+                        Ok(n) => eprintln!("ok: verus-verify: {krate}: {n} verified, 0 errors"),
+                        Err(e) => {
+                            eprintln!(
+                                "error: verus-verify: {krate}: 検証が通りません（{e}、終了 {}）",
+                                out.status
+                            );
+                            ok = false;
+                            continue 'crates;
+                        }
+                    }
+                }
+                Step::Plain => match run(&mut cmd) {
+                    Ok(()) => eprintln!("ok: verus-verify: {krate}: Verus なしの cargo build"),
+                    Err(e) => {
+                        eprintln!(
+                            "error: verus-verify: {krate}: Verus なしでビルドできません: {e}"
+                        );
+                        ok = false;
+                    }
+                },
             }
         }
     }
     ok
+}
+
+fn join(args: &[OsString]) -> String {
+    args.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -459,6 +520,32 @@ mod tests {
             "release = \"release/1.",
         );
         assert!(read_pin(&broken).unwrap_err().contains("release"));
+    }
+
+    #[test]
+    fn fails_unless_every_cargo_step_is_locked() {
+        let steps = verify_steps(Path::new("/r"), "stack");
+        let kinds: Vec<Step> = steps.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, [Step::Clean, Step::Clean, Step::Verify, Step::Plain]);
+        for (kind, args) in &steps {
+            assert!(
+                args.iter().any(|a| a == "--locked"),
+                "{kind:?} に --locked がない: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fails_when_cargo_is_called_outside_cargo_command() {
+        // verify_steps を通らない cargo の呼び出しは --locked の検査をすり抜ける。
+        let src = real("xtask/src/verus.rs");
+        let body = &src[..src.find("#[cfg(test)]").unwrap()];
+        let needle = ["Command::new(", "\"cargo\")"].concat();
+        assert_eq!(
+            body.matches(needle.as_str()).count(),
+            1,
+            "cargo の呼び出しは cargo_command だけにする"
+        );
     }
 
     #[test]
