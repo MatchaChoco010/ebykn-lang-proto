@@ -458,7 +458,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 全権限が初期化済みで、鍵の位置にあることを型不変条件に持ちます。`insert` は `is_init` を要求し、`remove` / `borrow` は `is_init` を返します。
 - 契約は `spec_insert` / `spec_remove` ではなく、`perms()`（鍵から権限への `Map`）で書きます。
 - 鍵は、`Ptr<T>` ではポインタそのもの（等しさはアドレスの等しさ）、`Cell<T>` では `CellId` です。`dom()` はその集合です。
-- `remove` / `borrow` の添字は、`Ptr<T>` / `Cell<T>` そのものに加えて、その参照（`&Ptr<T>`、`&Cell<T>`）も受け取ります（トレイト `LocArg`。#83）。書き下しは添字の型を見ずに、`take` / `put` / `borrow` の添字をそのまま渡します。`Cell<T>` は `Copy` でないので、`Rc<Cell<T>>` で共有すると参照で持つほかありません。論理文脈の `r[p]` / `contains(p)` は参照を受け取らないので、`r[*c]` と書きます（`forall q in r` の `q` の型を、`contains` の引数の型で決めるため）。
+- `remove` / `borrow` の添字は、`Ptr<T>` / `Cell<T>` そのものに加えて、その参照（`&Ptr<T>`、`&Cell<T>`）も受け取ります（トレイト `LocArg`。#83）。書き下しは添字の型を見ずに、`take` / `put` / `borrow` の添字をそのまま渡します。`Cell<T>` は `Copy` でないので、`Rc<Cell<T>>` で共有すると参照で持つほかありません。論理文脈の `r[p]` / `contains(p)` は参照を受け取らないので、`r[*c]` と書きます（`forall q in r` の `q` の型を、`contains` の引数の型で決めるため）。`p: &Ptr<T>` の引数では、契約の `*p` は参照を外した `Ptr<T>` そのもの（`old(r).contains(*p)`）で、本体で `take r[p]` した後の `*p` は指す値です（`tests/golden/lowering` の `ref_key`）。
 
 * 元の仕様：§7.1 の API の一覧。
 * 根拠：#6（PR #13）。プローブ `simple_pptr.rs`、`simple_pptr_write_needs_copy.rs`、`pcell.rs`、`pcell_deprecated.rs`、`tracked_map.rs`。参照の添字は #83（`tests/golden/lowering` の `Bank`・`ref_key`）。
