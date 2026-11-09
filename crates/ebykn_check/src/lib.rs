@@ -213,7 +213,7 @@ fn nested_perm_item(index: &Index, module: &[String], item: &ast::Item) -> bool 
             let (index::Import::Name { path, .. } | index::Import::Glob { path }) = u;
             index::leads_to_perm(index, &index.resolve(module, false, path, None))
                 || unresolved_alias(index, module, false, path)
-                || index.unresolvable_path(module, false, path, None, &BTreeSet::new(), true, false)
+                || index.unresolvable_path(module, false, path, None, &[], true, false)
         }),
         ItemKind::TypeAlias(a) => match &a.ty.kind {
             ast::TypeKind::Path { qself: None, path } => {
@@ -221,7 +221,7 @@ fn nested_perm_item(index: &Index, module: &[String], item: &ast::Item) -> bool 
                     path.segments.iter().map(|s| s.ident.name.clone()).collect();
                 // 右辺が別名の型の引数（`type PX<T> = T;`）なら、行き先を引けない。
                 segs.first()
-                    .is_some_and(|f| type_param_names(&a.generics).any(|p| &p == f))
+                    .is_some_and(|f| type_params(&[], &a.generics).contains(f))
                     || index::leads_to_perm(
                         index,
                         &index.resolve(module, path.leading_colon, &segs, None),
