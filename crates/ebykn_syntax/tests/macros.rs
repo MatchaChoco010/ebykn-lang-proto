@@ -221,7 +221,13 @@ fn builtin_attributes_are_not_listed() {
 #[test]
 fn override_and_feature_are_listed() {
     for src in ["use evil::zero as r#override;", ""] {
-        listed(src, "#[r#override]", &[], MacroKind::Attribute, "override");
+        listed(
+            src,
+            "#[r#override]",
+            &[],
+            MacroKind::Attribute,
+            "r#override",
+        );
     }
     listed("", "#[feature(x)]", &[], MacroKind::Attribute, "feature");
 }
@@ -337,6 +343,43 @@ fn attribute_macros_are_listed() {
     ] {
         listed("", attrs, &[], MacroKind::Attribute, path);
     }
+    // 予約語の raw の綴りは予約語とは別の名前で、利用者が束縛した名前（PR #57 の再レビューの B1）。
+    // `r#unsafe(..)` を組み込みの `unsafe(..)` の包みとして読まない。
+    for src in ["use evil::zero as r#unsafe;", ""] {
+        for attrs in [
+            "#[r#unsafe(allow(dead_code))]",
+            "#[r#unsafe]",
+            "#[cfg_attr(test, r#unsafe(allow(dead_code)))]",
+            "#[unsafe(r#unsafe(allow(dead_code)))]",
+        ] {
+            listed(src, attrs, &[], MacroKind::Attribute, "r#unsafe");
+        }
+    }
+}
+
+/// 予約語でない名前の raw の綴り（`r#derive`、`r#inline`）は、同じ名前の組み込みの属性（rustc も同じ
+/// 名前として読む）。
+#[test]
+fn raw_spellings_of_builtin_names_are_the_same_names() {
+    for name in BUILTIN_ATTRS.iter().chain(PRELUDE_ATTR_MACROS) {
+        let arg = if *name == "derive" { "Clone" } else { "x" };
+        none("", &format!("#[r#{name}({arg})]"), &[]);
+    }
+    none("", "#[derive(r#Clone)]", &[]);
+    listed(
+        "",
+        "#[r#derive(evil::X)]",
+        &[],
+        MacroKind::Derive,
+        "evil::X",
+    );
+    listed(
+        "use evil::x as r#derive;",
+        "#[derive(Clone)]",
+        &[],
+        MacroKind::Attribute,
+        "derive",
+    );
     // 組み込みの名前でも、別の名前空間のパスは外のマクロ。
     listed(
         "",

@@ -235,10 +235,10 @@ impl Run {
     }
 }
 
-/// 生成クレートの依存クレートが、コードで使われる名前（改名と `[lib] name` を反映した名前）。
-/// `cargo metadata --offline`（Verus の実行で依存は取ってある）の `resolve` から読む。読めなければ
-/// `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
-pub fn extern_crate_names(verus: &Verus, build: &Path) -> Option<Vec<String>> {
+/// 生成クレートの `cargo metadata --offline` の出力（Verus の実行で依存は取ってある）。依存クレートが
+/// コードで使われる名前（改名と `[lib] name` を反映した名前）を [`parse_extern_crate_names`] で読む。
+/// 走らなければ `None`（呼ぶ側は、名前が分からないとして扱う。#49）。
+pub fn cargo_metadata(verus: &Verus, build: &Path) -> Option<String> {
     let out = Command::new("cargo")
         .current_dir(build)
         .env("RUSTUP_TOOLCHAIN", &verus.pin.toolchain)
@@ -248,7 +248,7 @@ pub fn extern_crate_names(verus: &Verus, build: &Path) -> Option<Vec<String>> {
     if !out.status.success() {
         return None;
     }
-    parse_extern_crate_names(&String::from_utf8_lossy(&out.stdout))
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// `cargo metadata` の JSON から、根のパッケージの依存の名前（`resolve.nodes[根].deps[].name`）を読む。

@@ -352,7 +352,8 @@ pub enum CheckMsg {
         path: String,
         detail: String,
     },
-    /// `[dependencies]` の鍵が、std などの名前（`std`、`core`、`alloc`、`vstd`、`ebykn_prelude`）。
+    /// `[dependencies]` の鍵が、std などの名前（`ebykn_syntax::reserved` の `RESERVED_CRATE_NAMES` と
+    /// `RESERVED_DEPENDENCY_NAMES`）。
     /// その名前で依存クレートを使うと、`::core::..` のパスが依存クレートを指す（#49、#16 の既定）。
     ReservedDependency {
         name: String,
@@ -637,10 +638,10 @@ impl CheckMsg {
             (ReadFailed { path, detail }, En) => format!("cannot read `{path}`: {detail}"),
             (ReadFailed { path, detail }, Ja) => format!("`{path}` を読めません: {detail}"),
             (ReservedDependency { name }, En) => format!(
-                "the dependency `{name}` in `Ebykn.toml` cannot use the name `{name}`; the names `std`, `core`, `alloc`, `vstd` and `ebykn_prelude` cannot be given to a dependency (rename it, e.g. `my_{name} = {{ package = \"..\" }}`)"
+                "the dependency `{name}` in `Ebykn.toml` cannot use the name `{name}`; the names `std`, `core`, `alloc`, `vstd`, `ebykn_prelude`, `verus_builtin` and `verus_builtin_macros` cannot be given to a dependency (rename it, e.g. `my_{name} = {{ package = \"..\" }}`)"
             ),
             (ReservedDependency { name }, Ja) => format!(
-                "`Ebykn.toml` の依存クレート `{name}` に、`{name}` という名前は付けられません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude` は依存クレートの名前にできません（`my_{name} = {{ package = \"..\" }}` のように別の名前にします）"
+                "`Ebykn.toml` の依存クレート `{name}` に、`{name}` という名前は付けられません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude`、`verus_builtin`、`verus_builtin_macros` は依存クレートの名前にできません（`my_{name} = {{ package = \"..\" }}` のように別の名前にします）"
             ),
 
             (Unimplemented(u), En) => format!("not implemented yet: {}", u.text(En)),

@@ -544,7 +544,9 @@ impl<'a> Walker<'a> {
     /// verified の陰に入らないようにする。
     fn builtin_attrs_only(&mut self, attrs: &[ast::Attr]) {
         for a in attrs {
-            if let Some(written) = ebykn_syntax::macros::non_builtin(a) {
+            if let Some(written) =
+                ebykn_syntax::macros::non_builtin(a, ebykn_syntax::macros::AttrPosition::StmtExpr)
+            {
                 self.diags.push(a.span, Message::AttrPosition { written });
             }
         }

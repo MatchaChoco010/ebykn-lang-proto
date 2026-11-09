@@ -12,6 +12,7 @@ use ebykn_syntax::ast::{self, ItemKind};
 use ebykn_syntax::diag::{CheckMsg, Diagnostic, Message, Unimpl};
 use ebykn_syntax::parse_eyk;
 use ebykn_syntax::reserved::DeferredName;
+use ebykn_syntax::reserved::{RESERVED_CRATE_NAMES, RESERVED_DEPENDENCY_NAMES};
 use ebykn_syntax::span::{FileId, SourceFile, Span};
 use toml::de::{DeTable, DeValue};
 
@@ -68,9 +69,9 @@ pub struct Project {
 impl Project {
     /// 依存クレートがコードで使われる名前（`-` は `_`）。改名（`package = ..`）があれば鍵の名前、
     /// なければそのクレートの `[lib] name`（なければ `[package] name`）。`[lib] name` は path の依存の
-    /// `Cargo.toml` を読んで決める。決められないもの（registry と git の依存、読めない `Cargo.toml`）が
-    /// あれば `None` を返す（呼ぶ側は、名前が分からないとして扱う。#49）。鍵の名前は、どの場合も
-    /// 返す名前に入れる。
+    /// `Cargo.toml` を読んで決める。返すのは（名前の一覧、すべて決められたか）。決められないもの
+    /// （registry と git の依存、読めない `Cargo.toml`）があれば 2 つ目は `false` で、呼ぶ側は名前が
+    /// 分からないとして扱う（#49）。鍵の名前は、どの場合も一覧に入れる。
     pub fn dependency_crate_names(&self) -> (Vec<String>, bool) {
         let mut names = Vec::new();
         let mut known = true;
@@ -497,7 +498,10 @@ fn read_manifest(file: &SourceFile, text: &str, diags: &mut Vec<Diagnostic>) -> 
             let name = k.get_ref().to_string();
             // std などの名前の依存クレートは、`::core::..` や `use core::..` を依存クレートに向ける
             // （#49。`.eyk` の改名の拒否（#16 の既定）と同じ名前）。
-            if RESERVED_DEPENDENCY_NAMES.contains(&name.replace('-', "_").as_str()) {
+            let key = name.replace('-', "_");
+            if RESERVED_CRATE_NAMES.contains(&key.as_str())
+                || RESERVED_DEPENDENCY_NAMES.contains(&key.as_str())
+            {
                 push(
                     diags,
                     at(k.span()),
@@ -531,10 +535,6 @@ fn lib_name(path: &Path) -> Option<String> {
     };
     get("lib").or_else(|| get("package"))
 }
-
-/// 依存クレートに付けられない名前（`.eyk` の改名の拒否と同じ。`crates/ebykn_syntax/src/parse/item.rs` の
-/// `RESERVED_NAMES`）。
-const RESERVED_DEPENDENCY_NAMES: &[&str] = &["std", "core", "alloc", "vstd", "ebykn_prelude"];
 
 fn value(v: &DeValue<'_>) -> TomlValue {
     match v {

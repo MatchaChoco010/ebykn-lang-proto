@@ -239,6 +239,8 @@ fn rejects_dependencies_named_like_std() {
         "vstd",
         "ebykn_prelude",
         "ebykn-prelude",
+        "verus_builtin",
+        "verus-builtin-macros",
     ] {
         let t = project(
             &format!("dep-{name}"),

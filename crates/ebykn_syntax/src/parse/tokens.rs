@@ -126,7 +126,8 @@ fn attr(tts: &[TokenTree], i: usize) {
     // 証明の属性は `meta` が別の文言で拒否する。
     if inner
         && !diagnosed_by_meta(&body)
-        && let Some(written) = crate::macros::non_builtin_in_tokens(&body)
+        && let Some(written) =
+            crate::macros::non_builtin_in_tokens(&body, crate::macros::AttrPosition::Inner)
     {
         push(span, Message::AttrPosition { written });
     }

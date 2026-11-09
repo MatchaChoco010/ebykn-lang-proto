@@ -58,7 +58,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - `[verus]` の `release` / `commit` が、`ebykn` をビルドしたときの固定値（このリポジトリのルートの `Cargo.toml` の `[workspace.metadata.verus]`）と違えば `E0002` です。
 - `Ebykn.toml` はカレントディレクトリから上へ探します（cargo と同じ）。
 - `[dependencies]` は値を保ったまま、鍵の名前の順に `build/verus/Cargo.toml` へ写します。
-- `[dependencies]` の鍵に `std`・`core`・`alloc`・`vstd`・`ebykn_prelude`（`-` は `_` と同じ）は使えず、`E0002` です。この名前の依存クレートがあると、`::core::clone::Clone` や `use core::..` がそのクレートを指します（#49。`.eyk` の改名の拒否と同じ名前）。
+- `[dependencies]` の鍵に `std`・`core`・`alloc`・`vstd`・`ebykn_prelude`・`verus_builtin`・`verus_builtin_macros`（`-` は `_` と同じ）は使えず、`E0002` です。この名前の依存クレートがあると、`::core::clone::Clone` や `use core::..` がそのクレートを指します（#49。`.eyk` の改名の拒否と同じ名前）。
 - 生成する `build/verus/Cargo.toml` の `vstd` は、crates.io の `vstd = "=0.0.0-2026-11-01-0251"`（`cargo verus new` が出す版）です。
 
 * 元の仕様：§3.2 は例だけで、必須の鍵、知らない鍵の扱い、探し方、vstd の取り先を定めていない。
@@ -126,7 +126,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 1. 関数の本体の中のマクロは、どのクレートのものも使える。呼べるマクロの許可リストをやめ、壊れる形の拒否リストと、`ebykn verify` の出力の照合（§9、#37）で扱う。拒否リストの候補は、`.eyk` に書いた証明の入口（`verus!`、`proof!` などの名前と `verifier` の属性）、Verus が自分で設定する cfg（`verus_keep_ghost`、`verus_keep_ghost_body`、`verus_only`、`verus_verify_core`、`verus_no_vstd`）と `debug_assertions` を条件に含む `cfg!` / `#[cfg]`、`env!` / `option_env!` / `include!`。
 2. Verus が対応していない std のマクロ（`println!` 系、`write!`、`writeln!`、`dbg!`）は、prelude の関数の呼び出しに書き下し、その関数を前提として `ebykn status` に出す。
-3. derive・属性マクロを使えるようにし、検証されない部分を前提として一覧に出す。std の derive は Verus が検証する。関数に付く属性マクロ（`#[tokio::main]` など）は、検証する本体と、マクロを付ける薄い外側に分けて書き下す。
+3. derive・属性マクロを使えるようにし、検証されない部分を前提として一覧に出す。std の derive は前提に出さない（仕様がなく、verified なコードがその振る舞いに頼れない）。関数に付く属性マクロ（`#[tokio::main]` など）は、検証する本体と、マクロを付ける薄い外側に分けて書き下す。
 4. 利用者の `macro_rules!` を使えるようにし、モジュール直下で項目を作るものは前提として一覧に出す。
 5. 関数の中の一部だけを `unchecked { .. }` ブロックにする逃げ道を足すかは、作者の判断（足すなら別の Issue で構文を詰める）。
 6. 依存クレートのマクロの中身は、依存クレートと同じく信頼する前提として扱う（`assume` の類は §9 の照合で捕まえる）。
@@ -160,7 +160,7 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 
 - 判定は字句的に、どの項目にどの属性が付いているかで行います（`crates/ebykn_syntax/src/macros.rs` の表）。`cfg_attr(..)` と `unsafe(..)` の中も見ます。
 - 出さないもの（std と Rust のもの）：
-  - std の derive：`Clone`、`Copy`、`Debug`、`PartialEq`、`Eq`、`Hash`、`Default`、`PartialOrd`、`Ord` を、裸の名前か `std::` / `core::` から始まるパスで書いたもの。`std::..::derive` / `core::..::derive` のパスの derive（`core::prelude::v1::derive`）の中も同じです。std の derive が作るのは std の書いた impl だけです。固定した Verus が検証するのは derive した `Clone` の impl だけですが、ほかの impl にもどれにも仕様がないので、verified なコードはその振る舞い（`a == b` の結果、`S::default()` の値など）に頼れません。
+  - std の derive：`Clone`、`Copy`、`Debug`、`PartialEq`、`Eq`、`Hash`、`Default`、`PartialOrd`、`Ord` を、裸の名前か `std::` / `core::` から始まるパスで書いたもの。`std::..::derive` / `core::..::derive` のパスの derive（`core::prelude::v1::derive`）の中も同じです。std の derive が作るのは std の書いた impl だけです。固定した Verus は derive した `Clone` の impl だけを検証し、ほかの impl は検証しません。それでも、どの impl にも仕様がないので、verified なコードはその振る舞い（`a == b` の結果、`S::default()` の値など）に頼れません。
   - Rust の組み込みの属性：Rust リファレンスの Built-in attributes index のうち、Conditional compilation（`cfg`、`cfg_attr`）、Testing（`test`、`ignore`、`should_panic`）、Derive（`derive`、`automatically_derived`）、Macros（`macro_export`、`macro_use`、`proc_macro`、`proc_macro_derive`、`proc_macro_attribute`）、Diagnostics（`allow`、`expect`、`warn`、`deny`、`forbid`、`deprecated`、`must_use`）、ABI, linking, symbols, and FFI（`link`、`link_name`、`link_ordinal`、`no_link`、`repr`、`crate_type`、`no_main`、`export_name`、`link_section`、`no_mangle`、`used`、`crate_name`）、Code generation（`inline`、`cold`、`naked`、`no_builtins`、`target_feature`、`track_caller`、`instruction_set`）、Documentation（`doc`）、Preludes（`no_std`、`no_implicit_prelude`）、Modules（`path`）、Limits（`recursion_limit`、`type_length_limit`）、Runtime（`panic_handler`、`global_allocator`、`windows_subsystem`）、Type system（`non_exhaustive`）、Debugger（`debugger_visualizer`、`collapse_debuginfo`）。Features（`feature`）は入れません（下の位置の規則）。
   - ツールの属性：Rust リファレンスの Tool attributes が挙げる `clippy`、`rustfmt`、`diagnostic`、`miri`、`rust_analyzer` の名前空間（`diagnostic::on_unimplemented` を含む）。
 - 名前を覆い隠す書き方は、std や Rust のものとして数えません。クレートのどこかでその名前を束縛していれば（`use` の葉と改名、`mod`、`extern crate`、依存クレートがコードで使われる名前）、前提として出します。
@@ -169,7 +169,9 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
   - `core` という名前を束縛しているときの `#[derive(::core::clone::Clone)]`（先頭の `::` があっても）と、`use core::clone::Clone;` の後の `#[derive(Clone)]`。
   - `inline`・`allow` などの組み込みの属性は、同じ名前を取り込むと rustc が曖昧さのエラー（E0659）にするので、数えてよいものです。glob の `use` で std の derive や `derive` / `test` を取り込んでも曖昧さのエラーになります。
 - 依存クレートがコードで使われる名前は、書き下しでは `Ebykn.toml` と path の依存の `Cargo.toml` から決めます。registry や git の依存、読めない `Cargo.toml` があって決められなければ、std のパス（`std::..` / `core::..`）、std から取り込んだ名前、ツールの属性を数えず、前提として出します。`verify` は Verus の実行の後に `cargo metadata --offline` で名前を確定し、一覧を決め直します。`cargo metadata` が失敗すれば、決められないときの扱いのままです。
-- 項目の外側の属性のほかの位置（内側の属性 `#![..]`、文・式・`let`・match の腕）には、上の Rust の組み込みの属性だけを書けます。ほかの属性（依存クレートの属性マクロ、ツールの属性、`#![feature(..)]`）は `E0001` です。安定版の Rust はこれらの位置に属性マクロを許しませんが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で動くので、`verify` ではこれらの位置の属性マクロも効きます（`mod m { #![evil::x] }` や、文の `#[evil::x] let ..`）。tokio や serde はこれらの位置を使わないので、#53 の方針に反しません。
+- 項目の外側の属性のほかの位置には、決まった属性だけを書けます。ほかの属性は `E0001` です。tokio や serde はこれらの位置を使わないので、#53 の方針に反しません。
+  - 内側の属性 `#![..]`（ファイルの先頭、`mod` の中）：上の Rust の組み込みの属性のうち、名前を覆い隠せないもの（`test`・`derive`・`global_allocator` を除く）だけです。依存クレートの属性マクロ、ツールの属性、`#![feature(..)]` は書けません。安定版の Rust は内側の属性マクロを許しませんが、Verus は `-Zcrate-attr=feature(custom_inner_attributes, stmt_expr_attributes)` と `RUSTC_BOOTSTRAP=1` で動くので、`verify` では内側の属性マクロが走ります（`mod m { #![evil::x] }` が一覧にない `impl` を足せる）。`#![feature(..)]` を拒否するのは、`#![feature(proc_macro_hygiene)]` で文・式の属性マクロも走るようになるためです。
+  - 文・式・`let`・match の腕の外側の属性：内側と同じ組み込みの属性と、ツールの属性（`#[rustfmt::skip] let ..`）です。ここに付く属性マクロは、Verus でも E0658（`proc_macro_hygiene` は有効でない）で大きく失敗します。`E0001` は、`#![feature]` の拒否の後ろの二重の守りです。
 - `#[override]` は `override` が予約語なので構文解析が読めず（`E0001`）、`#[r#override]` は利用者が束縛した名前として前提に出します。
 
 * 元の仕様：マクロの扱いを定めていない。

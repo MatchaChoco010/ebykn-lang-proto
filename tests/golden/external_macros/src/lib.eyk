@@ -1,5 +1,6 @@
 // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（#49）。Ebykn は拒否せず、
-// verify の前提の一覧に `macro` の行を必ず出す。std の derive（Clone など）は Verus が検証するので出さない。
+// verify の前提の一覧に `macro` の行を必ず出す。std の derive（Clone など）は、std が書いた impl で仕様が
+// なく、verified なコードがその振る舞いに頼れないので出さない。
 
 pub trait One {
     fn one() -> u32;

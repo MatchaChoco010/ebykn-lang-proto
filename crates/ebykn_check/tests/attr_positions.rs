@@ -28,8 +28,10 @@ const NON_BUILTIN: &[(&str, &str)] = &[
     ("cfg_attr(all(), evil::x)", "evil::x"),
     ("cfg_attr(test, allow(unused), evil::x)", "evil::x"),
     ("unsafe(evil::x)", "evil::x"),
-    ("rustfmt::skip", "rustfmt::skip"),
-    ("r#override", "override"),
+    ("r#override", "r#override"),
+    // 予約語の raw の綴りは、組み込みの `unsafe(..)` の包みではない（PR #57 の再レビューの B1）。
+    ("r#unsafe(allow(unused))", "r#unsafe"),
+    ("cfg_attr(all(), r#unsafe(allow(unused)))", "r#unsafe"),
 ];
 
 #[test]
@@ -51,6 +53,32 @@ fn non_builtin_attributes_are_rejected_in_every_position() {
 }
 
 /// 組み込みの属性は、どの位置にも書ける。
+/// ツールの属性は、内側の位置では書けず、文・式の位置では書ける（何もしない属性で、安定版の Rust も
+/// 許す。PR #57 の再レビューの nit）。
+#[test]
+fn tool_attributes_are_rejected_only_as_inner_attributes() {
+    for src in [
+        "#![rustfmt::skip]\npub fn f() {}",
+        "mod m { #![rustfmt::skip] }",
+    ] {
+        let (_, lines) = run(src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("the attribute `rustfmt::skip` cannot be written here")),
+            "{lines:?}\n---\n{src}"
+        );
+    }
+    accepts("pub fn f() -> u32 { #[rustfmt::skip] let x: u32 = 1; x }");
+    accepts("pub fn f() -> u32 { #[clippy::x] 1 }");
+    // 先頭の `::` はクレートの名前で、ツールではない。
+    let (_, lines) = run("pub fn f() -> u32 { #[::rustfmt::skip] 1 }");
+    assert!(
+        lines.iter().any(|l| l.contains("`::rustfmt::skip`")),
+        "{lines:?}"
+    );
+}
+
 #[test]
 fn builtin_attributes_are_accepted() {
     for src in [

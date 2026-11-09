@@ -116,8 +116,18 @@ pub fn lower_report(report: &CheckReport) -> Option<Result<ebykn_lower::Output, 
     Some(ebykn_lower::lower(&report.project, checked))
 }
 
-/// [`lower_report`] の、依存クレートがコードで使われる名前を与える版（`verify` が `cargo metadata`
-/// で取った名前で、手続きマクロの前提の一覧を確定し直す。#49）。
+/// `verify` の `cargo metadata` の出力（JSON）から依存クレートがコードで使われる名前を読み、
+/// [`lower_report_with_crates`] で書き下し直す（手続きマクロの前提の一覧を確定し直す。#49）。JSON を
+/// 読めなければ `None`（書き下しの既定の、名前が分からないときの扱いのまま）。
+pub fn lower_report_from_metadata(
+    report: &CheckReport,
+    json: &str,
+) -> Option<Result<ebykn_lower::Output, String>> {
+    let names = verus::parse_extern_crate_names(json)?;
+    lower_report_with_crates(report, &names)
+}
+
+/// [`lower_report`] の、依存クレートがコードで使われる名前を与える版。
 pub fn lower_report_with_crates(
     report: &CheckReport,
     crates: &[String],
@@ -245,6 +255,56 @@ mod tests {
             j.contains("\"skipped\":[\"self-contained check (§6.6)\""),
             "{j}"
         );
+    }
+
+    /// `verify` は `cargo metadata` の名前で手続きマクロの前提の一覧を決め直す（#49、PR #57 の再レビューの
+    /// S1）。`[lib] name` が `clippy` の git の依存は、`cargo metadata` で初めて名前が分かる。
+    #[test]
+    fn metadata_decides_the_macro_list() {
+        let dir = std::env::temp_dir().join(format!("ebykn-metadata-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let pin = verus_pin();
+        std::fs::write(
+            dir.join("Ebykn.toml"),
+            format!(
+                "[package]\nname = \"g\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[verus]\nrelease = \"{}\"\ncommit = \"{}\"\n\n[dependencies]\ninnocent = {{ git = \"https://example.invalid/i\" }}\n",
+                pin.release, pin.commit
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.eyk"),
+            "#[clippy::zero]\npub fn one() -> u32 { 1 }\n",
+        )
+        .unwrap();
+        let report = check_project(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!report.has_errors(), "{:?}", report.render(Lang::En));
+        let paths = |o: Option<Result<ebykn_lower::Output, String>>| -> Vec<String> {
+            o.expect("書き下せる")
+                .expect("書き下せる")
+                .macros
+                .into_iter()
+                .map(|m| m.path)
+                .collect()
+        };
+        // 名前が分からないので、ツールの属性として数えない。
+        assert_eq!(paths(lower_report(&report)), ["clippy::zero"]);
+        let json = |name: &str| {
+            format!(
+                r#"{{"resolve":{{"root":"r","nodes":[{{"id":"r","deps":[{{"name":"{name}","pkg":"i"}},{{"name":"vstd","pkg":"v"}}]}}]}}}}"#
+            )
+        };
+        // `cargo metadata` で名前が `clippy` と分かれば、そのクレートのマクロ。
+        assert_eq!(
+            paths(lower_report_from_metadata(&report, &json("clippy"))),
+            ["clippy::zero"]
+        );
+        // `innocent` なら、`clippy::` はツールの属性。
+        assert!(paths(lower_report_from_metadata(&report, &json("innocent"))).is_empty());
+        // 読めなければ決め直さない。
+        assert!(lower_report_from_metadata(&report, "not json").is_none());
     }
 
     #[test]

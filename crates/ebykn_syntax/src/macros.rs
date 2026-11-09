@@ -270,6 +270,41 @@ impl Bindings {
     }
 }
 
+/// Rust の予約語（厳密な予約語と、将来のための予約語）。raw の綴り（`r#unsafe`）は予約語とは別の
+/// 名前で、利用者が束縛した名前を指す。予約語でない名前の raw の綴り（`r#derive`）は、`derive` と
+/// 同じ名前。
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "unsafe", "use", "where", "while", "abstract", "become", "box", "do", "final", "macro",
+    "override", "priv", "try", "typeof", "unsized", "virtual", "yield",
+];
+
+/// 属性のパスの一つの名前。予約語の raw の綴りだけ `r#` を残す（`r#unsafe(..)` を組み込みの
+/// `unsafe(..)` の包みと取り違えない。PR #57 の再レビューの B1）。
+fn segment(name: &str, raw: bool) -> String {
+    if raw && KEYWORDS.contains(&name) {
+        format!("r#{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// トークンの名前を [`segment`] の形で。
+fn path_ident(tt: Option<&TokenTree>) -> Option<String> {
+    match tt {
+        Some(TokenTree::Ident(i)) => {
+            let s = i.to_string();
+            Some(match s.strip_prefix("r#") {
+                Some(n) => segment(n, true),
+                None => s,
+            })
+        }
+        _ => None,
+    }
+}
+
 fn ident(tt: Option<&TokenTree>) -> Option<String> {
     match tt {
         Some(TokenTree::Ident(i)) => {
@@ -312,10 +347,10 @@ fn read_meta(tts: &[TokenTree]) -> Option<Meta> {
     if leading_colon {
         k = 2;
     }
-    let mut segments = vec![ident(tts.get(k))?];
+    let mut segments = vec![path_ident(tts.get(k))?];
     k += 1;
     while punct(tts.get(k), ':') && punct(tts.get(k + 1), ':') {
-        segments.push(ident(tts.get(k + 2))?);
+        segments.push(path_ident(tts.get(k + 2))?);
         k += 3;
     }
     Some(Meta {
@@ -358,7 +393,7 @@ pub fn external_macros(a: &ast::Attr, b: &Bindings) -> Vec<ExternalMacro> {
             .path
             .segments
             .iter()
-            .map(|s| s.ident.name.clone())
+            .map(|s| segment(&s.ident.name, s.ident.raw))
             .collect(),
         args: a.args.clone(),
     };
@@ -470,35 +505,49 @@ fn std_path(d: &Meta, b: &Bindings) -> bool {
     d.segments.len() > 1 && matches!(first, "std" | "core") && !b.root_shadowed(first)
 }
 
-/// 項目の外側の属性のほかの位置（`#![..]`、文・式・`let`・match の腕）に書いた属性のうち、
-/// Rust の組み込みの属性（[`BUILTIN_ATTRS`]）でないものの書き方。`cfg_attr(..)` と `unsafe(..)` の
-/// 中も見る。なければ `None`。安定版の Rust はこれらの位置に属性マクロと `#![feature]` を許さない
-/// （内側の属性マクロも安定版では使えない）。ツールの属性（`#![rustfmt::skip]`）と std の prelude の
-/// マクロ（`test`、`derive`）は、同じ名前の依存クレートや `use` で覆い隠せるので、ここでは組み込みと
-/// して数えない。
-pub fn non_builtin(a: &ast::Attr) -> Option<String> {
+/// 項目の外側の属性のほかの位置に書いた属性のうち、書けないものの書き方。なければ `None`。
+/// `cfg_attr(..)` と `unsafe(..)` の中も見る。
+///
+/// - 内側の属性（`#![..]`。[`AttrPosition::Inner`]）：Rust の組み込みの属性（[`BUILTIN_ATTRS`]）だけ。
+///   Verus は `custom_inner_attributes` を有効にして動くので、内側の属性マクロは検証で効く。ツールの
+///   属性（`#![rustfmt::skip]`）は、同じ名前の依存クレートのマクロを指しうるので書けない。
+/// - 文・式・`let`・match の腕（[`AttrPosition::StmtExpr`]）：組み込みの属性とツールの属性。ここに付く
+///   属性マクロは Verus でも E0658（`proc_macro_hygiene` は有効でない）で大きく失敗するが、二重の守り
+///   として拒否する。ツールの属性は、マクロを指しても大きく失敗するだけなので許す。
+///
+/// std の prelude のマクロ（`test`、`derive`、`global_allocator`）は、どちらの位置にも書けない。
+pub fn non_builtin(a: &ast::Attr, pos: AttrPosition) -> Option<String> {
     let m = Meta {
         leading_colon: a.path.leading_colon,
         segments: a
             .path
             .segments
             .iter()
-            .map(|s| s.ident.name.clone())
+            .map(|s| segment(&s.ident.name, s.ident.raw))
             .collect(),
         args: a.args.clone(),
     };
-    non_builtin_meta(&m)
+    non_builtin_meta(&m, pos)
+}
+
+/// 項目の外側の属性のほかの位置（[`non_builtin`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrPosition {
+    /// `#![..]`。
+    Inner,
+    /// 文・式・`let`・match の腕の外側の属性。
+    StmtExpr,
 }
 
 /// [`non_builtin`] の、属性の中身（`#[..]` の括弧の中）のトークン列の版。読めなければその全体。
-pub fn non_builtin_in_tokens(body: &[TokenTree]) -> Option<String> {
+pub fn non_builtin_in_tokens(body: &[TokenTree], pos: AttrPosition) -> Option<String> {
     match read_meta(body) {
-        Some(m) => non_builtin_meta(&m),
+        Some(m) => non_builtin_meta(&m, pos),
         None => Some(body.iter().cloned().collect::<TokenStream>().to_string()),
     }
 }
 
-fn non_builtin_meta(m: &Meta) -> Option<String> {
+fn non_builtin_meta(m: &Meta, pos: AttrPosition) -> Option<String> {
     let first = m.segments[0].as_str();
     let single = m.segments.len() == 1 && !m.leading_colon;
     if single && (first == "cfg_attr" || first == "unsafe") {
@@ -507,7 +556,12 @@ fn non_builtin_meta(m: &Meta) -> Option<String> {
         return split_commas(&inner)
             .iter()
             .skip(skip)
-            .find_map(|p| non_builtin_in_tokens(p));
+            .find_map(|p| non_builtin_in_tokens(p, pos));
     }
-    (!(single && BUILTIN_ATTRS.contains(&first))).then(|| m.written())
+    let builtin = single && BUILTIN_ATTRS.contains(&first);
+    let tool = pos == AttrPosition::StmtExpr
+        && !single
+        && !m.leading_colon
+        && TOOL_NAMESPACES.contains(&first);
+    (!(builtin || tool)).then(|| m.written())
 }

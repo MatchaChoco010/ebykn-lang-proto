@@ -216,8 +216,8 @@ fn verify(
     // 依存クレートがコードで使われる名前（`[lib] name` など）を `cargo metadata` で確定し、手続きマクロの
     // 前提の一覧を決め直す（#49）。読めなければ、書き下しの既定（名前が分からなければ前提として出す側）
     // のまま。
-    if let Some(names) = ebykn::verus::extern_crate_names(verus, build) {
-        match ebykn::lower_report_with_crates(report, &names) {
+    if let Some(json) = ebykn::verus::cargo_metadata(verus, build) {
+        match ebykn::lower_report_from_metadata(report, &json) {
             Some(Ok(o)) => v.restatus(&o),
             Some(Err(e)) => {
                 eprintln!("ebykn: error: {e}");
