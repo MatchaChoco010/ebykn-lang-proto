@@ -210,11 +210,9 @@ Verus は自分の toolchain で動きます。固定した Verus が要求す�
 - Ebykn 自身が足す契約は `final` で書きます。§6.4 の `x: &mut T`（`&mut self` を含む）の展開は `requires P[old(x)]`、`ensures P[final(x)]` です。`uses &mut p@` に足す `ensures final(__eyk_perm_p).pptr() == p`（§7.3）も同じです。
 - 論理の領域添字は `final(self)@f[p]`、`old(self)@f[p]`、`old(self@f)[p]`、`final(r)[p]` も領域として読み、`final(self).f@.index(p)`、`final(r).index(p)` などに書き下します。
 
-今の develop（#10 の旧既定 A）：書き下しが、`ensures` の中の、`old` / `final` の下にない `&mut` 引数（`&mut self`、`x: &mut T`、`uses &mut p@` の `__eyk_perm_p`、`uses r: &mut Region<..>` の `r`）を `final(..)` で包みます。量化子・クロージャで束縛した同じ名前は包みません。`E0004` はまだありません。
-
 * 元の仕様：§6.4 の表は `x: &mut T` に `requires P[old(x)]`、`ensures P[x]` を足す。§7.4 は `old(e)`、`final(e)` を「同じ」に写す。付録 A は裸の `self` を事後の値と読む。
 * 根拠：#10（PR #35）。固定した Verus は、`ensures` の裸の `&mut` 引数を拒否する（`mut_ref_ensures.rs`）。
-* 状態：作者が決めた。実装中（PR #35）。
+* 状態：作者が決めた。
 
 ## §7 書き下し
 
@@ -392,7 +390,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、`.eyk` の証明構文（M3 で `E0303` に置き換える）、性質ファイルだけの構文も、文言を分けて `E0001` | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
 | `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、`check --base`、`build --verified`、名前付きの消去される引数の呼び出しなど） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
-| `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた。実装中（PR #35） |
+| `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた。実装中（PR #47） |
 
 `E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0517` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
@@ -456,5 +454,3 @@ M3 の `.eykp` で示す義務は次のとおりです。
 | §7.3 の `gives` | `-> (q: Ptr<T>, Tracked<PointsTo<T>>)` | `-> (__eyk_ret: (Ptr<T>, Tracked<PointsTo<T>>))`（§7.3） | #17 |
 | §6.4 の表の `x: &mut T` | `ensures P[x]` | `ensures P[final(x)]`（§6.4） | #10 |
 | §7.4 の `and { }` | `(a && b && c)` | `((a) && (b) && (c))`（§7.4） | #17 |
-
-根拠が #10 の行は、PR #35 が入るまで、今の develop では付録の形でも通ります（旧既定 A が裸の `&mut` 引数を `final` で包むため）。
