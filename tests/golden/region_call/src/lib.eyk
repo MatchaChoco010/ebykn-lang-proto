@@ -1,0 +1,184 @@
+// #19 の既定 P1：`uses` で受けた領域を、呼び出しの引数の末尾の `uses` の後に並べて渡す。
+// 呼び出し側には `&r` / `&mut r` / `r`（移動）を書く。#19 のコメントの用途 1〜4 の例。
+pub struct Node { pub val: u64 }
+
+// ノードを一つ作り、その権限を r に入れる。
+fn alloc(v: u64) -> (p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>
+    ensures
+        final(r).contains(p), final(r)[p].val == v,
+        forall q in old(r), final(r).contains(q) && final(r)[q] == old(r)[q],
+{
+    let p = Ptr::new(Node { val: v });
+    put r[p];
+    p
+}
+
+fn set(p: Ptr<Node>, v: u64) uses r: &mut Region<Ptr<Node>>
+    requires old(r).contains(p),
+    ensures final(r)[p].val == v, forall q in old(r), final(r).contains(q),
+{
+    borrow mut r[p] { (*p).val = v; }
+}
+
+fn get(p: Ptr<Node>) -> (v: u64) uses r: &Region<Ptr<Node>>
+    requires r.contains(p),
+    ensures v == r[p].val,
+{
+    borrow r[p] { (*p).val }
+}
+
+// 用途 1：構造体を作る前の補助関数。`Pair` はまだないので、メソッドにはできない。
+pub struct Pair { a: Ptr<Node>, b: Ptr<Node> } owns { nodes: Region<Ptr<Node>> }
+
+impl Invariant for Pair {
+    closed spec fn invariant(&self) -> bool = self@nodes.contains(self.a) && self@nodes.contains(self.b);
+}
+
+impl Pair {
+    pub fn new(x: u64, y: u64) -> Self {
+        let mut r: Region<Ptr<Node>> = Region::empty();
+        let a = alloc(x, uses &mut r);
+        let b = alloc(y, uses &mut r);
+        Pair { a, b, @nodes: r }
+    }
+
+    // 用途 4：同じ補助関数を、owns フィールドを渡して使う。
+    pub fn set_a(&mut self, v: u64) {
+        set(self.a, v, uses &mut self@nodes);
+    }
+
+    pub fn get_b(&self) -> u64 {
+        get(self.b, uses &self@nodes)
+    }
+
+    // 渡す領域を取り違えると検証に失敗する（新しい空の領域には `self.a` がない）。
+    // `&mut self` の不変条件は、署名の展開（§6.4）が前後の条件に足す。
+    pub fn set_a_wrong(&mut self, v: u64) {
+        let mut r: Region<Ptr<Node>> = Region::empty();
+        set(self.a, v, uses &mut r);
+    }
+}
+
+// 用途 4：owns フィールドの名前が違う構造体でも、同じ補助関数を使える。
+pub struct Single { p: Ptr<Node> } owns { items: Region<Ptr<Node>> }
+
+impl Invariant for Single {
+    closed spec fn invariant(&self) -> bool = self@items.contains(self.p);
+}
+
+impl Single {
+    pub fn new(x: u64) -> Self {
+        let mut items: Region<Ptr<Node>> = Region::empty();
+        let p = alloc(x, uses &mut items);
+        Single { p, @items: items }
+    }
+
+    pub fn set(&mut self, v: u64) {
+        set(self.p, v, uses &mut self@items);
+    }
+}
+
+// 用途 2：再帰。`uses` で受けた参照の領域を、そのまま次の呼び出しに貸す。
+fn fill(n: u64) uses r: &mut Region<Ptr<Node>>
+    ensures forall q in old(r), final(r).contains(q) && final(r)[q] == old(r)[q],
+    decreases n,
+{
+    if n > 0 {
+        alloc(n, uses &mut r);
+        fill(n - 1, uses &mut r);
+    }
+}
+
+fn sum(p: Ptr<Node>, k: u64) -> (s: u64) uses r: &Region<Ptr<Node>>
+    requires r.contains(p), r[p].val < 100, k < 100,
+    ensures s <= k * 100,
+    decreases k,
+{
+    if k == 0 {
+        0
+    } else {
+        let v = get(p, uses &r);
+        v + sum(p, k - 1, uses &r)
+    }
+}
+
+pub fn filled(n: u64) -> u64
+    requires n < 10,
+{
+    let mut r: Region<Ptr<Node>> = Region::empty();
+    let p = alloc(7, uses &mut r);
+    fill(n, uses &mut r);
+    sum(p, 3, uses &r)
+}
+
+// 用途 2・3：二つの領域を行き来する。p の権限を from から to へ移す。
+fn transfer(p: Ptr<Node>) uses to: &mut Region<Ptr<Node>>, from: &mut Region<Ptr<Node>>
+    requires old(from).contains(p),
+    ensures final(to).contains(p), final(to)[p] == old(from)[p],
+{
+    take from[p];
+    put to[p];
+}
+
+// 用途 3：一つの領域を共有する。頂点の領域を一つ作り、辺を張る関数と読む関数に貸してから、
+// グラフの構造体に移す。
+pub struct Vertex { pub out: u64 }
+
+pub struct Graph { a: Ptr<Vertex>, b: Ptr<Vertex> } owns { verts: Region<Ptr<Vertex>> }
+
+impl Invariant for Graph {
+    closed spec fn invariant(&self) -> bool = self@verts.contains(self.a) && self@verts.contains(self.b);
+}
+
+fn vertex() -> (p: Ptr<Vertex>) uses g: &mut Region<Ptr<Vertex>>
+    ensures
+        final(g).contains(p), final(g)[p].out == 0,
+        forall q in old(g), final(g).contains(q) && final(g)[q] == old(g)[q],
+{
+    let p = Ptr::new(Vertex { out: 0 });
+    put g[p];
+    p
+}
+
+fn connect(a: Ptr<Vertex>, b: Ptr<Vertex>) uses g: &mut Region<Ptr<Vertex>>
+    requires old(g).contains(a), old(g).contains(b), old(g)[a].out < 100,
+    ensures
+        final(g)[a].out == old(g)[a].out + 1,
+        forall q in old(g), final(g).contains(q) && (q != a ==> final(g)[q] == old(g)[q]),
+{
+    borrow mut g[a] { (*a).out = (*a).out + 1; }
+}
+
+fn out_degree(a: Ptr<Vertex>) -> (n: u64) uses g: &Region<Ptr<Vertex>>
+    requires g.contains(a),
+    ensures n == g[a].out,
+{
+    borrow g[a] { (*a).out }
+}
+
+// 移動で受け取った領域を、構造体に入れる。
+fn into_graph(a: Ptr<Vertex>, b: Ptr<Vertex>) -> Graph uses g: Region<Ptr<Vertex>>
+    requires g.contains(a), g.contains(b),
+{
+    Graph { a, b, @verts: g }
+}
+
+pub fn triangle() -> Graph {
+    let mut g: Region<Ptr<Vertex>> = Region::empty();
+    let a = vertex(uses &mut g);
+    let b = vertex(uses &mut g);
+    connect(a, b, uses &mut g);
+    let n = out_degree(a, uses &g);
+    if n == 1 {
+        connect(b, a, uses &mut g);
+    }
+    into_graph(a, b, uses g)
+}
+
+pub fn moved_between() -> u64 {
+    let mut x: Region<Ptr<Node>> = Region::empty();
+    let mut y: Region<Ptr<Node>> = Region::empty();
+    let p = alloc(5, uses &mut x);
+    transfer(p, uses &mut y, &mut x);
+    get(p, uses &y)
+}

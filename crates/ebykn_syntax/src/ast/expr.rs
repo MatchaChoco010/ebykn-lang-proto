@@ -1,7 +1,8 @@
 //! 式・文・パターン（仕様 §5.3、§5.4、§5.6）。
 
 use super::{
-    Attr, Contract, GenericArg, Ident, Item, Lifetime, Lit, Macro, Path, QSelf, Ret, Tokens, Type,
+    Attr, Contract, GenericArg, Ident, Item, Lifetime, Lit, Macro, Path, PermMode, QSelf, Ret,
+    Tokens, Type,
 };
 use crate::span::Span;
 
@@ -54,15 +55,18 @@ pub enum ExprKind {
         label: Option<Lifetime>,
     },
     Return(Option<Box<Expr>>),
+    /// 呼び出し。`uses` は引数の末尾の `uses` の後に並べた領域（#19 の既定 P1）。
     Call {
         func: Box<Expr>,
         args: Vec<Expr>,
+        uses: Vec<RegionArg>,
     },
     MethodCall {
         receiver: Box<Expr>,
         method: Ident,
         turbofish: Option<Vec<GenericArg>>,
         args: Vec<Expr>,
+        uses: Vec<RegionArg>,
     },
     Cast {
         expr: Box<Expr>,
@@ -237,6 +241,15 @@ pub enum Region {
     SelfField { self_span: Span, field: Ident },
     /// 領域変数 `r`。
     Var(Ident),
+}
+
+/// 呼び出しで渡す領域（`f(x, uses &mut r)` の `&mut r`。#19 の既定 P1）。`mode` は
+/// `r`（移動）/ `&r` / `&mut r`。
+#[derive(Debug, Clone)]
+pub struct RegionArg {
+    pub mode: PermMode,
+    pub region: Region,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

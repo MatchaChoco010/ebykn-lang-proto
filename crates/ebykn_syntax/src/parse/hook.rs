@@ -74,10 +74,21 @@ pub(super) enum AtomKind {
     AndOr,
     Borrow,
     Loop,
+    /// 呼び出しの引数の末尾の `uses &mut r, ..`（#19 の既定 P1）。`uses` は予約語なので、
+    /// 式の先頭で `&` か名前が続く `uses` はいつもこれ。呼び出しの引数の外にあれば写すときに
+    /// 診断にする。
+    Uses,
 }
 
 pub(super) fn peek_atom(input: ParseStream) -> Option<AtomKind> {
     let t = peek_tts(input, 4);
+    // 後ろが `&` か名前のときだけ領域の並び。`uses::f`・`uses.x` などは名前として読み、
+    // 写すときに予約語の診断にする。
+    if is_ident(t.first(), "uses")
+        && (is_punct(t.get(1), '&') || matches!(t.get(1), Some(TokenTree::Ident(_))))
+    {
+        return Some(AtomKind::Uses);
+    }
     if (is_ident(t.first(), "forall") || is_ident(t.first(), "exists"))
         && matches!(t.get(1), Some(TokenTree::Ident(_)))
     {
@@ -121,6 +132,7 @@ pub(super) enum RawAtom {
     AndOr(RawAndOr),
     Borrow(RawBorrow),
     Loop(RawLoop),
+    Uses(Vec<RawRegionArg>),
 }
 
 pub(super) fn parse_atom(input: ParseStream, kind: AtomKind) -> syn::Result<RawAtom> {
@@ -135,6 +147,74 @@ fn parse_atom_in(input: ParseStream, kind: AtomKind, allow_struct: bool) -> syn:
         AtomKind::AndOr => RawAtom::AndOr(parse_and_or(input)?),
         AtomKind::Borrow => RawAtom::Borrow(parse_borrow(input)?),
         AtomKind::Loop => RawAtom::Loop(parse_loop(input)?),
+        AtomKind::Uses => RawAtom::Uses(parse_uses_args(input)?),
+    })
+}
+
+/// 呼び出しで渡す領域（`r` / `&r` / `&mut r`、領域は `r` か `self@x`）。
+pub(super) struct RawRegionArg {
+    pub mode: ast::PermMode,
+    pub region: RawRegion,
+    pub span: crate::span::Span,
+}
+
+/// `uses` と、続けて `,` で並べた領域（#19 の既定 P1）。読むのは呼び出しの `)` の前まで。
+fn parse_uses_args(input: ParseStream) -> syn::Result<Vec<RawRegionArg>> {
+    parse_kw(input, "uses")?;
+    let mut out = Vec::new();
+    loop {
+        out.push(parse_region_arg(input)?);
+        if input.is_empty() {
+            break;
+        }
+        if !input.peek(Token![,]) {
+            return Err(expected_uses_arg(input));
+        }
+        input.parse::<Token![,]>()?;
+        if input.is_empty() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn expected_uses_arg(input: ParseStream) -> syn::Error {
+    err(
+        input.span(),
+        Message::Expected {
+            what: Expected::UsesArg,
+        },
+    )
+}
+
+fn parse_region_arg(input: ParseStream) -> syn::Result<RawRegionArg> {
+    let begin = input.fork();
+    let mode = if input.peek(Token![&]) {
+        input.parse::<Token![&]>()?;
+        if input.parse::<Option<Token![mut]>>()?.is_some() {
+            ast::PermMode::Mut
+        } else {
+            ast::PermMode::Shared
+        }
+    } else {
+        ast::PermMode::Move
+    };
+    let region = if input.peek(Token![self]) && input.peek2(Token![@]) {
+        let s: Token![self] = input.parse()?;
+        input.parse::<Token![@]>()?;
+        RawRegion::SelfField {
+            self_span: s.span,
+            field: input.parse::<syn::Ident>()?,
+        }
+    } else if input.peek(syn::Ident) && !input.peek(Token![self]) {
+        RawRegion::Var(input.parse::<syn::Ident>()?)
+    } else {
+        return Err(expected_uses_arg(input));
+    };
+    Ok(RawRegionArg {
+        mode,
+        region,
+        span: super::span_between(&begin, input),
     })
 }
 

@@ -1,6 +1,32 @@
 //! §3（プロジェクト）と §6（静的検査）の診断の文言。
 
 use super::{Code, Lang};
+use crate::ast::PermMode;
+
+/// 呼び出しで領域を渡す形（#19 の既定 P1）の、宣言の型の形。
+fn pass_decl(m: PermMode) -> &'static str {
+    match m {
+        PermMode::Move => "Region<..>",
+        PermMode::Shared => "&Region<..>",
+        PermMode::Mut => "&mut Region<..>",
+    }
+}
+
+fn pass_en(m: PermMode) -> &'static str {
+    match m {
+        PermMode::Move => "a move (`r`)",
+        PermMode::Shared => "a shared borrow (`&r`)",
+        PermMode::Mut => "a mutable borrow (`&mut r`)",
+    }
+}
+
+fn pass_ja(m: PermMode) -> &'static str {
+    match m {
+        PermMode::Move => "移動（`r`）",
+        PermMode::Shared => "共有の借用（`&r`）",
+        PermMode::Mut => "可変の借用（`&mut r`）",
+    }
+}
 
 /// 権限の状態（仕様 §6.2 の `State` と、Γ に無いこと）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -146,8 +172,6 @@ pub enum Unimpl {
     ImplSpec,
     /// `check --base`（M3）。
     Base,
-    /// 名前付きの消去される引数（`uses r: Region<..>`）を持つ関数の呼び出し（仕様に呼び出し側の形がない）。
-    NamedUsesCall,
     /// `build --verified`（M5）。
     BuildVerified,
     /// クレートの外の型への `impl Invariant` / `impl View`（性質ファイル、M5）。
@@ -208,12 +232,6 @@ impl Unimpl {
             (Unimpl::ImplSpec, Lang::Ja) => "`impl spec` は M5 で実装します",
             (Unimpl::Base, Lang::En) => "`check --base` is implemented in M3",
             (Unimpl::Base, Lang::Ja) => "`check --base` は M3 で実装します",
-            (Unimpl::NamedUsesCall, Lang::En) => {
-                "calling a function with a named erased parameter (`uses r: Region<..>`) is not implemented yet; the specification does not say how the caller passes the region"
-            }
-            (Unimpl::NamedUsesCall, Lang::Ja) => {
-                "名前付きの消去される引数（`uses r: Region<..>`）を持つ関数の呼び出しは未実装です。呼び出し側が領域を渡す形が仕様にありません"
-            }
             (Unimpl::BuildVerified, Lang::En) => {
                 "`build --verified` needs `ebykn status`, which is implemented in M5"
             }
@@ -379,6 +397,10 @@ pub enum CheckMsg {
         name: String,
         keyword: &'static str,
     },
+    /// 呼び出しの `uses` の後に、領域でない名前を書いた（#19 の既定 P1）。
+    NotARegionArg {
+        name: String,
+    },
     /// `impl Invariant for T` の中身の形が違う。
     InvariantImplShape,
     /// `impl View for T` の中に `type V` と `spec fn` 以外がある。
@@ -511,6 +533,39 @@ pub enum CheckMsg {
         ty: String,
     },
 
+    // E0518：呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（#19 の既定 P1）
+    /// 領域の数が違う。`expected` は宣言の順の書き方（`&mut r` など）。
+    RegionArgCount {
+        callee: String,
+        expected: Vec<String>,
+        found: usize,
+    },
+    /// 渡し方（`r` / `&r` / `&mut r`）が違う。`param` は宣言の名前。
+    RegionArgMode {
+        callee: String,
+        param: String,
+        expected: PermMode,
+        found: PermMode,
+    },
+
+    // E0519：呼び出しで渡す領域の状態（#19 の既定 P1）
+    /// 移動した領域を使った。
+    RegionMoved {
+        name: String,
+    },
+    /// 借りた領域（`uses r: &Region<..>` / `&mut Region<..>`）か `self@x` を移動で渡した。
+    RegionNotMovable {
+        region: String,
+    },
+    /// 共有で借りた領域（`uses r: &Region<..>`）を `&mut` で渡した。
+    RegionSharedAsMut {
+        name: String,
+    },
+    /// 同じ呼び出しで同じ領域を二度渡し、少なくとも一つが `&mut` か移動。
+    RegionPassedTwice {
+        region: String,
+    },
+
     // W0601
     RefinementNested {
         ty: String,
@@ -537,9 +592,11 @@ impl CheckMsg {
             BareMutInEnsures { .. } | BareMutInMacro { .. } | FinalInMacro | OldFinalArg => {
                 Code::E0004
             }
-            NotARegion { .. } | InvariantImplShape | ViewImplShape | EbyknTraitSpelling { .. } => {
-                Code::E0001
-            }
+            NotARegion { .. }
+            | NotARegionArg { .. }
+            | InvariantImplShape
+            | ViewImplShape
+            | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
             UsesNotParam { .. }
             | UsesType { .. }
@@ -562,6 +619,11 @@ impl CheckMsg {
             SelfErasedWithoutSelf => Code::E0515,
             AssignOwnsField { .. } => Code::E0516,
             PtrZeroSized { .. } => Code::E0517,
+            RegionArgCount { .. } | RegionArgMode { .. } => Code::E0518,
+            RegionMoved { .. }
+            | RegionNotMovable { .. }
+            | RegionSharedAsMut { .. }
+            | RegionPassedTwice { .. } => Code::E0519,
             RefinementNested { .. } => Code::W0601,
         }
     }
@@ -639,6 +701,12 @@ impl CheckMsg {
             ),
             (NotARegion { name, keyword }, Ja) => format!(
                 "構文エラー: `{name}` は領域ではないので、`{keyword} {name}[..]` とは書けません。領域は `owns` フィールド（`self@{name}`）か `Region<..>` 型の変数です"
+            ),
+            (NotARegionArg { name }, En) => format!(
+                "syntax error: `{name}` is not a region, so it cannot be passed after `uses`; a region is an `owns` field (`self@{name}`) or a variable of type `Region<..>`"
+            ),
+            (NotARegionArg { name }, Ja) => format!(
+                "構文エラー: `{name}` は領域ではないので、`uses` の後に書いて渡せません。領域は `owns` フィールド（`self@{name}`）か `Region<..>` 型の変数です"
             ),
             (InvariantImplShape, En) => {
                 "syntax error: `impl Invariant for T` must contain exactly one item, `spec fn invariant(&self) -> bool = ..;`".into()
@@ -882,6 +950,81 @@ impl CheckMsg {
             ),
             (MethodCallUses { method }, Ja) => format!(
                 "`{method}` は権限を `uses` / `gives` するので、メソッド `x.{method}(..)` の形では呼べません。パス（`Type::{method}(x, ..)`）か `self.{method}(..)` で呼びます"
+            ),
+
+            (RegionArgCount { callee, expected, found }, En) => {
+                let want = if expected.is_empty() {
+                    "no regions".to_string()
+                } else {
+                    format!("`uses {}`", expected.join(", "))
+                };
+                format!(
+                    "`{callee}` takes {want} (in the order of its `uses` clause), but this call passes {found}"
+                )
+            }
+            (RegionArgCount { callee, expected, found }, Ja) => {
+                let want = if expected.is_empty() {
+                    "領域を受け取りません".to_string()
+                } else {
+                    format!(
+                        "領域を `uses {}` の {} つ受け取ります（`uses` の宣言の順）",
+                        expected.join(", "),
+                        expected.len()
+                    )
+                };
+                format!("`{callee}` は{want}が、この呼び出しは {found} つ渡しています")
+            }
+            (
+                RegionArgMode {
+                    callee,
+                    param,
+                    expected,
+                    found,
+                },
+                En,
+            ) => format!(
+                "`{callee}` declares `uses {param}: {}`, so pass it as {} (this call passes it as {})",
+                pass_decl(*expected),
+                pass_en(*expected),
+                pass_en(*found)
+            ),
+            (
+                RegionArgMode {
+                    callee,
+                    param,
+                    expected,
+                    found,
+                },
+                Ja,
+            ) => format!(
+                "`{callee}` は `uses {param}: {}` と宣言しているので、{}で渡します（この呼び出しは{}で渡しています）",
+                pass_decl(*expected),
+                pass_ja(*expected),
+                pass_ja(*found)
+            ),
+            (RegionMoved { name }, En) => format!(
+                "the region `{name}` was moved into a call (`uses {name}`), so it cannot be used after that"
+            ),
+            (RegionMoved { name }, Ja) => format!(
+                "領域 `{name}` は呼び出しに移動した（`uses {name}`）ので、その後では使えません"
+            ),
+            (RegionNotMovable { region }, En) => format!(
+                "`{region}` is borrowed, not owned, so it cannot be moved into a call; pass it as `&mut {region}` or `&{region}`"
+            ),
+            (RegionNotMovable { region }, Ja) => format!(
+                "`{region}` は借りている領域で、持っていないので、呼び出しに移動できません。`&mut {region}` か `&{region}` で渡します"
+            ),
+            (RegionSharedAsMut { name }, En) => format!(
+                "`{name}` is borrowed as shared (`uses {name}: &Region<..>`), so it cannot be passed as `&mut {name}`"
+            ),
+            (RegionSharedAsMut { name }, Ja) => format!(
+                "`{name}` は共有で借りている領域（`uses {name}: &Region<..>`）なので、`&mut {name}` では渡せません"
+            ),
+            (RegionPassedTwice { region }, En) => format!(
+                "`{region}` is passed twice in this call while one of them is `&mut` or a move; a region can be lent mutably to only one parameter at a time"
+            ),
+            (RegionPassedTwice { region }, Ja) => format!(
+                "この呼び出しは `{region}` を二度渡していて、一方が `&mut` か移動です。領域を `&mut` で貸せるのは一度に一つの引数だけです"
             ),
 
             (SelfErasedWithoutSelf, En) => {

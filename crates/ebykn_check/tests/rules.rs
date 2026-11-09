@@ -175,13 +175,6 @@ fn unimplemented_features_fail_loudly() {
         "E0003",
         "traits with contracts",
     );
-    rejects(
-        &format!(
-            "{PRELUDE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> {{ }}\nfn f(p: Ptr<Node>) {{ g(p); }}"
-        ),
-        "E0003",
-        "named erased parameter",
-    );
     // 契約のない trait は Rust のまま通す。
     accepts("trait T { fn f(&self) -> u64; }\n");
 }

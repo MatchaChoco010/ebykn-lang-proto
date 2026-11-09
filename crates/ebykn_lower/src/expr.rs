@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use ebykn_check::facts::{RegionRef, SpanKey};
+use ebykn_check::facts::{ExtraArg, RegionRef, SpanKey};
 use ebykn_check::index::ErasedKind;
 use ebykn_syntax::ast::{
     self, AndOrKind, BinOp, BinderKind, Block, Expr, ExprKind, FieldPat, GenericArg, GenericArgs,
@@ -397,13 +397,14 @@ impl Cx<'_> {
                 let v = x.as_ref().map(|x| self.expr(x));
                 with_inserts(&ins, v, |v| self.ret(v))
             }
-            ExprKind::Call { func, args } => self.call(e, func, args),
+            ExprKind::Call { func, args, uses } => self.call(e, func, args, uses),
             ExprKind::MethodCall {
                 receiver,
                 method,
                 turbofish,
                 args,
-            } => self.method_call(e, receiver, method, turbofish.as_deref(), args),
+                uses,
+            } => self.method_call(e, receiver, method, turbofish.as_deref(), args, uses),
             ExprKind::Cast { expr, ty } => format!("{} as {}", self.expr(expr), self.ty(ty)),
             ExprKind::Closure(c) => self.closure(c),
             ExprKind::Field { base, member } => {
@@ -578,25 +579,70 @@ impl Cx<'_> {
         }
     }
 
-    fn extra_args(&self, span: ebykn_syntax::span::Span) -> Vec<String> {
-        let Some(extra) = self.facts.calls.get(&SpanKey::from(span)) else {
-            return Vec::new();
-        };
-        extra
+    /// 呼び出しの末尾に足す消去される引数（callee の `uses` の宣言順）。検査が並べなかった領域も、
+    /// 書いた順で最後に足す（黙って落とさない。受け取らない関数なら Verus が拒む）。
+    fn extra_args(&self, span: ebykn_syntax::span::Span, uses: &[ast::RegionArg]) -> Vec<String> {
+        let extra = self
+            .facts
+            .calls
+            .get(&SpanKey::from(span))
+            .cloned()
+            .unwrap_or_default();
+        let mut placed = vec![false; uses.len()];
+        let mut out: Vec<String> = extra
             .iter()
-            .map(|a| match a.mode {
-                PermMode::Move => format!("Tracked({})", perm_var(&a.var)),
-                PermMode::Mut => self.perm_mut(&a.var),
-                PermMode::Shared => self.perm_shared(&a.var),
+            .filter_map(|a| match a {
+                ExtraArg::Perm { var, mode } => Some(match mode {
+                    PermMode::Move => format!("Tracked({})", perm_var(var)),
+                    PermMode::Mut => self.perm_mut(var),
+                    PermMode::Shared => self.perm_shared(var),
+                }),
+                ExtraArg::Region(i) => {
+                    let u = uses.get(*i)?;
+                    placed[*i] = true;
+                    Some(self.region_arg(u))
+                }
             })
-            .collect()
+            .collect();
+        out.extend(
+            uses.iter()
+                .zip(&placed)
+                .filter(|(_, p)| !**p)
+                .map(|(u, _)| self.region_arg(u)),
+        );
+        out
     }
 
-    fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr]) -> String {
+    /// 呼び出しで渡す領域（#19 の既定 P1）：`&mut r` ⇒ `Tracked(&mut r)`（`r` が `uses` で受けた参照なら
+    /// `Tracked(&mut *r)`）、`&mut self@x` ⇒ `Tracked(self.x.borrow_mut())`、移動の `r` ⇒ `Tracked(r)`。
+    fn region_arg(&self, u: &ast::RegionArg) -> String {
+        let by_ref = self.facts.region_arg_refs.contains(&SpanKey::from(u.span));
+        let inner = match (&u.region, u.mode) {
+            (ast::Region::Var(v), PermMode::Move) => ident(v),
+            (ast::Region::Var(v), PermMode::Shared) if by_ref => format!("&*{}", ident(v)),
+            (ast::Region::Var(v), PermMode::Shared) => format!("&{}", ident(v)),
+            (ast::Region::Var(v), PermMode::Mut) if by_ref => format!("&mut *{}", ident(v)),
+            (ast::Region::Var(v), PermMode::Mut) => format!("&mut {}", ident(v)),
+            (ast::Region::SelfField { field, .. }, PermMode::Shared) => {
+                format!("self.{}.borrow()", ident(field))
+            }
+            (ast::Region::SelfField { field, .. }, PermMode::Mut) => {
+                format!("self.{}.borrow_mut()", ident(field))
+            }
+            // 検査が E0519 で止める。書き下すなら `Tracked` の欄をそのまま渡す（型が合わず Verus が拒む）。
+            (ast::Region::SelfField { field, .. }, PermMode::Move) => {
+                return format!("self.{}", ident(field));
+            }
+        };
+        format!("Tracked({inner})")
+    }
+
+    fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr], uses: &[ast::RegionArg]) -> String {
         if let ExprKind::Path { qself: None, path } = &func.kind
             && let Some(f) = path.as_ident()
             && (f.is("old") || f.is("final"))
             && let [arg] = args
+            && uses.is_empty()
         {
             // `old(*p)` / `final(*p)` は `old(p@).value()` / `final(p@).value()`。
             if let ExprKind::Unary {
@@ -621,7 +667,7 @@ impl Cx<'_> {
         }
         let f = self.expr(func);
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
-        a.extend(self.extra_args(e.span));
+        a.extend(self.extra_args(e.span, uses));
         format!("{f}({})", a.join(", "))
     }
 
@@ -632,6 +678,7 @@ impl Cx<'_> {
         method: &ast::Ident,
         turbofish: Option<&[GenericArg]>,
         args: &[Expr],
+        uses: &[ast::RegionArg],
     ) -> String {
         let key = SpanKey::from(e.span);
         if let Some(x) = self.facts.frees.get(&key).cloned() {
@@ -645,7 +692,7 @@ impl Cx<'_> {
             }
         }
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
-        a.extend(self.extra_args(e.span));
+        a.extend(self.extra_args(e.span, uses));
         format!(
             "{recv}.{}{}({})",
             ident(method),

@@ -4,6 +4,8 @@
 //! 環境 Γ（名前 → 状態）と領域変数の集合 R を持って文を順にたどる。読み方で迷った点は
 //! `OPEN.md` に書いた（分岐の比べ方、`borrow` の借用の扱い、`gives` の戻し方など）。
 
+mod calls;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use ebykn_syntax::ast::{
@@ -14,10 +16,10 @@ use ebykn_syntax::diag::{CheckMsg, LoopPoint, Message, Mismatch, Op, PermState, 
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
-use crate::facts::{ExtraArg, Facts, RegionRef, SpanKey};
+use crate::facts::{Facts, RegionRef, SpanKey};
 use crate::index::{
-    ErasedKind, FnInfo, Index, ItemPath, PreludeFn, Resolved, StructInfo, UseInfo, is_region_type,
-    pat_ident,
+    ErasedKind, FnInfo, Index, ItemPath, PreludeFn, Resolved, StructInfo, is_region_type,
+    pat_ident, region_mode,
 };
 
 /// Γ の一つの項目。
@@ -50,6 +52,8 @@ fn diff(a: &Env, b: &Env) -> Vec<Mismatch> {
 /// [`Walker::save_scope`] で取っておくスコープ。
 struct Scope {
     regions: BTreeSet<String>,
+    region_modes: BTreeMap<String, PermMode>,
+    moved_regions: BTreeSet<String>,
     var_types: BTreeMap<String, ast::Type>,
     locals: BTreeSet<String>,
     known: BTreeSet<String>,
@@ -81,6 +85,10 @@ pub struct Walker<'a> {
     facts: &'a mut Facts,
     env: Env,
     regions: BTreeSet<String>,
+    /// R の名前の持ち方（`uses r: &Region<..>` は共有、`&mut Region<..>` は可変、ほかは持っている）。
+    region_modes: BTreeMap<String, PermMode>,
+    /// 呼び出しに移動した領域変数（[`calls`]。R からは外してある）。
+    moved_regions: BTreeSet<String>,
     /// 一度でも権限を持った名前（解放後の `X.free()` を E0504 にする）。
     known: BTreeSet<String>,
     /// スコープにあるローカルの束縛（引数とパターン）。表の名前の値としての参照を、ローカル変数と
@@ -112,6 +120,8 @@ impl<'a> Walker<'a> {
             facts,
             env: Env::new(),
             regions: BTreeSet::new(),
+            region_modes: BTreeMap::new(),
+            moved_regions: BTreeSet::new(),
             known: BTreeSet::new(),
             locals: BTreeSet::new(),
             var_types: BTreeMap::new(),
@@ -175,8 +185,10 @@ impl<'a> Walker<'a> {
                     );
                     self.known.insert(ident.name.clone());
                 }
-                ast::UsesItem::Named { ident, .. } => {
+                ast::UsesItem::Named { ident, ty, .. } => {
                     self.regions.insert(ident.name.clone());
+                    self.region_modes
+                        .insert(ident.name.clone(), region_mode(ty));
                 }
             }
         }
@@ -251,6 +263,7 @@ impl<'a> Walker<'a> {
                 | "E0510"
                 | "E0511"
                 | "E0512"
+                | "E0519"
         );
         if linear && !self.cx.linear {
             return;
@@ -436,6 +449,8 @@ impl<'a> Walker<'a> {
                 }
                 if self.regions.contains(&v.name) {
                     Some(RegionRef::Var(v.name.clone()))
+                } else if self.region_moved(v) {
+                    None
                 } else {
                     self.push(
                         v.span,
@@ -484,9 +499,18 @@ impl<'a> Walker<'a> {
     }
 
     /// スコープの状態（領域変数、型を書いた変数、ローカルの束縛、`known`）を取っておく。
+    /// 持っている領域変数を R に足す（`let r: Region<..>`、パターンの `@r`）。
+    fn add_region(&mut self, name: &str) {
+        self.regions.insert(name.to_string());
+        self.region_modes.insert(name.to_string(), PermMode::Move);
+        self.moved_regions.remove(name);
+    }
+
     fn save_scope(&self) -> Scope {
         Scope {
             regions: self.regions.clone(),
+            region_modes: self.region_modes.clone(),
+            moved_regions: self.moved_regions.clone(),
             var_types: self.var_types.clone(),
             locals: self.locals.clone(),
             known: self.known.clone(),
@@ -496,6 +520,8 @@ impl<'a> Walker<'a> {
     /// スコープを戻す。`known` は減らさない（スコープの中で権限を持った名前も残す）。
     fn restore_scope(&mut self, s: Scope) {
         self.regions = s.regions;
+        self.region_modes = s.region_modes;
+        self.moved_regions = s.moved_regions;
         self.var_types = s.var_types;
         self.locals = s.locals;
         self.known.extend(s.known);
@@ -746,7 +772,7 @@ impl<'a> Walker<'a> {
         if let (Some(x), Some(ty)) = (pat_ident(&l.pat), &l.ty) {
             self.var_types.insert(x.name.clone(), ty.clone());
             if is_region_type(ty) {
-                self.regions.insert(x.name.clone());
+                self.add_region(&x.name);
             }
         }
         diverges
@@ -816,6 +842,8 @@ impl<'a> Walker<'a> {
                 }
                 self.known.remove(&ident.name);
                 self.regions.remove(&ident.name);
+                self.region_modes.remove(&ident.name);
+                self.moved_regions.remove(&ident.name);
                 self.var_types.remove(&ident.name);
                 if let Some(s) = sub {
                     self.bind(s);
@@ -857,7 +885,7 @@ impl<'a> Walker<'a> {
                                     self.facts.erased.insert(ident.span.into(), k);
                                     self.bind_ident(ident);
                                     if k == ErasedKind::Owns {
-                                        self.regions.insert(ident.name.clone());
+                                        self.add_region(&ident.name);
                                     }
                                 }
                                 None => self.push(
@@ -1024,13 +1052,14 @@ impl<'a> Walker<'a> {
                 self.exit(e.span);
                 d
             }
-            ExprKind::Call { func, args } => self.call(e, func, args),
+            ExprKind::Call { func, args, uses } => self.call(e, func, args, uses),
             ExprKind::MethodCall {
                 receiver,
                 method,
                 args,
+                uses,
                 ..
-            } => self.method_call(e, receiver, method, args),
+            } => self.method_call(e, receiver, method, args, uses),
             ExprKind::Closure(c) => {
                 self.closure(c);
                 false
@@ -1255,15 +1284,17 @@ impl<'a> Walker<'a> {
                 if self.closure_use(&i.name, base.span) {
                     return None;
                 }
-                self.regions
-                    .contains(&i.name)
-                    .then(|| RegionRef::Var(i.name.clone()))
+                if self.regions.contains(&i.name) {
+                    return Some(RegionRef::Var(i.name.clone()));
+                }
+                self.region_moved(i);
+                None
             }
             _ => None,
         }
     }
 
-    fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr]) -> bool {
+    fn call(&mut self, e: &Expr, func: &Expr, args: &[Expr], uses: &[ast::RegionArg]) -> bool {
         let mut d = false;
         let resolved = match &func.kind {
             ExprKind::Path { qself: None, path } => {
@@ -1282,15 +1313,19 @@ impl<'a> Walker<'a> {
             }
         };
         d |= self.exprs(args);
-        if let Some(info) = resolved.as_ref().and_then(|r| self.cx.index.callee(r)) {
-            let info = info.clone();
-            // `Type::method(recv, ..)` の形では、最初の引数が受け手。
-            let args = if info.has_receiver {
-                args.get(1..).unwrap_or_default()
-            } else {
-                args
-            };
-            self.apply_uses(e.span, &info, args);
+        match resolved.as_ref().and_then(|r| self.cx.index.callee(r)) {
+            Some(info) => {
+                let info = info.clone();
+                // `Type::method(recv, ..)` の形では、最初の引数が受け手。
+                let args = if info.has_receiver {
+                    args.get(1..).unwrap_or_default()
+                } else {
+                    args
+                };
+                self.apply_uses(e.span, Some(&info), args, uses);
+            }
+            None if !uses.is_empty() => self.apply_uses(e.span, None, args, uses),
+            None => {}
         }
         self.check_discarded(e);
         d
@@ -1302,8 +1337,15 @@ impl<'a> Walker<'a> {
         receiver: &Expr,
         method: &ast::Ident,
         args: &[Expr],
+        uses: &[ast::RegionArg],
     ) -> bool {
         let mut d = self.exprs(args);
+        // 呼ばれる側を引けない形でも、書いた領域は書き下しに残す（受け取らなければ Verus が拒む）。
+        let unresolved = |w: &mut Self| {
+            if !uses.is_empty() {
+                w.apply_uses(e.span, None, args, uses);
+            }
+        };
         if is_self(receiver) {
             // `self.f(..)`（`impl T` の中）は `T` の impl で引く。
             if let Some(info) = self
@@ -1313,7 +1355,7 @@ impl<'a> Walker<'a> {
                 .and_then(|ms| ms.get(&method.name))
             {
                 let info = info.clone();
-                self.apply_uses(e.span, &info, args);
+                self.apply_uses(e.span, Some(&info), args, uses);
                 self.check_discarded(e);
                 return d;
             }
@@ -1324,7 +1366,7 @@ impl<'a> Walker<'a> {
                     .closure_outer
                     .as_ref()
                     .is_some_and(|(env, _)| env.contains_key(&x.name));
-            if method.is("free") && args.is_empty() && held {
+            if method.is("free") && args.is_empty() && uses.is_empty() && held {
                 if !self.logic {
                     self.consume(&x.name, Op::Free, e.span);
                     self.facts.frees.insert(e.span.into(), x.name.clone());
@@ -1333,11 +1375,13 @@ impl<'a> Walker<'a> {
             }
             if self.env.contains_key(&x.name) {
                 // `x ∈ Γ` なら prelude の `Ptr` / `Cell` のメソッド（仕様 §6.5）。
+                unresolved(self);
                 return d;
             }
         } else {
             d |= self.expr(receiver);
         }
+        unresolved(self);
         if self.cx.index.perm_method_names.contains(&method.name) {
             self.push(
                 method.span,
@@ -1347,49 +1391,6 @@ impl<'a> Walker<'a> {
             );
         }
         d
-    }
-
-    /// 呼び出しの引数に `uses` を当てる（仕様 §6.2 の「消費」）。
-    fn apply_uses(&mut self, span: Span, info: &FnInfo, args: &[Expr]) {
-        let mut extra = Vec::new();
-        for u in &info.uses {
-            match u {
-                UseInfo::Perm {
-                    name, param, mode, ..
-                } => {
-                    let Some(x) = args.get(*param).and_then(ident_of) else {
-                        let at = args.get(*param).map_or(span, |a| a.span);
-                        self.push(
-                            at,
-                            CheckMsg::UsesArgNotVar {
-                                param: name.clone(),
-                            },
-                        );
-                        continue;
-                    };
-                    if !self.logic {
-                        match mode {
-                            PermMode::Move => self.consume(&x.name, Op::Move, x.span),
-                            PermMode::Mut => self.lend(&x.name, true, x.span),
-                            PermMode::Shared => self.lend(&x.name, false, x.span),
-                        }
-                    }
-                    extra.push(ExtraArg {
-                        var: x.name.clone(),
-                        mode: *mode,
-                    });
-                }
-                UseInfo::Named { .. } => {
-                    self.diags.push(
-                        span,
-                        Message::Check(CheckMsg::Unimplemented(Unimpl::NamedUsesCall)),
-                    );
-                }
-            }
-        }
-        if !extra.is_empty() {
-            self.facts.calls.insert(span.into(), extra);
-        }
     }
 
     fn closure(&mut self, c: &ast::Closure) {
@@ -1790,6 +1791,8 @@ impl<'a> Walker<'a> {
                         || (id(next).as_deref() == Some("mut") && region_index(i + 2))
                 }
                 "leak" => id(next).is_some() && pc(tts.get(i + 2), '@'),
+                // 呼び出しで領域を渡す `f(x, uses &mut r)`（#19 の既定 P1。`uses` は予約語）。
+                "uses" => true,
                 _ => {
                     // `*X`（前の `*` の前が式でなければ参照外し。`2 * x` は掛け算）。
                     let deref = pc(prev, '*')
@@ -1883,7 +1886,7 @@ fn is_compound_assign(op: ast::BinOp) -> bool {
 /// `old(e)` / `final(e)` なら（`old` か、`e`）。
 fn old_or_final(e: &Expr) -> Option<(bool, &Expr)> {
     match &e.kind {
-        ExprKind::Call { func, args } if args.len() == 1 => match &func.kind {
+        ExprKind::Call { func, args, .. } if args.len() == 1 => match &func.kind {
             ExprKind::Path { qself: None, path } => {
                 let f = path.as_ident()?;
                 (f.is("old") || f.is("final")).then(|| (f.is("old"), &args[0]))
