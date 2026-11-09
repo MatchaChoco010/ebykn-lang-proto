@@ -64,7 +64,7 @@ fn b1_invariant_impls_that_cannot_be_tied_to_a_crate_type_are_rejected() {
     );
     // クレートの外の型（性質ファイル、M5）。
     rejects(
-        &format!("impl Invariant for u64 {{ spec fn invariant(&self) -> bool = true; }}\n"),
+        "impl Invariant for u64 { spec fn invariant(&self) -> bool = true; }\n",
         "E0003",
         "outside this crate",
     );
