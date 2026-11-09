@@ -551,7 +551,11 @@ impl Cx<'_> {
     }
 
     /// 代入（`=`、`+=` など）。左辺が権限付きの `*X` なら `write` / `borrow_mut` にする。
+    ///
+    /// 文の属性（`#[allow(..)]` など）は、構文解析器が左辺に付ける。`write` / `borrow_mut` の形でも落とさずに
+    /// 先頭に書く（PR #59 のレビュー。cfg は検査が E0003 にする）。
     fn assign(&mut self, lhs: &Expr, op: &str, rhs: String) -> String {
+        let pre: String = lhs.attrs.iter().map(|a| crate::attr(a) + " ").collect();
         if let ExprKind::Unary {
             op: UnOp::Deref, ..
         } = &lhs.kind
@@ -559,13 +563,14 @@ impl Cx<'_> {
             && op == "="
             && !self.logic
         {
-            return format!("{x}.write({}, {rhs})", self.perm_mut(&x));
+            return format!("{pre}{x}.write({}, {rhs})", self.perm_mut(&x));
         }
-        let l = if !self.logic && ebykn_check::body::deref_root(lhs).is_some() {
-            self.place(lhs)
-        } else {
-            self.expr(lhs)
-        };
+        if !self.logic && ebykn_check::body::deref_root(lhs).is_some() {
+            let l = self.place(lhs);
+            return format!("{pre}{l} {op} {rhs}");
+        }
+        // `expr` は式の属性を自分で書く。
+        let l = self.expr(lhs);
         format!("{l} {op} {rhs}")
     }
 

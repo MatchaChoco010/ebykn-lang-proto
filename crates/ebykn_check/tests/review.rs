@@ -593,39 +593,81 @@ fn first_last_in_logical_macro_tokens_are_accepted() {
     accepts("pub fn f(v: Vec<u64>) -> bool { matches!(v.first(), Some(_)) }");
 }
 
-// ---- PR #26 の再レビュー：関数の中の条件付きコンパイル（#27 の既定 B） ----
+// ---- PR #26 の再レビュー：関数の中の条件付きコンパイル（#27） ----
+//
+// #27 の作者の方針で、一律の禁止を拒否リストに組み替えた。拒否リストの総当たりは `tests/denylist.rs`。
+// ここでは、PR #26 のレビューで見つかった入力が、拒否リストの名前なら拒否され、ほかの cfg なら通る
+// ことを確かめる。
 
 #[test]
-fn cfg_inside_functions_is_e0003() {
+fn cfg_inside_functions_follows_the_denylist() {
+    let denied = "because its condition uses `verus_keep_ghost`";
     for src in [
         "pub fn f(x: u32) -> (r: u32) ensures r == 0, { if cfg!(verus_keep_ghost) { 0 } else { 1 } }",
-        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { #[cfg(not(verus_keep_ghost))] return 1; 0 }",
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { let mut y = 0u32; #[cfg(not(verus_keep_ghost))] { y = 1; } y }",
+        "pub fn f() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }",
+        // raw の綴りも同じ名前（#122）。
+        "pub fn g(x: u32) -> (r: u32) ensures r == 1, { let x: u32 = 0; #[r#cfg(verus_keep_ghost)] let x: u32 = 1; x }",
+    ] {
+        rejects(src, "E0001", denied);
+    }
+    // 拒否リストにない cfg は、関数の中のどこでも通る（検証と同じ設定でビルドすれば食い違わない）。
+    for src in [
         "pub fn h() -> u32 { #[cfg_attr(test, cfg(test))] let y = 1; y }",
         "pub fn k(x: u32) -> u32 { match x { #[cfg(test)] 0 => 1, _ => 2 } }",
         "pub struct P { a: u32 }\npub fn m() -> P { P { #[cfg(test)] a: 1 } }",
         "pub fn n(#[cfg(test)] x: u32) {}",
         "pub fn o() { #[cfg(test)] fn inner() {} }",
         // raw の綴りも同じ名前（rustc は `r#cfg` を `cfg` と同じに読む。#122）。
-        "pub fn g(x: u32) -> (r: u32) ensures r == 1, { let x: u32 = 0; #[r#cfg(verus_keep_ghost)] let x: u32 = 1; x }",
         "pub fn h() -> u32 { #[cfg_attr(all(), r#cfg(test))] let y = 1; y }",
         "pub fn h() -> u32 { #[r#cfg_attr(all(), cfg(test))] let y = 1; y }",
         "pub fn k(x: u32) -> u32 { match x { #[r#cfg(test)] 0 => 1, _ => 2 } }",
         "pub fn n(#[r#cfg(test)] x: u32) {}",
-    ] {
-        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
-    }
-    // 本体の中で定義した構造体・列挙の欄と列挙子（PR #26 の 3 回目の確認）。
-    for src in [
         "pub fn p() { struct T { #[cfg(test)] a: u32, b: u32 } }",
         "pub fn q() { struct T(#[cfg(test)] u32, u32); }",
         "pub fn s() { enum E { #[cfg(test)] A, B } }",
         "pub fn t() { enum E { A { #[cfg(test)] a: u32 }, B } }",
+        "pub fn u() -> bool { cfg!(test) }",
+        "#[cfg(test)]\npub fn f() {}",
+        "pub fn f() { #[cfg_attr(test, inline)] let y = 1; }",
+        // std のマクロの引数の中の cfg と lint の属性（PR #26 の 3 回目の確認）も、拒否リストの名前でなければ通る。
+        "pub fn h() { assert!({ #[cfg(test)] let y = 1; true }); }",
+        "pub fn k2() { assert!({ #[cfg_attr(test, deny(unused))] let y = 1; true }); }",
+        "pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }",
     ] {
-        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+        accepts(src);
     }
-    // 項目に付ける #[cfg] と、cfg を含まない cfg_attr は今のまま。
-    accepts("#[cfg(test)]\npub fn f() {}");
-    accepts("pub fn f() { #[cfg_attr(test, inline)] let y = 1; }");
+    // マクロの引数はトークンのまま持つので、derive・属性マクロ（PR #57 は AST で探す）を見られない。cfg・
+    // `cfg_attr`・lint のほかの属性は拒否する（PR #59 のレビューの S3）。
+    for src in [
+        "pub fn h() { assert!({ #[inline] let y = 1; y == 1 }); }",
+        "pub fn z(x: u32) -> (r: u32) ensures r == 0, { let mut x = x; assert!({ #[ext_macros::zero] fn one() -> u32 { 1 } x = one(); true }); x }",
+        "pub fn d() { assert!({ #[derive(Clone)] struct T; true }); }",
+        "pub fn c() { assert!({ #[cfg_attr(test, ext_macros::zero)] fn one() {} true }); }",
+        "pub fn l() { assert!({ #[clippy::allow(x)] let y = 1; true }); }",
+    ] {
+        rejects(
+            src,
+            "E0003",
+            "attributes other than `cfg`, `cfg_attr` and lint attributes",
+        );
+    }
+    // 属性の付いた `return` は、拒否リスト（`verus_keep_ghost`）とマクロの中の `return`（#21 の既定 D）の
+    // 両方で拒否する。
+    let (_, lines) = run(
+        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
+    );
+    assert_eq!(lines.len(), 2, "{}", lines.join("\n"));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("because its condition uses `verus_keep_ghost`"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("inside the arguments of a macro"))
+    );
 }
 
 /// #95：クロージャの引数とパターンの欄の `#[cfg]`、raw の `#[r#cfg]`、ジェネリクスの引数の `#[cfg]`。
@@ -638,11 +680,9 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
         "pub fn g() -> u32 { let c = |#[cfg_attr(all(), r#cfg(any()))] a: u32, b: u32| b; c(1) }",
         "pub struct S { pub x: u32 }\npub fn p4(s: S) -> (r: u32) ensures s.x != 0 ==> r == 2, { match s { S { #[r#cfg(any())] x: 0, .. } => 1, _ => 2 } }",
         "pub struct S { pub x: u32 }\npub fn p(s: S) -> u32 { let S { #[cfg_attr(all(), r#cfg(any()))] x } = s; x }",
-        "pub fn n(#[r#cfg(test)] x: u32) {}",
-        "pub fn o() { #[r#cfg(test)] let y = 1; }",
         "pub struct B { } owns { items: Region<Ptr<u64>> }\npub fn k(b: B) -> B { let B { #[cfg(test)] @items } = b; B { @items: items } }",
     ] {
-        rejects(src, "E0003", "`cfg!` and `#[cfg(..)]` inside a function");
+        rejects(src, "E0003", "`#[cfg(..)]` on a pattern");
     }
     // `..` と `@..` の前の属性は、rustc と同じく E0001（PR #129 のレビュー。書き下しは `..` に属性を
     // 付けられないので、cfg でない属性も落ちていた）。
@@ -689,6 +729,21 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
     // rustc が verify と素のビルドで同じに評価するので通す（現行仕様 §5「マクロ」）。
     accepts("pub union U<#[cfg(any())] T> { a: u32 }");
     accepts("pub trait Tr { type A<#[cfg(any())] T>; }");
+    // fn の引数と `let` の cfg は、拒否リストの名前でなければ通す（#27。書き下しに残す）。
+    accepts("pub fn n(#[r#cfg(test)] x: u32) {}");
+    accepts("pub fn o() { #[r#cfg(test)] let y = 1; }");
+    // 拒否リストの名前の cfg は、拒否リストの E0001 だけを出す（同じ属性に E0003 を重ねない）。
+    for src in [
+        "pub fn g() -> u32 { let c = |#[cfg(verus_keep_ghost)] a: u32, b: u32| b; c(1) }",
+        "pub struct S { pub x: u32 }\npub fn p(s: S) -> u32 { match s { S { #[cfg(not(verus_keep_ghost))] x: 0, .. } => 1, _ => 2 } }",
+        "pub fn f<#[cfg(verus_keep_ghost)] T>(a: u32) -> u32 { a }",
+    ] {
+        rejects(
+            src,
+            "E0001",
+            "because its condition uses `verus_keep_ghost`",
+        );
+    }
     // cfg でない属性は通す（書き下しに残す。`crates/ebykn_lower/tests/rules.rs`）。
     accepts("pub fn f<#[allow(unused)] T>(a: u32) -> u32 { a }");
     accepts("pub fn g() -> u32 { let c = |#[allow(unused)] a: u32| a; c(1) }");
@@ -697,66 +752,30 @@ fn cfg_on_closure_params_patterns_and_generics_is_e0003() {
     );
 }
 
-/// std のマクロの引数はトークンのまま持つので、その中の属性はどれも E0003（PR #26 の 3 回目の確認、#28）。
-#[test]
-fn attributes_inside_std_macro_arguments_are_e0003() {
-    for src in [
-        "pub fn f() -> (r: usize) ensures r == 1, { let v: Vec<u32> = vec![#[cfg(not(verus_keep_ghost))] 1u32, 0]; v.len() }",
-        "pub fn h() { assert!({ #[inline] let y = 1; y == 1 }); }",
-        "pub fn k() { assert!({ #![allow(unused)] true }); }",
-    ] {
-        rejects(
-            src,
-            "E0003",
-            "attributes (`#[..]`) inside the arguments of this macro",
-        );
-    }
-    // 属性の付いた `return` は、属性とマクロの中の `return`（#21 の既定 D）の両方で E0003。
-    let (_, lines) = run(
-        "pub fn g(x: u32) -> (r: u32) ensures r == 0, { assert!({ #[cfg(not(verus_keep_ghost))] return 1; true }); 0 }",
-    );
-    assert_eq!(lines.len(), 2, "{}", lines.join("\n"));
-    assert!(lines[0].contains("attributes (`#[..]`) inside the arguments of this macro"));
-    assert!(lines[1].contains("inside the arguments of a macro"));
-    // 属性でない `#` は今のまま（文字列の中や、`[` の続かない `#`）。
-    accepts("pub fn f() { assert!(\"#[cfg(test)]\".len() == 12); }");
-}
-
 /// コンパイル時の環境変数と `file!` は、Verus の実行と素のビルドで値が違いうるので、`unchecked fn` の
-/// 本体の外ではどこに書いても E0003（PR #26 の 4 回目の確認、#27 の既定）。
+/// 本体の外ではどこに書いても拒否する（PR #26 の 4 回目の確認、#27 の拒否リスト）。
 #[test]
-fn env_and_file_macros_outside_unchecked_fn_are_e0003() {
-    let env = "`env!` / `option_env!` outside the body of an `unchecked fn`";
+fn env_and_file_macros_outside_unchecked_fn_are_denied() {
     for src in [
         "pub fn h8() -> (r: u32) ensures r == 0, { if option_env!(\"CARGO_TERM_COLOR\").is_some() { 0 } else { 1 } }",
         "pub const C: Option<&str> = option_env!(\"X\");",
-        "pub static D: &str = std::env!(\"CARGO_PKG_NAME\");",
-        "#[doc = env!(\"CARGO_PKG_NAME\")]\npub fn a() {}",
-        "pub fn b() -> usize { let v = vec![core::option_env!(\"X\")]; v.len() }",
-        "pub fn c() -> usize { concat!(env!(\"X\")).len() }",
-        "pub struct S { a: u32 }\nimpl S { pub fn m(&self) -> bool { option_env!(\"X\").is_some() } }",
         "unchecked fn u() { fn inner() -> bool { option_env!(\"X\").is_some() } }",
     ] {
-        rejects(src, "E0003", env);
+        rejects(src, "E0001", "`option_env!` cannot be written in `.eyk`");
     }
     rejects(
-        "pub fn n() -> usize { file!().len() }",
-        "E0003",
-        "`file!` outside the body of an `unchecked fn`",
+        "pub static D: &str = std::env!(\"CARGO_PKG_NAME\");",
+        "E0001",
+        "`env!` cannot be written in `.eyk`",
     );
     rejects(
         "pub fn n() -> usize { core::file!().len() }",
-        "E0003",
-        "`file!` outside the body of an `unchecked fn`",
+        "E0001",
+        "`file!` cannot be written in `.eyk`",
     );
     // `unchecked fn` の本体では許す（証明なしの前提として verify が一覧に出す）。
     accepts("unchecked fn u() -> (r: bool) { option_env!(\"X\").is_some() }");
     accepts("unchecked fn u() -> usize { let v = vec![env!(\"X\")]; v.len() + file!().len() }");
-    // `env` という名前の変数と `!=` は今のまま。
-    accepts("pub fn e() -> bool { let env = 1u32; env != 2 }");
-    // 素のビルドと Verus で同じ値になるもの（生成コードの位置とモジュールのパス）は今のまま。
-    accepts("pub fn l() -> u32 { line!() + column!() }");
-    accepts("pub fn p() -> usize { module_path!().len() }");
 }
 
 /// `put t@nodes[..]` の診断（#84、`Message::ErasedRegion`）が勧める 3 つの書き方は、どれも検査を通る

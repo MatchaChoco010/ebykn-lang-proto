@@ -1,0 +1,15 @@
+verified cfg_allowed::side
+verified cfg_allowed::f
+verified cfg_allowed::g
+verified cfg_allowed::g2
+verified cfg_allowed::g3
+verified cfg_allowed::g4
+verified cfg_allowed::h
+verified cfg_allowed::p
+verified cfg_allowed::m
+verified cfg_allowed::n
+verified cfg_allowed::k
+verified cfg_allowed::u
+verified cfg_allowed::t64
+assumed cfg feature = "never", my_flag, target_pointer_width = "64", test
+results 13 verified, 0 errors
