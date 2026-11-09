@@ -269,29 +269,96 @@ fn proofs_cannot_call_region_proof_fns_directly() {
     }
 }
 
-/// prelude の公開の関数を一つずつ証明の中で呼び、spec の関数は許すリストにあり、ほかはすべて E0520 に
-/// なることを確かめる（prelude に関数を足しても、黙って穴が開かないように。B4 の再発防止）。
+/// 受け手の形を変える、マクロや別名を通す形でも、証明の中で領域を変えられない（#149 の 4 回目の再レビューの
+/// B5）。資源を含む式は、許した 2 つの形のほかは E0520。
+#[test]
+fn proofs_cannot_change_regions_through_other_spellings() {
+    let src = format!("use ebykn_prelude::Region as R;\npub type RR = Region<Ptr<Node>>;\n{RES}");
+    for body in [
+        "proof { (*a).remove(p); }",
+        "proof { (*r).insert((*a).remove(p)); }",
+        "proof { (&mut *r).remove(p); }",
+        "proof { { &mut *a }.remove(p); }",
+        "proof { if true { &mut *r } else { &mut *r }.remove(p); }",
+        "proof { (*r).insert({ p@ }); }",
+        "proof { matches!(r.insert(a.remove(p)), _); }",
+        "proof { std::matches!(r.insert(a.remove(p)), _); }",
+        "proof { *r = R::empty(); }",
+        "proof { *r = RR::empty(); }",
+        "proof { *r = Region::empty(); }",
+        "proof { R::remove(r, p); }",
+    ] {
+        let proof = src.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        assert_ne!(proof, src);
+        let d = run(&src, &proof);
+        assert!(d.iter().any(|l| l.contains("E0520")), "{body}: {d:?}");
+    }
+    for body in [
+        "proof { assert (*r).contains(p) || !(*r).contains(p); }",
+        "proof { assert r.dom().len() == r.dom().len(); }",
+        "proof { assert old(r).contains(p) == old(r).contains(p); }",
+        "proof { assert r[p].v == r[p].v; }",
+        "proof { assert forall q in r, r.contains(q) by { }; }",
+    ] {
+        let proof = src.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        let d = run(&src, &proof);
+        assert!(d.is_empty(), "{body}: {d:?}");
+    }
+}
+
+/// prelude の関数を、ソースのすべてのファイル（トレイトとトレイトの impl のメソッドを含む）から集め、一つずつ
+/// 証明の中で呼んで確かめる（B4・B5 の再発防止）。資源の型の spec の関数は許すリストにあり、許すリストの名前は
+/// どの資源の型でも spec でない関数の名前でない。spec でない関数は、包んだ形でもすべて E0520。prelude に
+/// 関数・型・ファイルを足すと、分類を求めてこのテストが落ちる。
 #[test]
 fn every_prelude_fn_is_classified() {
     let spec_list = ebykn_check::body::PRELUDE_SPEC_FNS;
-    let mut specs = Vec::new();
-    let mut others = Vec::new();
-    for (file, text) in [
-        (
-            "region.rs",
-            include_str!("../../ebykn_prelude/src/region.rs"),
-        ),
-        ("ptr.rs", include_str!("../../ebykn_prelude/src/ptr.rs")),
-        ("cell.rs", include_str!("../../ebykn_prelude/src/cell.rs")),
-    ] {
-        let mut ty = String::new();
+    // 資源を受け手にする型と、その受け手の書き方。
+    let resource_types = [
+        ("Region", "r"),
+        ("PointsTo", "p@"),
+        ("CellPointsTo", "c@"),
+        ("Ptr", "p"),
+        ("Cell", "c"),
+        ("Loc", "p"),
+    ];
+    // 資源を受け手にしない型（`SeqExt` は `Seq` の拡張、`NonZst` は中だけで使う型）。
+    let other_types = ["SeqExt", "Seq", "NonZst"];
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../ebykn_prelude/src");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{dir} を読めません: {e}"))
+        .map(|e| e.expect("ディレクトリの項目").path())
+        .collect();
+    files.sort();
+    assert!(files.len() >= 5, "{files:?}");
+    let mut fns: Vec<(String, String, bool)> = Vec::new(); // (型, 名前, spec か)
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap_or_else(|e| panic!("{f:?} を読めません: {e}"));
+        let file = f.file_name().unwrap().to_string_lossy().to_string();
+        let known = ["lib.rs", "region.rs", "ptr.rs", "cell.rs", "seq.rs"];
+        assert!(
+            known.contains(&file.as_str()),
+            "prelude の新しいファイル `{file}` を分類する"
+        );
+        // (見出しの字下げ、型、トレイトかトレイトの impl か)
+        let mut head: Option<(usize, String, bool)> = None;
         for line in text.lines() {
+            let indent = line.len() - line.trim_start().len();
             let t = line.trim_start();
-            if let Some(rest) = t.strip_prefix("impl") {
-                // `impl<L: Loc> Region<L> {` の型の名前：型の引数の `<..>` を飛ばし、トレイトの impl なら
-                // `for` の後を見る。
+            if let Some((h, _, _)) = &head
+                && indent <= *h
+                && !t.is_empty()
+                && !t.starts_with('}')
+                && !t.starts_with("//")
+            {
+                head = None;
+            }
+            let decl = t.trim_start_matches("pub ").trim_start_matches("unsafe ");
+            if decl.starts_with("impl") || decl.starts_with("trait ") {
+                let is_trait = decl.starts_with("trait ");
+                let rest = decl.trim_start_matches("impl").trim_start_matches("trait ");
                 let mut depth = 0;
-                let mut k = 0;
+                let mut k = rest.len();
                 for (n, ch) in rest.char_indices() {
                     match ch {
                         '<' => depth += 1,
@@ -303,56 +370,67 @@ fn every_prelude_fn_is_classified() {
                         _ => {}
                     }
                 }
-                let head = &rest[k..];
-                let head = head.rsplit(" for ").next().unwrap_or(head);
-                ty = head
+                let h = &rest[k..];
+                let for_impl = h.contains(" for ");
+                let h = h.rsplit(" for ").next().unwrap_or(h);
+                let ty: String = h
                     .trim_start()
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
+                head = Some((indent, ty, is_trait || for_impl));
+                continue;
             }
-            if t.starts_with("pub ") && t.contains(" fn ") {
-                let name = t
-                    .split(" fn ")
-                    .nth(1)
-                    .unwrap()
-                    .split(['(', '<'])
-                    .next()
-                    .unwrap();
-                if t.contains("spec fn") {
-                    specs.push(name.to_string());
-                } else {
-                    others.push((file, ty.clone(), name.to_string()));
+            let Some(pos) = t.find("fn ") else { continue };
+            if !(pos == 0 || t[..pos].ends_with(' ')) || t.starts_with("//") {
+                continue;
+            }
+            let name: String = t[pos + 3..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let spec = t[..pos].contains("spec");
+            match &head {
+                // トレイトとトレイトの impl のメソッドは公開。ほかの impl は `pub` だけ。
+                Some((_, ty, public)) if *public || t.starts_with("pub ") => {
+                    fns.push((ty.clone(), name, spec));
                 }
+                Some(_) => {}
+                None => assert!(
+                    !t.starts_with("pub "),
+                    "{file}: 公開の自由な関数 `{name}` を分類する"
+                ),
             }
         }
     }
-    assert!(
-        specs.len() >= 10 && others.len() >= 10,
-        "{specs:?} {others:?}"
-    );
-    for s in &specs {
-        assert!(
-            spec_list.contains(&s.as_str()),
-            "prelude の spec fn `{s}` が PRELUDE_SPEC_FNS にない"
-        );
-    }
-    for s in spec_list {
-        assert!(
-            specs.iter().any(|x| x == s),
-            "PRELUDE_SPEC_FNS の `{s}` が prelude の spec fn にない"
-        );
-    }
-    for (file, ty, name) in &others {
-        let recv = match ty.as_str() {
-            "Region" => "r",
-            "PointsTo" => "p@",
-            "CellPointsTo" => "c@",
-            "Ptr" => "p",
-            "Cell" => "c",
-            other => panic!("{file}: 知らない型 `{other}` の `{name}`"),
+    assert!(fns.len() >= 30, "{fns:?}");
+    for (ty, name, spec) in &fns {
+        if other_types.contains(&ty.as_str()) {
+            continue;
+        }
+        let Some((_, recv)) = resource_types.iter().find(|(t, _)| t == ty) else {
+            panic!(
+                "prelude の型 `{ty}` の `{name}` を分類する（資源の型か、資源を受け手にしない型か）"
+            );
         };
-        for call in [format!("{ty}::{name}({recv})"), format!("{recv}.{name}()")] {
+        if *spec {
+            assert!(
+                spec_list.contains(&name.as_str()),
+                "{ty} の spec fn `{name}` が PRELUDE_SPEC_FNS にない"
+            );
+            continue;
+        }
+        assert!(
+            !spec_list.contains(&name.as_str()),
+            "PRELUDE_SPEC_FNS の `{name}` は {ty} で spec でない関数の名前"
+        );
+        for call in [
+            format!("{ty}::{name}({recv})"),
+            format!("{recv}.{name}()"),
+            format!("(*{recv}).{name}()"),
+            format!("{{ {recv} }}.{name}()"),
+            format!("matches!({recv}.{name}(), _)"),
+        ] {
             let proof = RES.replace(
                 "    leak p@;\n",
                 &format!("    proof {{ {call}; }}\n    leak p@;\n"),
@@ -360,8 +438,15 @@ fn every_prelude_fn_is_classified() {
             let d = run(RES, &proof);
             assert!(
                 d.iter().any(|l| l.contains("E0520")),
-                "{file}: `{call}` が E0520 にならない: {d:?}"
+                "`{call}` が E0520 にならない: {d:?}"
             );
         }
+    }
+    for s in spec_list {
+        assert!(
+            fns.iter()
+                .any(|(t, n, sp)| n == s && *sp && !other_types.contains(&t.as_str())),
+            "PRELUDE_SPEC_FNS の `{s}` が prelude の資源の型の spec fn にない"
+        );
     }
 }

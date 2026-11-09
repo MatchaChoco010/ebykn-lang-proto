@@ -27,6 +27,11 @@ pub const PRELUDE_SPEC_FNS: &[&str] = &[
     "id",
     // Ptr
     "spec_addr",
+    // Loc（Ptr と Cell）
+    "key",
+    "perm_key",
+    "perm_init",
+    "perm_value",
 ];
 
 impl Walker<'_> {
@@ -42,6 +47,10 @@ impl Walker<'_> {
         );
         let outer = self.proof_ops.replace(Vec::new());
         let prev = std::mem::replace(&mut self.logic, true);
+        // 資源を含む式の形を見る（[`super::guard`]）。
+        if outer.is_none() {
+            self.guard_proof_stmt(p);
+        }
         self.proof_stmt(p, span);
         self.logic = prev;
         let mut names = std::mem::replace(&mut self.proof_ops, outer).unwrap_or_default();
@@ -86,110 +95,6 @@ impl Walker<'_> {
             if taken {
                 self.push(l.pat.span, CheckMsg::SpecLetShadows { name });
             }
-        }
-    }
-
-    /// 証明の中の呼び出し（B4）：領域（領域の変数、`owns` の消去フィールド）・権限（`p@`）・権限を持つ
-    /// ポインタを受け手か引数にする呼び出しは、prelude の spec の関数（[`PRELUDE_SPEC_FNS`]）を受け手に
-    /// 呼ぶものと、クレートの `spec fn` に渡すものだけを通す。それ以外（prelude の `proof fn` の
-    /// `insert` / `remove` / `borrow` / `empty`、補題、`Region::remove(r, p)` の書き方など）は E0520。
-    /// 証明の中でだけ呼ぶ（`proof_ops` が `Some`）。
-    pub(super) fn proof_call(
-        &mut self,
-        receiver: Option<&ast::Expr>,
-        method: Option<&ast::Ident>,
-        func: Option<&ast::Expr>,
-        args: &[ast::Expr],
-    ) {
-        if self.proof_ops.is_none() {
-            return;
-        }
-        let arg_res: Vec<String> = args
-            .iter()
-            .filter_map(|a| self.ghost_resource(a, false))
-            .collect();
-        // `Region::remove(r, p)` のような prelude の型の関連関数。
-        if let Some(ast::Expr {
-            kind: ast::ExprKind::Path { path, .. },
-            ..
-        }) = func
-            && let [.., ty, name] = path.segments.as_slice()
-            && crate::index::PRELUDE_TYPES.contains(&ty.ident.name.as_str())
-        {
-            if !PRELUDE_SPEC_FNS.contains(&name.ident.name.as_str()) {
-                let n = arg_res
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| format!("{}::{}", ty.ident.name, name.ident.name));
-                self.proof_op(&n);
-            }
-            return;
-        }
-        let recv_res = receiver.and_then(|r| self.ghost_resource(r, true));
-        if recv_res.is_none() && arg_res.is_empty() {
-            return;
-        }
-        let allowed = match (receiver, method, func) {
-            // `r.contains(p)`、`p@.value()`：prelude の spec の関数を受け手に呼ぶ。
-            (Some(_), Some(m), _) => {
-                recv_res.is_some()
-                    && arg_res.is_empty()
-                    && PRELUDE_SPEC_FNS.contains(&m.name.as_str())
-            }
-            // クレートの `spec fn` に渡す（spec の関数は権限を使えない）。
-            (
-                None,
-                _,
-                Some(ast::Expr {
-                    kind: ast::ExprKind::Path { qself: None, path },
-                    ..
-                }),
-            ) => {
-                let segs: Vec<String> =
-                    path.segments.iter().map(|s| s.ident.name.clone()).collect();
-                let r = self.cx.index.resolve(
-                    self.cx.module,
-                    path.leading_colon,
-                    &segs,
-                    self.cx.self_ty,
-                );
-                self.cx
-                    .index
-                    .callee(&r)
-                    .is_some_and(|f| f.kind == crate::index::FnKind::Spec)
-            }
-            _ => false,
-        };
-        if !allowed {
-            let n = recv_res
-                .or_else(|| arg_res.first().cloned())
-                .unwrap_or_default();
-            self.proof_op(&n);
-        }
-    }
-
-    /// 式が領域・権限（受け手なら、権限を持つポインタも）を指すなら、その名前。`&` / `&mut` / 括弧は外す。
-    fn ghost_resource(&self, e: &ast::Expr, receiver: bool) -> Option<String> {
-        use ast::ExprKind;
-        match &e.kind {
-            ExprKind::Paren(x) | ExprKind::Ref { expr: x, .. } => self.ghost_resource(x, receiver),
-            ExprKind::Perm(x) => Some(format!("{}@", x.name)),
-            ExprKind::Path { qself: None, path } => {
-                let x = path.as_ident()?;
-                let region =
-                    self.regions.contains(&x.name) || self.region_modes.contains_key(&x.name);
-                let held = self.env.contains_key(&x.name) || self.known.contains(&x.name);
-                (region || receiver && held).then(|| x.name.clone())
-            }
-            // `owns` の消去フィールド（クレートのどれかの構造体の `owns` にある名前なら領域とみなす）。
-            ExprKind::Erased { field, .. } => {
-                let owns =
-                    self.cx.index.structs.values().any(|s| {
-                        s.erased_kind(&field.name) == Some(crate::index::ErasedKind::Owns)
-                    });
-                owns.then(|| format!("@{}", field.name))
-            }
-            _ => None,
         }
     }
 
