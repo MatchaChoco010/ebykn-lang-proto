@@ -1,11 +1,12 @@
 //! 関数本体の検査：権限スコープと線形性（仕様 §6.2）、領域添字の認識（§6.3）、
-//! 消去フィールドの規則（E0402、E0513、E0515、E0516）、メソッド呼び出しの解決（E0514）。
+//! 消去フィールドの規則（E0402、E0404、E0513、E0515、E0516）、メソッド呼び出しの解決（E0514）。
 //!
 //! 環境 Γ（名前 → 状態）と領域変数の集合 R を持って文を順にたどる。読み方で迷った点は
 //! `OPEN.md` に書いた（分岐の比べ方、`borrow` の借用の扱い、`gives` の戻し方など）。
 
 mod attrs;
 mod calls;
+mod erased;
 mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,7 +15,7 @@ use ebykn_syntax::ast::{
     self, Block, Expr, ExprKind, FieldPat, LoopKind, Member, PatKind, PermMode, Region,
     RegionIndex, StmtKind, UnOp,
 };
-use ebykn_syntax::diag::{CheckMsg, LoopPoint, Message, Mismatch, Op, PermState, Unimpl};
+use ebykn_syntax::diag::{CheckMsg, DotForm, LoopPoint, Message, Mismatch, Op, PermState, Unimpl};
 use ebykn_syntax::span::Span;
 
 use crate::Diags;
@@ -870,6 +871,9 @@ impl<'a> Walker<'a> {
                             attrs, pat, span, ..
                         } => {
                             self.no_cfg_pattern(attrs, *span);
+                            if let Some(name) = self.pat_field(info, f) {
+                                named.insert(name);
+                            }
                             self.bind(pat)
                         }
                         FieldPat::Erased { attrs, ident } => {
@@ -1013,7 +1017,10 @@ impl<'a> Walker<'a> {
             ExprKind::Ref { expr, .. } | ExprKind::Paren(expr) | ExprKind::Cast { expr, .. } => {
                 self.expr(expr)
             }
-            ExprKind::Field { base, .. } => self.expr(base),
+            ExprKind::Field { base, member } => {
+                self.field_dot(base, member);
+                self.expr(base)
+            }
             ExprKind::Block { label, block } => match label {
                 Some(l) => self.labeled_block(&l.name, block),
                 None => self.block(block),
@@ -1215,7 +1222,15 @@ impl<'a> Walker<'a> {
             }
             ExprKind::Paren(x) if deref_root(lhs).is_none() => self.place(x, assign),
             ExprKind::Struct(lit) => {
+                let info = if lit.qself.is_none() {
+                    self.struct_of_path(&lit.path)
+                } else {
+                    None
+                };
                 for f in &lit.fields {
+                    if !f.erased {
+                        self.named_erased(info, &f.member, DotForm::Literal, f.span);
+                    }
                     self.place(&f.expr, assign);
                 }
             }
@@ -1255,7 +1270,11 @@ impl<'a> Walker<'a> {
     /// 左辺の中の添字の式をたどる。
     fn place_indices(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::Field { base, .. } | ExprKind::Paren(base) => self.place_indices(base),
+            ExprKind::Field { base, member } => {
+                self.field_dot(base, member);
+                self.place_indices(base);
+            }
+            ExprKind::Paren(base) => self.place_indices(base),
             ExprKind::Index { base, index } => {
                 self.expr(index);
                 self.place_indices(base);
@@ -1710,6 +1729,7 @@ impl<'a> Walker<'a> {
     /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
     /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
+        self.field_dot_tokens(&m.tokens, m.span);
         if self.perm_in_tokens(m.tokens.clone()) {
             self.diags.push(
                 m.span,
@@ -1874,6 +1894,12 @@ impl<'a> Walker<'a> {
                 // 構造体リテラルの欄の `#[cfg]` も、消えると欄の値の式ごと消える。
                 d |= self.cfg_guarded(f.span, |w| w.expr(&f.expr));
             } else {
+                if self.named_erased(info, &f.member, DotForm::Literal, f.span) {
+                    given.insert(match &f.member {
+                        Member::Named(i) => i.name.clone(),
+                        Member::Unnamed { index, .. } => index.to_string(),
+                    });
+                }
                 d |= self.expr(&f.expr);
             }
         }

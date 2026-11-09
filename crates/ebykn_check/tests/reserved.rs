@@ -85,6 +85,23 @@ const MACRO_REJECTED: &[&str] = &[
     "use std::NAME;\npub fn f() {}",
 ];
 
+/// ghost の包み（`Tracked` / `Ghost`）の、型・パターンの位置の拒否する綴り（#99）。呼び出しの位置は
+/// [`CALL_REJECTED`] で見る。
+const WRAPPER_REJECTED: &[&str] = &[
+    "pub fn f(x: NAME<u64>) {}",
+    "pub fn f(x: &mut NAME<u64>) {}",
+    "pub fn f() -> Option<NAME<u64>> { None }",
+    "pub fn f(x: crate::NAME<u64>) {}",
+    "pub fn f(x: ::NAME<u64>) {}",
+    "pub fn f(x: ebykn_prelude::NAME<u64>) {}",
+    "pub struct W { a: NAME<u64> }",
+    "pub fn f(NAME(x): NAME<u64>) {}",
+    "pub fn f(x: u64) { let NAME(y) = x; }",
+    "pub fn f(x: u64) { let self::NAME(y) = x; }",
+    "pub fn f(x: u64) { let v: Vec<NAME<u64>> = Vec::new(); }",
+    "pub fn f(x: u64) { let v = Vec::<NAME<u64>>::new(); }",
+];
+
 const S: &str = "pub struct S { a: u64 }\n";
 
 /// `Invariant` / `View` の impl の中身。
@@ -117,9 +134,10 @@ fn every_reserved_name_is_rejected_in_every_spelling() {
     let mut tried = 0;
     for (name, kind) in all() {
         let templates = match kind {
-            ReservedKind::VerusCall | ReservedKind::ProofCall => CALL_REJECTED,
-            ReservedKind::VerusMacro => MACRO_REJECTED,
-            ReservedKind::EbyknTrait => TRAIT_REJECTED,
+            ReservedKind::VerusCall | ReservedKind::ProofCall => CALL_REJECTED.to_vec(),
+            ReservedKind::VerusWrapper => [CALL_REJECTED, WRAPPER_REJECTED].concat(),
+            ReservedKind::VerusMacro => MACRO_REJECTED.to_vec(),
+            ReservedKind::EbyknTrait => TRAIT_REJECTED.to_vec(),
         };
         for t in templates {
             let src = if kind == ReservedKind::EbyknTrait {
@@ -143,6 +161,21 @@ fn spellings_that_name_crate_definitions_are_accepted() {
                 for t in CALL_ACCEPTED {
                     accepts(&fill(t, name));
                 }
+            }
+            ReservedKind::VerusWrapper => {
+                for t in CALL_ACCEPTED {
+                    accepts(&fill(t, name));
+                }
+                // クレートで定義した同じ名前の型（書き下しの先頭の `use` とぶつかるので、Verus のビルドで
+                // 止まる。黙って ghost の包みにはならない）。
+                accepts(&fill(
+                    "pub struct NAME<T>(T);\npub fn f(x: crate::NAME<u64>) {}",
+                    name,
+                ));
+                accepts(&fill(
+                    "mod m { pub struct NAME(pub u64); }\npub fn f(x: m::NAME) { let m::NAME(y) = x; }",
+                    name,
+                ));
             }
             ReservedKind::EbyknTrait => {
                 // 裸の名前の 1 つの書き方。

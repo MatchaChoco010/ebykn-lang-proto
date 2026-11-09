@@ -24,6 +24,9 @@ pub fn message(kind: ReservedKind, name: &str, written: &str, in_proof: bool) ->
             name: name.to_string(),
             written: written.to_string(),
         },
+        ReservedKind::VerusWrapper => Message::VerusWrapper {
+            written: written.to_string(),
+        },
         ReservedKind::VerusMacro => Message::VerusOnly {
             written: written.to_string(),
         },

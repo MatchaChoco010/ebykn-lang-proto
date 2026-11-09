@@ -1138,11 +1138,14 @@ fn pat_as(p: syn::Pat, form: BindingForm) -> ast::Pat {
             path: path(&p.path),
         },
         syn::Pat::Tuple(t) => P::Tuple(t.elems.into_iter().map(pat).collect()),
-        syn::Pat::TupleStruct(t) => P::TupleStruct {
-            qself: qself(&t.qself),
-            path: path(&t.path),
-            elems: t.elems.into_iter().map(pat).collect(),
-        },
+        syn::Pat::TupleStruct(t) => {
+            super::wrapper_path(&t.path, "(..)");
+            P::TupleStruct {
+                qself: qself(&t.qself),
+                path: path(&t.path),
+                elems: t.elems.into_iter().map(pat).collect(),
+            }
+        }
         syn::Pat::Struct(s) => P::Struct {
             qself: qself(&s.qself),
             path: path(&s.path),

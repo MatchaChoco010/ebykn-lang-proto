@@ -31,6 +31,9 @@ pub enum ReservedKind {
     ProofCall,
     /// Verus の構文を処理するマクロ（[`VERUS_MACROS`]）。マクロのパスと `use` で見る。
     VerusMacro,
+    /// Verus の ghost の包み（[`VERUS_WRAPPERS`]）。式のパス（実行コードの `Tracked(e)` は `e` を証明の
+    /// モードで評価する）、型、パターン、`use`、中を読まないトークン列で見る（#99）。
+    VerusWrapper,
     /// Ebykn の型の性質のトレイト（`Invariant`、`View`）。`impl` のトレイトと `use` で見る。
     /// 受理する書き方は、裸の名前・ジェネリクスなしの `impl Invariant for T` だけ。
     EbyknTrait,
@@ -38,6 +41,11 @@ pub enum ReservedKind {
 
 /// 証明の構文の関数（仕様 §5.7）。
 pub const PROOF_CALLS: &[&str] = &["assert", "reveal", "reveal_with_fuel", "hide"];
+
+/// Verus の ghost の包み（`verus_builtin` の構造体）。書き下しが消去フィールドと消去される引数に使う。
+/// 実行コードの `Tracked(e)` / `Ghost(e)` はモードの変換（`tracked_exec` / `ghost_exec`）で、`.eyk` に
+/// 書けると証明のモードの式を書けてしまう（#99）。
+pub const VERUS_WRAPPERS: &[&str] = &["Tracked", "Ghost"];
 
 /// Ebykn の型の性質のトレイト（仕様 §5.1、§6.4、§7.2）。
 pub const EBYKN_TRAITS: &[&str] = &["Invariant", "View"];
@@ -167,6 +175,7 @@ pub fn all() -> impl Iterator<Item = (&'static str, ReservedKind)> {
     k(VERUS_BUILTIN_CALLS, ReservedKind::VerusCall)
         .chain(k(PROOF_CALLS, ReservedKind::ProofCall))
         .chain(k(VERUS_MACROS, ReservedKind::VerusMacro))
+        .chain(k(VERUS_WRAPPERS, ReservedKind::VerusWrapper))
         .chain(k(EBYKN_TRAITS, ReservedKind::EbyknTrait))
 }
 
@@ -177,7 +186,15 @@ pub fn kind_of(name: &str) -> Option<ReservedKind> {
 
 /// 式のパス・`use` の最後の名前として見る種類か（関数として呼べるもの）。
 pub fn is_call(kind: ReservedKind) -> bool {
-    matches!(kind, ReservedKind::VerusCall | ReservedKind::ProofCall)
+    matches!(
+        kind,
+        ReservedKind::VerusCall | ReservedKind::ProofCall | ReservedKind::VerusWrapper
+    )
+}
+
+/// 型・パターンのパスの最後の名前として見る種類か（ghost の包み）。
+pub fn is_wrapper(kind: ReservedKind) -> bool {
+    kind == ReservedKind::VerusWrapper
 }
 
 /// 証明の構文の関数（[`PROOF_CALLS`]）を、クレートの定義でない名前として拒否する診断。

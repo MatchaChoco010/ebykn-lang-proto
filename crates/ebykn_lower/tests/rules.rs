@@ -137,14 +137,17 @@ fn ensures_of_mut_parameters_are_written_as_is() {
     );
     has(
         &src,
-        "ensures final(self).r@.index(p).val == 1, old(self).r@.index(p).val == 0, final(self).q@.len() == 0,",
+        "ensures final(self).__eyk_erased_r@.index(p).val == 1, old(self).__eyk_erased_r@.index(p).val == 0, final(self).__eyk_erased_q@.len() == 0,",
     );
     // `old(x@f)` / `final(x@f)` は `old(x).f@` / `final(x).f@`（Verus の `old` は `&mut` の引数そのもの
     // にしか付けられない）。
     let src = format!(
         "{PRE}impl P {{ fn f(&mut self) ensures old(self@q).len() <= final(self@q).len(), {{ }} }}"
     );
-    has(&src, "ensures old(self).q@.len() <= final(self).q@.len(),");
+    has(
+        &src,
+        "ensures old(self).__eyk_erased_q@.len() <= final(self).__eyk_erased_q@.len(),",
+    );
     let src = format!(
         "{PRE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> ensures final(r)[p].val == old(r)[p].val, {{ }}"
     );
@@ -163,7 +166,7 @@ fn lowering_does_not_add_final_to_bare_mut_parameters() {
     );
     let got = lowered_ignoring_errors(&src);
     let want = squash(
-        "ensures self.a == 1, *x == 1, __eyk_perm_p.is_init(), self.r@.index(p).val == 1, final(__eyk_perm_p).pptr() == p,",
+        "ensures self.a == 1, *x == 1, __eyk_perm_p.is_init(), self.__eyk_erased_r@.index(p).val == 1, final(__eyk_perm_p).pptr() == p,",
     );
     assert!(got.contains(&want), "{want:?} がない:\n{got}");
     let src = format!(
@@ -196,29 +199,38 @@ fn regions_and_spec_fields() {
         "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>) requires old(self)@r.contains(p), {{ take self@r[p]; put self@r[p]; self@q = self@q.push(1); }} }}"
     );
     // M0 の注意：`take` は `let tracked`、`put` と spec フィールドの代入は `proof { }`、論理の `<r>` は `self.r@`。
-    has(&src, "requires old(self).r@.contains(p),");
+    has(&src, "requires old(self).__eyk_erased_r@.contains(p),");
     has(
         &src,
-        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p);",
+        "let tracked __eyk_perm_p = self.__eyk_erased_r.borrow_mut().remove(p);",
     );
-    has(&src, "proof { self.r.borrow_mut().insert(__eyk_perm_p); }");
-    has(&src, "proof { self.q = Ghost(self.q@.push(1)); }");
+    has(
+        &src,
+        "proof { self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_p); }",
+    );
+    has(
+        &src,
+        "proof { self.__eyk_erased_q = Ghost(self.__eyk_erased_q@.push(1)); }",
+    );
     // 構造体：owns は Tracked、spec は Ghost。
-    has(&src, "r: Tracked<Region<Ptr<Node>>>, q: Ghost<Seq<u64>>,");
+    has(
+        &src,
+        "__eyk_erased_r: Tracked<Region<Ptr<Node>>>, __eyk_erased_q: Ghost<Seq<u64>>,",
+    );
     // `borrow mut` の末尾の `insert` も `proof { }`。
     let src = format!(
         "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>) requires old(self)@r.contains(p), {{ borrow mut self@r[p] {{ (*p).val = 1; }} }} }}"
     );
     has(
         &src,
-        "let tracked __eyk_perm_p = self.r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; #[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res",
+        "let tracked __eyk_perm_p = self.__eyk_erased_r.borrow_mut().remove(p); let __eyk_res = { p.borrow_mut(Tracked(&mut __eyk_perm_p)).val = 1; }; #[allow(unreachable_code)] let __eyk_res = { proof { self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res",
     );
 }
 
 /// #21 の既定 D：`borrow mut` のブロックの外へ抜ける文の前で、権限を領域に戻す。
 #[test]
 fn jumps_out_of_borrow_mut_put_the_permission_back() {
-    const INS: &str = "proof { self.r.borrow_mut().insert(__eyk_perm_p); }";
+    const INS: &str = "proof { self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_p); }";
     let f = |body: &str| {
         format!(
             "{PRE}impl P {{ fn f(&mut self, p: Ptr<Node>, q: Ptr<Node>, n: u64) -> Option<u64> requires old(self)@r.contains(p), {{ {body} Some(0) }} }}"
@@ -252,7 +264,7 @@ fn jumps_out_of_borrow_mut_put_the_permission_back() {
     // 入れ子なら内側から戻す。
     has(
         &f("loop { borrow mut self@r[p] { borrow mut self@r[q] { break; } } }"),
-        "{ proof { self.r.borrow_mut().insert(__eyk_perm_q); self.r.borrow_mut().insert(__eyk_perm_p); } break }",
+        "{ proof { self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_q); self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_p); } break }",
     );
     // ブロックの中で閉じる break と、共有の borrow は戻さない。
     lacks(
@@ -280,7 +292,7 @@ fn jumps_out_of_borrow_mut_put_the_permission_back() {
 /// `#[allow(unreachable_code)]` で止める。PR #51 のレビューの B1）。
 #[test]
 fn borrow_mut_bodies_always_have_the_trailing_insert() {
-    const TAIL: &str = "#[allow(unreachable_code)] let __eyk_res = { proof { self.r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res";
+    const TAIL: &str = "#[allow(unreachable_code)] let __eyk_res = { proof { self.__eyk_erased_r.borrow_mut().insert(__eyk_perm_p); } __eyk_res }; __eyk_res";
     for body in [
         "loop { borrow mut self@r[p] { break; } }",
         // 右辺だけが抜ける `&&` / `||`：通常の経路で戻す文が要る。
@@ -294,11 +306,44 @@ fn borrow_mut_bodies_always_have_the_trailing_insert() {
     }
 }
 
+/// 消去フィールドは `.eyk` の名前のフィールドとしては書き下さない（#99）。`.eyk` の `x.r` は、検査が
+/// 見逃しても `Tracked` / `Ghost` のフィールドに届かず、Verus のビルドで止まる。
+#[test]
+fn erased_fields_are_lowered_under_reserved_names() {
+    let src = format!(
+        "{PRE}impl P {{ pub fn new() -> Self {{ P {{ a: 1, @r: Region::empty(), @q: Seq::empty() }} }}\n\
+         pub fn f(x: P) -> u64 {{ let P {{ a, @r, @q }} = x; a }} }}"
+    );
+    has(
+        &src,
+        "a: u64, __eyk_erased_r: Tracked<Region<Ptr<Node>>>, __eyk_erased_q: Ghost<Seq<u64>>,",
+    );
+    has(
+        &src,
+        "P { a: 1, __eyk_erased_r: Tracked(Region::empty()), __eyk_erased_q: Ghost(Seq::empty()) }",
+    );
+    has(
+        &src,
+        "let P { a, __eyk_erased_r: Tracked(r), __eyk_erased_q: Ghost(q) } = x;",
+    );
+    // 書き下しのどこにも、`.eyk` の名前のままの消去フィールド（`r:` / `q:` / `.r` / `.q`）がない。
+    let got = lowered(&src);
+    let toks: Vec<&str> = got.split(' ').collect();
+    for w in toks.windows(2) {
+        let erased = matches!(w[0], "r" | "q") && w[1] == ":";
+        let dotted = w[0] == "." && matches!(w[1], "r" | "q");
+        assert!(
+            !erased && !dotted,
+            "`.eyk` の名前の消去フィールド {w:?}:\n{got}"
+        );
+    }
+}
+
 #[test]
 fn erased_fields_of_other_values() {
     // #14 の既定：`x@field` を `self` 以外にも書き下す。
     let src = format!("{PRE}pub spec fn f(x: P) -> Seq<u64> = x@q;");
-    has(&src, "{ x.q@ }");
+    has(&src, "{ x.__eyk_erased_q@ }");
 }
 
 #[test]
@@ -327,7 +372,7 @@ fn self_results_are_named() {
     );
     has(
         &src,
-        "P { a: 1, r: Tracked(Region::empty()), q: Ghost(Seq::empty()) }",
+        "P { a: 1, __eyk_erased_r: Tracked(Region::empty()), __eyk_erased_q: Ghost(Seq::empty()) }",
     );
     // impl Invariant は T の固有の impl の `pub spec fn invariant`（closed がなければ open）。
     has(
@@ -459,7 +504,7 @@ fn map_membership_uses_dom() {
     );
     has(
         "pub struct W { a: u64 } spec { m: Map<int, int> }\nimpl W { pub closed spec fn f(&self) -> bool = forall k in self@m, k > 0; }",
-        "(forall|k| self.m@.dom().contains(k) ==> k > 0)",
+        "(forall|k| self.__eyk_erased_m@.dom().contains(k) ==> k > 0)",
     );
     has(
         "pub spec fn f(s: Seq<int>) -> bool = forall k in s, k > 0;",
