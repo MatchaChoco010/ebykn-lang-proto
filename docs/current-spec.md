@@ -359,17 +359,20 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `--json` では、1 行の JSON（`$message_type: ebykn-verify`。`results` は `{"ran": true, "verified": N, "errors": M}` か `{"ran": false, "errors": N}`）を標準出力に出し、Verus の診断は標準エラーに出します。
 - Verus の出力は `CARGO_TERM_COLOR=never` で受け取り、制御文字を除いて読みます。Verus の診断は、生成コードの位置を `build/verus/src/..（生成コード）` として出します（§10.2 の変換できない場合の形）。
 
-紛れ込んだ前提の照合：1 回目が検証まで進んだら、`cargo verus focus -- --no-cheating --no-verify` をもう一度走らせ、出たエラーを、Ebykn が自分で出した前提と照らし合わせます（`crates/ebykn/src/no_cheating.rs` の `judge`）。実装中（PR #42）。
+紛れ込んだ前提の照合：1 回目が検証まで進んだら、`cargo verus focus -- --no-cheating --no-verify` をもう一度走らせ、出たエラーを、Ebykn が自分で出した前提（`unchecked` と本体のない補題）と照らし合わせます（`crates/ebykn/src/no_cheating.rs` の `judge`）。1 回目が検証の前に止まったときは走らせません（`verify` はそれで失敗する）。`--no-verify` でも `--no-cheating` の拒否は全部出るので、2 回目は検証を省きます。
 
-- 許すのは、`unchecked` の項目の行の範囲にある `external_body` の拒否と、本体のない補題の行の範囲にある `assume` / `admit` の拒否を、項目ごとに一つずつだけです。
-- それ以外のエラーは、拒否の文言か、生成コードの中かを問わず、紛れ込んだ前提として `verify` を失敗にし、その場所を出します。依存クレートのマクロ、`include!`、マクロが出す入れ子の `verus!` から入った `assume(false)` を、これで捕まえます。
-- エラーの見出しを読めないときや、cargo の数えたエラーと読んだ見出しの数が違うときは、照合できないとして失敗にします。
-- 紛れ込んだ前提があるか照合できないときは、どの項目がそれに頼るか分からないので、`verified` の項目をすべて `unknown` にします。テキストの出力には `smuggled 位置 文言` の行を、`--json` には `no_cheating` を出します。
-- 今の develop は、2 回目を走らせません。`.eyk` の検査をすり抜けた `assume(false)` を前提に、何でも verified になります。
+- 許すのは、`unchecked` の項目の行の範囲にある `external_body` の拒否と、本体のない補題の行の範囲にある `assume` / `admit` の拒否を、項目ごとに一つずつだけです。`#[test]` の `#[verifier::external]` は `--no-cheating` でも拒否されないので、許す拒否はありません。
+- それ以外のエラーは、拒否の文言か、生成コードの中か（`include!` の位置は `src/../../../x.in` のように生成コードの外になる）を問わず、紛れ込んだ前提として `verify` を失敗にし、その場所を出します。依存クレートのマクロ、`include!`、マクロが出す入れ子の `verus!` から入った `assume(false)` を、これで捕まえます。
+- 次のときは、照合できないとして失敗にします：Verus が失敗したのに見出しを読めない、cargo の数えたエラー（`due to N previous errors`）と読んだ見出しの数が違う、cargo がクレートを作り直した行（`Checking 名前 v..`）がない。cargo は同じ位置・同じ文言のエラーを 1 つにまとめて出すが件数はまとめる前の数のままなので、Ebykn の `admit()` と同じ位置に紛れ込んだ拒否も、この件数の食い違いで照合できないことになります。各実行の前の `cargo clean -p` が失敗したら、`verify` を止めます。
+- 紛れ込んだ前提があるか照合できないときは、どの項目がそれに頼るか分からないので、`verified` の項目をすべて `unknown` にします。
+- 出力は、テキストでは `smuggled 位置 文言` の行（照合できなければ `smuggled unreadable: 理由`。位置は、生成コードならプロジェクトのルートからのパスを字句的に正規化したもの）、`--json` では `no_cheating`（`state` が `clean` / `smuggled` / `unreadable` / `not_run`、`checked`、`smuggled` の位置と文言か `reason`）です。標準エラーには、紛れ込んだものの Verus の診断と英日の文言を出します（照合できないときは、Ebykn 自身の前提への拒否も含むと断って、2 回目の出力の全文）。
+- 捕まえるのは、Verus が `--no-cheating` で拒否するもの（`assume` / `admit` / `external_body` / `assume_specification`、`assume_termination` など）が、Ebykn の前提の一覧の外に出たときだけです。`verus!` の外で依存クレートの derive・属性マクロが作る項目は、Verus が検証しないだけで拒否しないので捕まえません（#49）。
+- M5 で性質ファイル（trait の仕様）を足すと、一つの仕様からメソッドごとに拒否が出うるので、「許す拒否は項目ごとに一つ」の規則をそのとき仕様の単位で数え直します。
+- `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
 * 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
-* 状態：基準で決めた。照合（#37）は P0 のバグの修正で、実装中（PR #42）。
+* 状態：基準で決めた。
 
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
