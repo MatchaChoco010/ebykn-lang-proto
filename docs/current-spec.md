@@ -333,11 +333,14 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `spec fn` の可視性：`pub` でない `spec fn` は、`closed` の有無によらず `spec fn` とだけ書きます（`open` を付けない）。純粋関数の spec 側も同じです。Verus は `pub` でない `open spec fn` を拒否します。
 - 純粋関数（`fn f(..) -> T = e;`）：戻り値の型が整数の基本型なら、spec 側の本体を `(e) as T` で包みます。spec 側では整数の算術が `int` になり、同じ式を写すと型が合わないからです。それ以外（引数の位置の算術など）は Verus のエラーに任せます。
 - 関数単位の `by(m)`：`.eykp` が入る M3 からの規則です。書き下しは署名の直後（`requires` の前）に出します。`ensures` の後に置くと Verus の構文エラーです。今の `.eyk` では、`by(m)` は証明の構文として拒否します。
-- 利用者の `impl Drop`：`drop` に `opens_invariants none` と `no_unwind` を足すと決めましたが、develop にはまだありません。今は `impl Drop` が Verus のエラー（`a Drop implementation must be marked opens_invariants none`）になり、利用者は `opens_invariants` を書けません（#61）。
+- 利用者の `impl Drop`：std の `Drop` の impl の `fn drop` に、書き下しが `opens_invariants none` と `no_unwind` を足します。Verus はこの 2 つのない `Drop` の実装を拒否し、利用者は `.eyk` にどちらも書けないためです。std の `Drop` は、裸の `Drop`、`std::ops::Drop` / `core::ops::Drop`、`std::prelude::<版>::Drop` と、`use` の別名・glob の `use`・`pub use` の再公開でそれを指すパスです。クレートで定義した同じ名前のトレイトには、glob の `use` の先で見えるものも含めて何も足しません。
+  - `drop` の本体は検証します。`drop` は何も前提にしません（`requires` を持てず、型の不変条件も前提にしない）。`unchecked fn drop` は、ほかの `unchecked` と同じく前提の一覧に出ます。
+  - `drop` の本体から呼べるのは、`opens_invariants none` の関数だけです。利用者の `fn` は `.eyk` に `opens_invariants` を書けず、Verus の既定の `opens_invariants any` になるので、`drop` から呼ぶと `callee may open invariants that caller cannot` で失敗します（`no_panic` を付けても同じ）。vstd の `Vec::new` などや、`assert!`、`unwrap()`、添字、`panic!` も同じエラーになります。今の `drop` に書けるのは、フィールドへの単純な書き込みのような、関数を呼ばない本体です。扱いは判断待ちです（#94）。
+  - 型の不変条件を持つ型（`impl Invariant for T`）の `impl Drop` は、ほかの trait の impl で §6.4 の展開が契約を足すメソッドと同じく E0003（M4）です。§6.4 のとおりなら `drop` に `requires old(self).invariant()` が付きますが、Verus は `Drop` の `requires` を拒否するので、M4 で扱いを決めます。
 
 * 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。
-* 根拠：#17（PR #26）、#6（PR #13）。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`。
-* 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`impl Drop` は develop にまだない（#61）。
+* 根拠：#17（PR #26）、#6（PR #13）、#61。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
+* 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`drop` から呼べる関数は判断待ち（#94）。
 
 ### §7.3 構造体と資源の書き下し
 
@@ -410,8 +413,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
 | `macro` | 依存クレートの derive・属性マクロが付いた項目（§5 の「依存クレートの derive と属性マクロ」）。マクロが作る項目は Verus が検証しない |
-| `failed` | Verus のエラーの主な位置が、項目の行の範囲にある |
-| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、どの項目にも割り当てられないエラーがあるか、Verus が検証の前に止まった |
+| `failed` | Verus のエラーの失敗の場所が、項目の行の範囲にある。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`） |
+| `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
@@ -422,7 +425,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
 - `macro` の行は、derive なら `macro <パス> derive on <項目>`、属性マクロなら `macro <パス> on <項目>` です（`macro serde::Serialize derive on k::Foo`、`macro tokio::main on k::main`）。ファイルごとに、項目の行の後に並べます。`--json` では `status` が `macro` で、`macro`（パス）と `kind`（`derive` / `attribute`）が付きます。
 - 出力は、項目ごとの「状態 パス」の行と、最後の `results N verified, M errors` です（`status`（M5）の形が決まるまでの仮の形）。
-- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの主な位置がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
+- Verus が検証の前に止まったとき（コンパイルエラーなどで、検証のエラーが 0 件か件数がない）は、最後の行を `results not verified: Verus stopped before verification (N errors)` にし、何も検証していないことを英日の文言でも出します（`--output-json` はコンパイルエラーでも `verified: 0, errors: 0` を出します）。このとき（`--json` の `ran: false`）の項目の状態は、前提なら `admit` / `unchecked` / `external` のまま、そうでなくエラーの失敗の場所がその項目の行の範囲にあれば `failed`、ほかはすべて `unknown` です。`func-details` に関数があっても `verified` にしません（Verus は止まる前に関数の一覧を出すことがある）。テキストと `--json` は同じ状態を出します。`tests/golden/stopped/`（Verus が対応しない std の関数 `std::process::id` を呼ぶ）で固定してあります。
 - `--json` では、1 行の JSON（`$message_type: ebykn-verify`。`results` は `{"ran": true, "verified": N, "errors": M}` か `{"ran": false, "errors": N}`）を標準出力に出し、Verus の診断は標準エラーに出します。
 - Verus の出力は `CARGO_TERM_COLOR=never` で受け取り、制御文字を除いて読みます。Verus の診断は、生成コードの位置を `build/verus/src/..（生成コード）` として出します（§10.2 の変換できない場合の形）。
 
@@ -479,7 +482,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | --- | --- | --- | --- | --- |
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、`.eyk` の証明構文（M3 で `E0303` に置き換える）、性質ファイルだけの構文も、文言を分けて `E0001` | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、`build --verified` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |
@@ -518,7 +521,7 @@ M3 の `.eykp` で示す義務は次のとおりです。
 
 | OPEN | 元の既定 | 結果 | 出所 | 状態 |
 | --- | --- | --- | --- | --- |
-| OPEN-3（ユーザー定義 `Drop`） | M0 で確かめ、対応がなければ `owns` を持つ型の `Drop` を E にする | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、E にしない。書き下しで `drop` に両方を足すと決めたが、develop にはまだなく、今は `impl Drop` が Verus のエラーになる（#61、§7.2）。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | #6（PR #13）、`drop.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_tracked_field.rs` | 実測で決めた |
+| OPEN-3（ユーザー定義 `Drop`） | M0 で確かめ、対応がなければ `owns` を持つ型の `Drop` を E にする | Verus は対応している（`opens_invariants none` と `no_unwind` を付ければ検証できる）ので、E にしない。書き下しが std の `Drop` の `fn drop` に両方を足す（§7.2）。`drop` は型の不変条件を前提にできず、`requires` も付けられないので、`owns` の権限を使って領域を解放することはできない。消費されずにスコープを抜ける値の警告は段階 2（既定どおり） | #6（PR #13）、#61、`drop.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_tracked_field.rs` | 実測で決めた |
 | OPEN-4（`borrow mut` の書き下し） | `remove` ＋ `insert` | 既定どおり。`insert` は `proof { }` に入れる（§7.3） | #6（PR #13）、`tracked_field_forms.rs` | 実測で決めた |
 | OPEN-6（`by(mode)` の一覧） | §5.2 の 5 つ | 構文は 5 つを受け付け、使えないものは Verus のエラーに任せる。使えるのは場所で違う：`assert .. by(m)` は `bit_vector` / `nonlinear_arith` / `compute` / `compute_only`、関数単位の `by(m)` は `bit_vector` / `nonlinear_arith`。`integer_ring` は、Singular 付きでビルドした Verus でないと使えない | #6（PR #13）、`prover_modes.rs`、`prover_mode_*.rs` | 実測で決めた |
 | OPEN-7（Verus の結果の取り方） | JSON 出力があればそれ、なければ標準出力を解析 | §9.1 | #6（PR #13）、`json_output.rs`、`json_output_failure.rs` | 実測で決めた |

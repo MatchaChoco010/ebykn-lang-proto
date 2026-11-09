@@ -175,6 +175,24 @@ fn unimplemented_features_fail_loudly() {
         "E0003",
         "traits with contracts",
     );
+    // 型の不変条件を持つ型の `impl Drop` は、理由を言う文言にする（PR #76 のレビューの S4）。
+    rejects(
+        "pub struct S { a: u64 }\nimpl Invariant for S { spec fn invariant(&self) -> bool = self.a > 0; }\nimpl Drop for S { fn drop(&mut self) {} }\n",
+        "E0003",
+        "`impl Drop` for a type with an invariant",
+    );
+    // `drop` の契約（`no_panic` を含む）は trait の impl の契約として E0003。
+    rejects(
+        "pub struct S { a: u64 }\nimpl Drop for S { fn drop(&mut self) no_panic {} }\n",
+        "E0003",
+        "traits with contracts",
+    );
+    // std の `Drop` でない同じ名前のトレイトは、これまでどおり trait の契約として扱う。
+    rejects(
+        "pub trait Drop { fn drop(&mut self); }\npub struct S { a: u64 }\nimpl Invariant for S { spec fn invariant(&self) -> bool = self.a > 0; }\nimpl Drop for S { fn drop(&mut self) {} }\n",
+        "E0003",
+        "traits with contracts",
+    );
     // 契約のない trait は Rust のまま通す。
     accepts("trait T { fn f(&self) -> u64; }\n");
 }

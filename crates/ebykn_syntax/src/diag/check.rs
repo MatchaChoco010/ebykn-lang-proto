@@ -168,6 +168,9 @@ pub enum Unimpl {
     SubsetType,
     /// 契約・`spec fn`・`lemma fn` を持つ trait（M4）。
     ContractTrait,
+    /// 型の不変条件を持つ型の `impl Drop`（M4。§6.4 の展開が `drop` に `requires` を足すが、Verus は
+    /// `Drop` の `requires` を受け付けない）。
+    InvariantDrop,
     /// `impl spec`（M5）。
     ImplSpec,
     /// `check --base`（M3）。
@@ -227,6 +230,12 @@ impl Unimpl {
             }
             (Unimpl::ContractTrait, Lang::Ja) => {
                 "契約・`spec fn`・`lemma fn` を持つ trait は M4 で実装します"
+            }
+            (Unimpl::InvariantDrop, Lang::En) => {
+                "`impl Drop` for a type with an invariant (`impl Invariant`) is implemented in M4: §6.4 would add the invariant to `drop` as `requires`, and Verus does not allow `requires` on `Drop`"
+            }
+            (Unimpl::InvariantDrop, Lang::Ja) => {
+                "型の不変条件（`impl Invariant`）を持つ型の `impl Drop` は M4 で実装します。§6.4 の展開が `drop` に不変条件の `requires` を足しますが、Verus は `Drop` の `requires` を受け付けません"
             }
             (Unimpl::ImplSpec, Lang::En) => "`impl spec` is implemented in M5",
             (Unimpl::ImplSpec, Lang::Ja) => "`impl spec` は M5 で実装します",
