@@ -267,6 +267,7 @@ error: could not compile `smuggled` (lib) due to 5 previous errors
             admitted: vec!["k::helper".into()],
             unchecked: vec!["k::liar".into()],
             external: vec!["k::t".into()],
+            exec: vec![],
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),

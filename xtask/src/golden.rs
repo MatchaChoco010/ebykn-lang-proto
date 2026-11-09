@@ -58,6 +58,11 @@ pub const IGNORED: &[(&str, &str, &str)] = &[
         "target_dir",
         "verify_ignores_the_parent_target_dir",
     ),
+    (
+        "ebykn",
+        "exec_termination",
+        "verify_json_marks_exec_items_as_termination_not_proven",
+    ),
 ];
 
 /// `cargo test` の出力が、ちょうど一つのテストが走って通ったことを示すか。0 件で通ったもの（名前の誤り

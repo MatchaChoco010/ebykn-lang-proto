@@ -1,0 +1,60 @@
+{
+  "$message_type": "ebykn-verify",
+  "cfg_assumption": null,
+  "items": [
+    {
+      "item": "exec_decreases::halve_to_zero",
+      "status": "verified",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::count_down",
+      "status": "verified",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::count",
+      "status": "verified",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::halve_checked",
+      "status": "verified",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::stuck",
+      "status": "failed",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::tri",
+      "status": "verified"
+    },
+    {
+      "item": "exec_decreases::Counter::drain",
+      "status": "verified",
+      "termination": "not_proven"
+    },
+    {
+      "item": "exec_decreases::spin",
+      "status": "unchecked"
+    },
+    {
+      "item": "exec_decreases::Drain::spin_down",
+      "status": "verified",
+      "termination": "not_proven"
+    }
+  ],
+  "no_cheating": {
+    "checked": true,
+    "smuggled": [],
+    "state": "clean"
+  },
+  "results": {
+    "errors": 1,
+    "ran": true,
+    "verified": 12
+  },
+  "success": false
+}
