@@ -980,6 +980,9 @@ fn shared_receiver_through_a_reference_reads() {
     let src = format!(
         "{pre}fn f(p: Ptr<B>) -> usize uses &mut p@ {{ let s = &(*p).out; let m = (&(*p).out).len(); s.len() + m }}"
     );
-    has(&src, "let m = (&(*p.read(Tracked(&*__eyk_perm_p))).out).len();");
+    has(
+        &src,
+        "let m = (&(*p.read(Tracked(&*__eyk_perm_p))).out).len();",
+    );
     lacks(&src, "borrow_mut");
 }

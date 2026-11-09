@@ -189,6 +189,8 @@ ensures final(r).contains(p), final(r).index(p).val == 2, {
     proof {
         r.insert(__eyk_perm_p);
     }
+}
+
 pub struct Bucket { pub items: Vec < u64 >, }
 
 pub fn push_item(p: Ptr < Bucket >, x: u64, Tracked(__eyk_perm_p): Tracked <&mut PointsTo < Bucket >>)
