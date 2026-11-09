@@ -9,9 +9,14 @@ use std::process::Command;
 
 use crate::fetch;
 
-/// Verus で検証するクレート。`verus-verify` は各クレートを Verus で検証し、Verus なしの cargo でもビルドする。
+/// Verus で検証するクレート（prelude、手書きの stack、§6.2 の参照モデル）。`verus-verify` は各クレートを
+/// Verus で検証し、Verus なしの cargo でもビルドする。
 /// vstd に依存するクレートはすべてここに載せ、`Cargo.lock` を追跡する（`check-verus-pin` が検査する）。
-pub const CRATES: &[&str] = &["crates/ebykn_prelude", "tests/golden/stack/expected/verus"];
+pub const CRATES: &[&str] = &[
+    "crates/ebykn_prelude",
+    "tests/golden/stack/expected/verus",
+    "formal/linearity",
+];
 
 /// リリースの zip を展開してできるディレクトリ。
 const UNPACKED: &str = "verus-x86-linux";
@@ -273,7 +278,7 @@ fn try_install(root: &Path) -> Result<PathBuf, String> {
 }
 
 /// cargo を子として呼ぶとき、xtask を起動した cargo の環境を引き継がない。
-fn clean_cargo(cmd: &mut Command) -> &mut Command {
+pub fn clean_cargo(cmd: &mut Command) -> &mut Command {
     for var in [
         "CARGO",
         "RUSTC",

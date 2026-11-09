@@ -125,6 +125,8 @@ mod tests {
     const PRELUDE_LOCK: &str = "crates/ebykn_prelude/Cargo.lock";
     const STACK: &str = "tests/golden/stack/expected/verus/Cargo.toml";
     const STACK_LOCK: &str = "tests/golden/stack/expected/verus/Cargo.lock";
+    const FORMAL: &str = "formal/linearity/Cargo.toml";
+    const FORMAL_LOCK: &str = "formal/linearity/Cargo.lock";
 
     fn repo(root: &str, prelude: &str) -> TempRepo {
         let mut t = TempRepo::new();
@@ -133,6 +135,8 @@ mod tests {
         t.write(PRELUDE_LOCK, &real(PRELUDE_LOCK));
         t.write(STACK, &real(STACK));
         t.write(STACK_LOCK, &real(STACK_LOCK));
+        t.write(FORMAL, &real(FORMAL));
+        t.write(FORMAL_LOCK, &real(FORMAL_LOCK));
         t
     }
 
