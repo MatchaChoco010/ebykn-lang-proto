@@ -21,7 +21,7 @@ impl Pool {
 }
 
 impl Pool {
-    fn find_zero(&mut self, p: Ptr < Node >, n: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn find_zero(&mut self, p: Ptr < Node >, n: u64)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         let mut i = 0;
@@ -52,7 +52,7 @@ impl Pool {
         }
     }
 
-    fn find_zero_leaked(&mut self, p: Ptr < Node >, n: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn find_zero_leaked(&mut self, p: Ptr < Node >, n: u64)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         let mut i = 0;
@@ -70,7 +70,7 @@ impl Pool {
         }
     }
 
-    fn skip_zero(&mut self, p: Ptr < Node >, n: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn skip_zero(&mut self, p: Ptr < Node >, n: u64)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         let mut i = 0;
@@ -102,7 +102,7 @@ impl Pool {
         }
     }
 
-    fn big_or_zero(&mut self, p: Ptr < Node >) -> u64
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn big_or_zero(&mut self, p: Ptr < Node >) -> u64
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         {
@@ -130,7 +130,7 @@ impl Pool {
         0
     }
 
-    fn set_some(&mut self, p: Ptr < Node >, o: Option < u64 >) -> Option < u64 >
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn set_some(&mut self, p: Ptr < Node >, o: Option < u64 >) -> Option < u64 >
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         {
@@ -156,7 +156,7 @@ impl Pool {
         Some(0)
     }
 
-    fn set_ok(&mut self, p: Ptr < Node >, o: Result < u64, u8 >) -> Result < u64, u8 >
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn set_ok(&mut self, p: Ptr < Node >, o: Result < u64, u8 >) -> Result < u64, u8 >
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         {
@@ -182,7 +182,7 @@ impl Pool {
         Ok(0)
     }
 
-    fn short_circuit(&mut self, p: Ptr < Node >, c: bool)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn short_circuit(&mut self, p: Ptr < Node >, c: bool)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         {
@@ -207,7 +207,7 @@ impl Pool {
         }
     }
 
-    fn nested(&mut self, p: Ptr < Node >, q: Ptr < Node >, n: u64)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn nested(&mut self, p: Ptr < Node >, q: Ptr < Node >, n: u64)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p), old(self).__eyk_erased_order@.contains(q), p != q,
     ensures final(self).invariant(), {
         let mut i = 0;
@@ -251,7 +251,7 @@ impl Pool {
         }
     }
 
-    fn inner_loop(&mut self, p: Ptr < Node >)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn inner_loop(&mut self, p: Ptr < Node >)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         {
@@ -279,7 +279,7 @@ impl Pool {
         }
     }
 
-    fn labeled(&mut self, p: Ptr < Node >) -> u64
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn labeled(&mut self, p: Ptr < Node >) -> u64
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         let v = 'a:{
@@ -315,7 +315,7 @@ impl Pool {
         v
     }
 
-    fn loop_then_take(&mut self, p: Ptr < Node >)
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn loop_then_take(&mut self, p: Ptr < Node >)
     requires old(self).invariant(), old(self).__eyk_erased_order@.contains(p),
     ensures final(self).invariant(), {
         loop

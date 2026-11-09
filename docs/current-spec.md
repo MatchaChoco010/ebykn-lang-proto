@@ -468,14 +468,30 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `spec fn` の可視性：`pub` でない `spec fn` は、`closed` の有無によらず `spec fn` とだけ書きます（`open` を付けない）。純粋関数の spec 側も同じです。Verus は `pub` でない `open spec fn` を拒否します。
 - 純粋関数（`fn f(..) -> T = e;`）：戻り値の型が整数の基本型なら、spec 側の本体を `(e) as T` で包みます。spec 側では整数の算術が `int` になり、同じ式を写すと型が合わないからです。それ以外（引数の位置の算術など）は Verus のエラーに任せます。
 - 関数単位の `by(m)`：`.eykp` が入る M3 からの規則です。書き下しは署名の直後（`requires` の前）に出します。`ensures` の後に置くと Verus の構文エラーです。`.eyk` では、`by(m)` は証明の構文として拒否します（`E0303`）。
+- `uses` か `gives` を持つ `async fn` は `E0003` です（`unchecked` と `impl` の中を含む）。`uses` は、§7.3 どおり `Tracked(..)` の引数に書き下すと、Verus が内部エラー（「ill-formed `unwrap_parameter` header」）で止まるためです。`gives` は、Verus は定義も呼ぶ側の `.await` の分解も検証しますが、`.await` は Rust のまま写すので、§6.2 が `.await` の位置で受け取る権限を追えず、権限が黙って捨てられるためです。`uses` も `gives` も持たない `async fn` は Verus が検証します。権限や領域を受け取る処理は `uses` を持つ async でない `fn` に、権限を返す処理は `gives` を持つ async でない `fn` に移し、`async fn` から呼べば書けます。
 - 利用者の `impl Drop`：std の `Drop` の impl の `fn drop` に、書き下しが `opens_invariants none` と `no_unwind` を足します。Verus はこの 2 つのない `Drop` の実装を拒否し、利用者は `.eyk` にどちらも書けないためです。std の `Drop` は、裸の `Drop`、`std::ops::Drop` / `core::ops::Drop`、`std::prelude::<版>::Drop` と、`use` の別名・glob の `use`・`pub use` の再公開でそれを指すパスです。クレートで定義した同じ名前のトレイトには、glob の `use` の先で見えるものも含めて何も足しません。
   - `drop` の本体は検証します。`drop` は何も前提にしません（`requires` を持てず、型の不変条件も前提にしない）。`unchecked fn drop` は、ほかの `unchecked` と同じく前提の一覧に出ます。
   - `drop` の本体から呼べるのは、`opens_invariants none` の関数だけです。利用者の `fn` は `.eyk` に `opens_invariants` を書けず、Verus の既定の `opens_invariants any` になるので、`drop` から呼ぶと `callee may open invariants that caller cannot` で失敗します（`no_panic` を付けても同じ）。vstd の `Vec::new` などや、`assert!`、`unwrap()`、添字、`panic!` も同じエラーになります。今の `drop` に書けるのは、フィールドへの単純な書き込みのような、関数を呼ばない本体です。扱いは判断待ちです（#94）。
   - 型の不変条件を持つ型（`impl Invariant for T`）の `impl Drop` は、ほかの trait の impl で §6.4 の展開が契約を足すメソッドと同じく E0003（M4）です。§6.4 のとおりなら `drop` に `requires old(self).invariant()` が付きますが、Verus は `Drop` の `requires` を拒否するので、M4 で扱いを決めます。
 
 * 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。
-* 根拠：#17（PR #26）、#6（PR #13）、#61。プローブ `when_used_as_spec.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
-* 状態：`spec fn` は基準で決めた。ほかは実測で決めた。`drop` から呼べる関数は判断待ち（#94）。
+* 根拠：#17（PR #26）、#6（PR #13）、#61、#101。プローブ `when_used_as_spec.rs`、`async_tracked_param.rs`、`async_tracked_return.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
+* 状態：`spec fn` は基準で決めた。ほかは実測で決めた（`async fn` の `uses` と `gives` は、固定した Verus で確かめた）。`drop` から呼べる関数は判断待ち（#94）。
+
+### §7.2 実行関数の `decreases` は任意
+
+本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` と `#[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、前の属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
+
+- `decreases` を書いたループと再帰は、この属性の下でも Verus が確かめます（減らなければ `failed`）。
+- `spec fn`・`lemma fn`・純粋関数（`fn f(..) -> T = e;`。spec の側を持つ）の再帰は、今までどおり `decreases` が要ります。定義の整合性に要るためです（設計ノート §4.3）。
+- そのため、実行関数の `verified` は停止を含みません。戻ったときに契約を満たし、戻るまでに算術のあふれや権限の誤りがないことを示します。`decreases` が示すのは、それを書いたループや再帰が整礎であることだけです。`decreases` を書いた関数も、`decreases` のないループや再帰（呼んだ先の関数のものを含む）に届けば、止まらないことがあります。停止を含まないことは、`ebykn verify` の注記と `--json` の `termination` で示します（§9「`ebykn verify` の項目の状態と出力」）。
+- 前の属性だけだと、Verus は関数の `decreases` を書いた実行関数に、停止を保証しないという警告をいつも出し（ループの `decreases` には出しません）、`#[verifier::allow(..)]` を案内します。`.eyk` には `#[verifier::..]` を書けない（E0102）ので、利用者はこの案内に従えません。そのため、後の属性でこの警告を消します。
+- どちらの属性も `--no-cheating` で拒まれないので、`verify` の紛れ込んだ前提の照合で許す拒否は増えません。
+- `tests/golden/exec_decreases/` と、プローブ `exec_no_decreases*.rs`（`OPEN.md` の「M0 の実測」）で固定してあります。
+
+* 元の仕様：§7.2 の表は実行関数の `decreases` を書いたとおり写すだけで、書かない場合を定めていない。設計ノート §4.3 は「`spec fn` の再帰は必須、実行関数は任意」と決めているが、固定した Verus では書かないと検証の前に止まっていた。
+* 根拠：#81。条件付きの正しさ（設計ノート §3.1 の A1）は、書いた契約を満たすことを保証する。停止は、`decreases` を書いて選ぶ性質（§4.3）。
+* 状態：基準で決めた。
 
 ### §7.3 構造体と資源の書き下し
 
@@ -562,6 +578,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
+- 実行関数の `verified` は停止を含みません（§7.2「実行関数の `decreases` は任意」）。`verified` の実行関数があるときは、そのことを標準エラーに英日の文言で出します（`crates/ebykn/src/verus.rs` の `termination_note`）。文言は、`verified` が停止を含まず、戻ったときに契約を満たすという意味であること、`decreases` が示すのはそれを書いたループや再帰が整礎であることだけで、`decreases` のないコードに届けば止まらないことがあることを述べます。
+- `--json` では、本体を検証する実行関数の項目に `"termination": "not_proven"` を付けます（`{"item":"k::count","status":"verified","termination":"not_proven"}`）。`ensures false` の実行関数（`loop {}`）を呼べば何でも示せるので、機械で読む側が、停止を示していない `verified` を見分けられるようにするためです。`spec fn`・`lemma fn`・純粋関数の項目には付けません。
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
@@ -586,7 +604,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
-* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。
+* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）、#81（PR #116）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。実行関数の `verified` が停止を含まないことは、人が読む出力と `--json` の両方で示す。
 * 状態：基準で決めた。
 
 ### 生成クレートの成果物は `build/verus/target`
@@ -659,7 +677,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | --- | --- | --- | --- | --- |
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文、拒否リスト（§5 の「マクロ」。#27）に当たる cfg とマクロも、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |

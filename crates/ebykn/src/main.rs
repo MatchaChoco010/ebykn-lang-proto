@@ -330,7 +330,14 @@ fn verify(
     if opts.json {
         println!(
             "{}",
-            ebykn::verus::status_json(&shown, v.summary, &v.cheating, &output.cfg_uses, success)
+            ebykn::verus::status_json(
+                &shown,
+                v.summary,
+                &v.cheating,
+                &output.cfg_uses,
+                success,
+                &output.exec
+            )
         );
     } else {
         print!(
@@ -423,6 +430,10 @@ fn verify(
                     .join("、")
             ),
         );
+    }
+    // 実行関数の verified は停止を含まない（#81）。verified の実行関数があるときは、そう断る。
+    if let Some(note) = ebykn::verus::termination_note(&shown, &output.exec, opts.lang) {
+        eprintln!("ebykn: {note}");
     }
     if shown.iter().any(|s| s.status == "unknown") {
         say(
