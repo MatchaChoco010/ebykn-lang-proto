@@ -171,7 +171,7 @@ EOF
 
 ## 2. 範囲の PR と Issue を集める
 
-`develop` の first-parent の各コミットについて、GitHub に、そのコミットでマージされた PR を聞く（`commits/<sha>/pulls` のうち `merge_commit_sha` がそのコミットのもの）。ベースが `main` のころに入った PR も、件数の上限なく取れる。GitHub がマージ済みの PR を返すのは既定のブランチの上のコミットだけなので、既定のブランチが `develop` であることが前提になる（手順 1 で確かめる）。コミットの題の `(#N)`（squash）と `Merge pull request #N`（取り込みの PR のマージコミット）とも突き合わせる。
+`develop` の first-parent の各コミットについて、GitHub に、そのコミットでマージされた PR を聞く（`commits/<sha>/pulls` のうち `merge_commit_sha` がそのコミットのもの）。ベースが `main` のころに入った PR も、件数の上限なく取れる。GitHub がマージ済みの PR を返すのは既定のブランチの上のコミットだけなので、既定のブランチが `develop` であることが前提になる（手順 1 で確かめる）。コミットの題の `(#N)`（squash）と `Merge pull request #N`（`vendor/` を変えるコミットを含む PR のマージコミット）とも突き合わせる。
 
 ```bash
 bash -euo pipefail <<'EOF'

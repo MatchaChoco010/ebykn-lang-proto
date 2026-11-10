@@ -28,6 +28,8 @@ ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtas
 
 落ちたら直す。ゲートを外したり、テストを `#[ignore]` にしたりして通さない。
 
+`vendor/` に手を入れたら、`vendor/` の変更だけのコミットにし、`vendor/` の外の変更と混ぜない（AGENTS.md の「外部から取り込むコード」）。混ぜると `check-vendor-commits` が落ちるので、rebase でコミットを分けて push し直す。pre-commit フックは作っているコミットの直前までの履歴を見るので、混ぜたコミットは、手元では次のコミットのときに、そうでなければ CI で落ちる。本文には、`vendor/` を変えるコミットを含むので、マージコミットでマージする必要があると書く。
+
 ## 2. 本文を書く
 
 日本語で書き、ファイルに保存する（例：scratchpad の `pr-body.md`）。結論を先に書き、次を入れる。
@@ -73,7 +75,7 @@ gh pr checks <番号> --watch
 
 ワーカーは PR をマージしない。PR の URL と CI の結果を報告して終える。
 
-マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（取り込みのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。自動マージを予約したあとでワーカーに PR を戻すときは、コーディネーターが先に予約を外す（下）。詳しくは AGENTS.md の「マージ」。
+マージはコーディネーターが、作者の承認を待たずに行う。`ci-required` が緑で、コーディネーターが起動した別のサブエージェントのコードレビューで指摘が残っていないものを `develop` に squash でマージする（`vendor/` を変えるコミット、つまり取り込みか手入れのコミットを含む PR はマージコミット）。レビューの指摘はワーカーに送られるので、直して push し、再レビューを受ける。自動マージを予約したあとでワーカーに PR を戻すときは、コーディネーターが先に予約を外す（下）。詳しくは AGENTS.md の「マージ」。
 
 コーディネーターは、PR の head を `develop` の先頭に追いつかせてから、自動マージを予約する。
 
@@ -82,7 +84,10 @@ pr=<PR 番号>
 gh pr view "$pr" --json mergeStateStatus,headRefOid   # BEHIND：develop に遅れている。DIRTY：衝突がある
 gh pr update-branch "$pr"             # BEHIND のときだけ打つ。DIRTY ならワーカーに rebase を頼む
 gh pr view "$pr" --json headRefOid --jq .headRefOid   # update-branch は非同期。最初の headRefOid から変わるまで打ち直す
-gh pr merge "$pr" --squash --auto     # 取り込みのコミットを含む PR は --merge --auto
+head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+git fetch -q origin develop "$head"
+git rev-list --count --no-merges --full-history "origin/develop..origin/$head" -- vendor/   # 0 でなければ vendor/ を変えるコミットを含む
+gh pr merge "$pr" --squash --auto     # vendor/ を変えるコミットを含む PR は --merge --auto
 gh pr checks "$pr" --watch            # update-branch のあとの CI
 gh pr view "$pr" --json state --jq .state   # MERGED になってから片付ける
 ```

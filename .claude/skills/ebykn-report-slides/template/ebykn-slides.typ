@@ -30,7 +30,7 @@
 #let areas = (
   transpiler: (label: "トランスパイラ本体", color: rgb("#0b5cad")),
   prelude: (label: "prelude", color: rgb("#6639ba")),
-  vendor: (label: "取り込み（vendor）", color: rgb("#57606a")),
+  vendor: (label: "取り込みと手入れ（vendor）", color: rgb("#57606a")),
   golden: (label: "テスト・golden", color: rgb("#1f6f78")),
   book: (label: "Book", color: rgb("#0a6b2e")),
   harness: (label: "CI・ハーネス", color: rgb("#9a4d00")),
