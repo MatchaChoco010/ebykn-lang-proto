@@ -367,11 +367,24 @@ into_graph(a, b, uses g)                                         // 移動
 - マクロの引数と属性の引数の中は正規化しません。中の意味を Ebykn が知らないためです。
 - 一つの組から出すのは、最初の `E0304` か `E0305` の一つだけです。どちらかのファイルに構文の診断があれば、その組は比べません。
 
-`.eykp` の本体に §6.2〜§6.5 の検査（線形性など）はまだかけません（#67）。`.eykp` の中のパスのうち、Verus の関数の名前を最後に持つもの（§5「`.eyk` では Verus の構文を拒否する」）は、対応するモジュールの中の名前として判定します。
+`.eykp` の中のパスのうち、Verus の関数の名前を最後に持つもの（§5「`.eyk` では Verus の構文を拒否する」）は、対応するモジュールの中の名前として判定します。
 
 * 元の仕様：§6.1 は「§5.7 の証明構文を取り除く」とだけ書き、§5.7 の `ProofItem` の剥がし方、ループの句の部分列の単位、正規化の細部を定めていない。
 * 根拠：#65（PR #136 のレビュー）。設計ノート §3.2「同じ概念を複数の形で書けるようにしない」。`.eykp` に本体のない補題を足せると、証明なしの前提が増える（§9 の `admit` / `assume` は文法上書けない）。
 * 状態：基準で決めた。属性の順序の範囲だけは判断待ちの既定（#144）。
+
+### §6 `.eykp` のあるモジュールの検査
+
+- §6.2〜§6.5 の検査は、書き下すファイル（`.eykp` があればそれ。§7.5）の AST にかけ、書き下しに使う事実（領域の解決など）もそこから集めます。索引も書き下すファイルから作るので、`.eykp` だけの補題を証明の中から呼べます。
+- `.eykp` のあるモジュールは、`.eyk` の AST にも同じ検査をかけます。`.eyk` の側の診断はすべて `.eyk` の位置で出し、`.eykp` の側の診断は、対応する `.eyk` に同じ文言の診断がないもの（証明の中の誤り）だけを `.eykp` の位置で出します。剥がし一致を通れば、証明の外のコードは同じなので、同じ誤りが両方に出るためです。
+- 証明の文（§5.7 の `ProofStmt`。`proof { }`、`assert .. by { }` など）は、権限と領域を読めますが、状態を変える操作はできません。証明の文の中で、`take`・`put`・`leak`・`.free()`・`borrow mut`・消去フィールドへの代入（`x@f = e`）・移動や `&mut` で渡す `uses`（権限も領域も）・領域の作成を一度でもすれば `E0520` です。論理の文脈で §6.2 の検査を飛ばす操作も数えます。資源（領域の変数、権限 `p@`、`owns` の消去フィールド。メソッドの受け手の位置では権限を持つポインタも）を部分木のどこかに含む式は、次の 2 つの形でだけ使えます。`()` / `&` / `&mut` / `*` / `old(..)` / `final(..)` を外すとちょうど資源になる受け手に prelude の spec の関数（`crates/ebykn_check/src/body/proof.rs` の `PRELUDE_SPEC_FNS`：`contains`・`index`・`dom`・`len`・`perms`・`pptr`・`is_init`・`is_uninit`・`value`・`id`・`spec_addr`・`key`・`perm_key`・`perm_init`・`perm_value`）を呼ぶ形（`(*r).contains(p)`、`r.dom().len()`、`p@.value()`）と、クレートの `spec fn` に渡す形です。名前がクレートの `spec fn` を指すとみなすのは、次をすべて満たすときだけです。パスの先頭の名前を、囲むブロックの項目と `use` も、関数と `impl` の型の引数も束縛していない。囲むブロックに glob の `use` と Rust のままの項目がない。索引で解決した先が、cfg で消えない `spec fn` である。満たさなければ spec でない関数とみなします。論理の `r[p]` と、量化子の `x in r` の `r` も通します。資源を含む式がほかの形（どんな呼び出し、代入、ブロックや `if` / `match` の値、`match` の対象、マクロの引数、Rust のトークンのままの式）に来れば `E0520` です（`r.remove(p)`、`{ &mut *r }.remove(p)`、`matches!(r.insert(..), _)` など）。資源を含む場所への代入（`*r = ..`）と、prelude の型（`use .. as` と型の別名をたどって索引で決める）の spec でない関連関数（`Region::empty()`、`R::remove(r, p)`）も `E0520` です。領域と権限の名前は、関数の中で一度でも領域だった名前（`uses` の名前と、領域を作った変数）と、一度でも権限を持った名前で判定します。パターンで同じ名前を覆っても、資源とみなします。prelude の関数が、資源の型ごとに許すリストか `E0520` のどちらかに当たることは、テスト（`crates/ebykn_check/tests/eykp_checks.rs` の `every_prelude_fn_is_classified`）が、prelude のソースの全部のファイルから関数を集め、包んだ形も含めて一つずつ確かめます。前と後で状態が同じでも（取り出して戻す、取り出して捨てる、領域の間で移す）、同じく `E0520` です。証明は剥がされるので、剥がした `.eyk` が同じ権限で同じことをしなければなりません。読む操作（`proof { }` の中の `borrow r[p] { }`、論理の `*p` / `r[p]`）は通します。`assert .. by { }` の本体の中の `borrow` は、Verus がそこで権限を借りられないので `E0001` です（`proof { }` の中に書く）。証明の文の中の項目（`use` を含む。`use lemmas g;` は除く）も `E0001` です。中の項目が名前を覆うと、証明の呼び出しがどの関数に届くかを Ebykn が決められないためです。
+- `spec let` が束縛できるのは新しい名前だけです。スコープにある名前（引数・ローカル・権限・領域）、クレートの `.eyk` に識別子として現れる名前、索引で何かに解決する名前（項目・prelude の名前）を束縛すれば `E0521` です。`spec let` は関数の本体の `let ghost` になるので、名前を覆うと、後ろの `.eyk` の文（`take r[p]` の添字、`x@f = e` の右辺、ループの句など、Verus が ghost として読む位置）の指すものが変わります。覆わないと言える名前だけを通します（`.eykp` だけの項目の名前の規則と同じ考え）。
+- `lemma group` の要素は、クレートのモジュールの直下の `lemma fn` だけです。`impl` や関数の本体の中の補題、ほかのグループ、解決できない名前は `E0001` です。
+- 証明が実行するコードを変えないことのうち、実行する変数への代入や実行する関数の呼び出しは、Verus のモードの検査が拒みます（`cannot mutate exec-mode place in proof-code`、`cannot call function .. with mode exec`）。`verify` は検証の前に止まり、`build` も `cargo verus build` で止まります（golden `tests/golden/proof_mode`、`proof_mode_call`）。
+
+* 元の仕様：§7.5 は `.eykp` から書き下すとだけ書き、§6 の検査をどちらにかけるかと、証明の中の権限を定めていない。
+* 根拠：#67。
+* 状態：基準で決めた。
 
 ### §6.2 `borrow` ブロックを `break` / `continue` / `return` / `?` で抜けるとき
 
@@ -474,6 +487,9 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
   - `drop` の本体から呼べるのは、`opens_invariants none` の関数だけです。利用者の `fn` は `.eyk` に `opens_invariants` を書けず、Verus の既定の `opens_invariants any` になるので、`drop` から呼ぶと `callee may open invariants that caller cannot` で失敗します（`no_panic` を付けても同じ）。vstd の `Vec::new` などや、`assert!`、`unwrap()`、添字、`panic!` も同じエラーになります。今の `drop` に書けるのは、フィールドへの単純な書き込みのような、関数を呼ばない本体です。扱いは判断待ちです（#94）。
   - 型の不変条件を持つ型（`impl Invariant for T`）の `impl Drop` は、ほかの trait の impl で §6.4 の展開が契約を足すメソッドと同じく E0003（M4）です。§6.4 のとおりなら `drop` に `requires old(self).invariant()` が付きますが、Verus は `Drop` の `requires` を拒否するので、M4 で扱いを決めます。
 
+- 本体付きの `lemma fn`（`.eykp`）は、本体を証明の文脈で書き下した `proof fn` です。`lemma group g { a, b }` の要素の補題は `broadcast proof fn` にします。Verus の `broadcast group` は `broadcast proof fn` だけを受け付けるためです。要素は、`lemma group` を書いたモジュールの名前として解決します。
+- 関数の本体の中の `use lemmas g;` は、実行する関数の中では `proof { broadcast use g; }`、証明の文脈では `broadcast use g;` です。
+
 * 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。
 * 根拠：#17（PR #26）、#6（PR #13）、#61、#101。プローブ `when_used_as_spec.rs`、`async_tracked_param.rs`、`async_tracked_return.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
 * 状態：`spec fn` は基準で決めた。ほかは実測で決めた（`async fn` の `uses` と `gives` は、固定した Verus で確かめた）。`drop` から呼べる関数は判断待ち（#94）。
@@ -522,6 +538,12 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `and { a, b, c }` は `((a) && (b) && (c))` です（各項を括弧で包む）。`or { }` も同じです。Verus の `forall` / `exists` は右へできるだけ伸びるので、§7.4 の `(a && b && c)` のままでは `forall` の項が後ろの項を取り込みます。
 - 量化子の本体 `P` は、`forall x in r, P` では `<==>` のとき、`exists` では `||`・`==>`・`<==>` のときに括弧で包みます。範囲の両端は、単純な式（リテラル、パス、呼び出し、フィールドなど）でなければ括弧で包みます。
 - 範囲の束縛子に型を付けます。`forall i in a..b` / `exists i in a..b` の `i` の型は、端のリテラルの接尾辞（`3int`、`10u64`）、なければ `int` です。型がないと、本体で型が決まらないとき Verus が E0282 で止まります。
+
+- 実行する関数の本体の中の証明の文（`assert`、`assert .. by`、`assert forall`、`reveal`）は `proof { .. }` で包みます。`proof { }` は `proof { }` のまま、証明の文脈（`proof { }` の中、補題の本体）の中では包みません。`spec let p = e;` は、実行する関数の中では `let ghost p = e;`、証明の文脈では `let p = e;` です。
+- `assert forall x in r, P by { .. };` は `assert forall|x| <展開> implies P by { .. };` です。Verus の `implies` は、`by` の中で範囲の条件を仮定させます（`==>` だと、`by` の中で範囲を自分で場合分けすることになる）。示す命題は `forall|x| <展開> ==> P` と同じです。範囲のない束縛子（`x: T`）なら `assert forall|x: T| P by { .. };` です。
+- `reveal(f, n)` は `reveal_with_fuel(f, n)` です。`hide(f);` は `proof { }` に包まずにそのまま書きます。Verus の `hide` は関数の本体の先頭に置く見出しで、包むと受け付けず、先頭でなければ Verus がエラーにします。
+- ループの句は、種類ごとに連結して、`invariant` を先に、`decreases` を後に書きます（`invariant a, b, decreases d,`）。Verus は種類ごとにキーワードを一つだけ受け付けます。同じ種類の句は連結して読む（§5.2）ので、意味は変わりません。
+- 項目の証明の属性（`#[opaque]`・`#[rlimit(n)]`・`#[spinoff_prover]`・`#[memoize]`）は `#[verifier::..]` にし、依存クレートの属性マクロとしては扱いません（#57 の前提の一覧に出さない）。
 
 * 元の仕様：§7.4 の表（`(a && b && c)`、`forall|x| <展開> ==> P`）。
 * 根拠：#17（PR #26）。
@@ -576,7 +598,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `macro` | 依存クレートの derive・属性マクロが付いた項目（§5 の「依存クレートの derive と属性マクロ」）。マクロが作る項目は Verus が検証しない |
 | `failed` | Verus のエラーの失敗の場所が、項目の行の範囲にある。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`） |
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
-| `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
+| `unverified` | Verus 自身が検証した関数でエラーもないが、呼び出し（証明の中を含む）か `use lemmas` をたどると本体のない補題（`admit`）に届く。理由として、届いた補題を出す（`unverified k::f (depends on k::l, a lemma without a body)`、`--json` では `depends_on`） |
+| `verified` | それ以外。Verus 自身が検証した関数で、エラーがなく、本体のない補題に届かない |
 
 - 実行関数の `verified` は停止を含みません（§7.2「実行関数の `decreases` は任意」）。`verified` の実行関数があるときは、そのことを標準エラーに英日の文言で出します（`crates/ebykn/src/verus.rs` の `termination_note`）。文言は、`verified` が停止を含まず、戻ったときに契約を満たすという意味であること、`decreases` が示すのはそれを書いたループや再帰が整礎であることだけで、`decreases` のないコードに届けば止まらないことがあることを述べます。
 - `--json` では、本体を検証する実行関数の項目に `"termination": "not_proven"` を付けます（`{"item":"k::count","status":"verified","termination":"not_proven"}`）。`ensures false` の実行関数（`loop {}`）を呼べば何でも示せるので、機械で読む側が、停止を示していない `verified` を見分けられるようにするためです。`spec fn`・`lemma fn`・純粋関数の項目には付けません。
@@ -584,7 +607,8 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
 - Verus の数えたエラーと読み取ったエラーの見出しの数が違えば、エラーを割り当てられないとみなします。
-- `failed` か `unknown` があれば、`verify` は失敗します。
+- `failed` か `unknown` があれば、`verify` は失敗します。`unverified` は失敗にしません（届いた補題は `admit` の前提として一覧に出る）。`results` の行は Verus が確かめた件数なので、`unverified` の項目があれば、その数と名前を標準エラーに英日の文言で別に出します。
+- `unverified` を決める辺は、多めに引きます。書き下しが記録する辺（`crates/ebykn_lower/src/deps.rs`）は、解決できた呼び出しはその項目へ、解決できない呼び出しとメソッドの呼び出しは最後の名前が同じすべての項目へ、`use lemmas g` は `g` の要素の補題へ（モジュールの直下なら、そのモジュールとその下のすべての項目から。`g` を決められなければ、すべての `admit` へ）引きます。加えて、項目の生成コードに現れるすべての語（値の位置のパス、マクロの引数、Rust のトークンのままの式、入れ子の項目の中身、文字列とコメントの中の語を含む）から、その名前の項目へ引きます（`crates/ebykn/src/verus.rs` の `unverify_dependents`）。分からないものは届くとみなすので、`unverified` が増えることはあっても、本体のない補題に頼る項目を `verified` にはしません。§9.1 の 3 のうち、今たどるのは本体のない補題だけです。`failed` / `unknown` の項目に頼る項目の扱いと、`unchecked` の一覧（§9.1 の 4）は、`status` と一緒に M5 で決めます。
 - 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
 - `macro` の行は、derive なら `macro <パス> derive on <項目>`、属性マクロなら `macro <パス> on <項目>` です（`macro serde::Serialize derive on k::Foo`、`macro tokio::main on k::main`）。ファイルごとに、項目の行の後に並べます。`--json` では `status` が `macro` で、`macro`（パス）と `kind`（`derive` / `attribute`）が付きます。
 - 出力は、項目ごとの「状態 パス」の行と、最後の `results N verified, M errors` です（`status`（M5）の形が決まるまでの仮の形）。
@@ -645,19 +669,11 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 成功したら、標準エラーに、作った実行ファイルの場所（ライブラリだけのクレートなら `build/verus/target/debug`）と、検証していないことを出します。ビルドできたことを verified と取り違えないためです。
 - 検証は `ebykn verify` で行います。全項目が verified / unchecked であることをビルドの条件にする `--verified` は、`status` と一緒に M5 で実装します（今は `E0003`）。
 - 生成コードは、Verus なしの cargo ではなく `cargo verus build` でビルドします。§9 の表の経路を保ち、prelude のコンパイル時の検査（#12）を利用者の経路で効かせるためです。
-- golden の各ケースで、`ebykn build` が Verus なしの cargo と同じ期待（`expected/build-error.txt` があればその行で失敗、なければ成功）になることを確かめます（`cargo xtask golden-verify`）。`check` で止まるケース（`tests/golden/stopped/`。Verus が対応しない std の関数を呼ぶ）だけは、`expected/ebykn-build-error.txt` で `ebykn build` の失敗を期待します。`failed` の項目を持つ `tests/golden/stack/` も、`ebykn build` が通ります。
+- golden の各ケースで、`ebykn build` が Verus なしの cargo と同じ期待（`expected/build-error.txt` があればその行で失敗、なければ成功）になることを確かめます（`cargo xtask golden-verify`）。Verus の `cargo verus build` で止まるケース（`tests/golden/stopped/`。Verus が対応しない std の関数を呼ぶ。`tests/golden/proof_mode/`、`proof_mode_call/`。証明が実行するコードを変えようとする）は、`expected/ebykn-build-error.txt` で `ebykn build` の失敗を期待します。`failed` の項目を持つ `tests/golden/stack/` も、`ebykn build` が通ります。
 
 * 元の仕様：§9 の表は `build` を「`check` ＋ `cargo verus build`」とし、`--verified` を「全項目が verified / unchecked でなければ 1」とする。`cargo verus build` は既定で検証するので、`--verified` なしでも検証の失敗で止まっていた。
 * 根拠：#80。`--verified` の条件を `--verified` なしの `build` には課さないと読み、設計ノート §1.3 の「検証なしでもビルドできること」と現行仕様 §1.3（`build/verus/` は Verus なしの cargo でもビルドできる）に合わせる。
 * 状態：基準で決めた。
-
-### 証明ファイルがあるときの `verify` / `build`
-
-証明ファイル（`proof/` の `.eykp`）があると、`ebykn verify` と `ebykn build` は `E0003` で止まります（`.eykp` ごとに一つ、位置はそのファイルの先頭）。書き下しはまだ `.eyk` だけを読むので、そのまま進めると `.eykp` に書いた証明を捨てて、本体のない補題を `admit` の前提として検証することになるためです。`ebykn check` は止めません。剥がし一致を確かめ、`.eyk` を書き下して `verus --no-verify` にかけます。`.eykp` の本体にはまだ §6.2〜§6.5 の検査をかけないので、`check` の成功の文言と `--json` の `skipped` にそのことを出します。
-
-* 元の仕様：§7 は `.eykp` を書き下す。
-* 根拠：#65。書き下しが `.eykp` を読むのは #67。
-* 状態：基準で決めた。#67 で書き下しが `.eykp` を読むようになったら外す。
 
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
@@ -677,15 +693,17 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | --- | --- | --- | --- | --- |
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文、拒否リスト（§5 の「マクロ」。#27）に当たる cfg とマクロも、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |
 | `E0517` | `Ptr<T>` の `T` が確実にゼロサイズ型（§7.1） | ZST に触れていない | #12（PR #47） | 作者が決めた |
 | `E0518` | 呼び出しの `uses` の領域が、呼ばれる側の `uses` の宣言と合わない（数、`&` / `&mut` / 移動）（§5.2） | 呼び出しで領域を渡す構文がない | #19 | 判断待ちの既定 |
 | `E0519` | 呼び出しで渡す領域の状態の誤り：移動した領域を使う、借りた領域か `self@x` を移動で渡す、`&` で借りた領域を `&mut` で渡す、同じ呼び出しで同じ領域を `&mut` か移動を含めて二度渡す（§5.2） | 同上 | #19 | 判断待ちの既定 |
+| `E0520` | 証明の文（`.eykp`）の中で、権限か領域の状態を変える操作をした（§6） | 証明の中の権限を定めていない | #67 | 基準で決めた |
+| `E0521` | `spec let` が新しい名前でない名前を束縛した（スコープの名前、`.eyk` に現れる名前、項目の名前。§6） | `spec let` の名前の規則を定めていない | #67 | 基準で決めた |
 
-`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0103` は字句の番号帯の続きです。`E0404` は構造体の番号帯の、`E0517`〜`E0519` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
+`E0001`〜`E0004` は、§10.1 の番号帯（E01xx 字句、E03xx 証明ファイル、E04xx 構造体、E05xx 権限、W06xx 絞り込み、E08xx 性質ファイル）とぶつからない E00xx に置きます。`E0103` は字句の番号帯の続きです。`E0404` は構造体の番号帯の、`E0517`〜`E0521` は権限の番号帯の続きです。黙って無視すると、書いた性質や証明が効いていないのに検査が通るので、未実装の機能も `E0003` で止めます。
 
 ### §10.1 位置の数え方
 

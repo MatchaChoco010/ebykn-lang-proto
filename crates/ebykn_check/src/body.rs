@@ -7,7 +7,11 @@
 mod attrs;
 mod calls;
 mod erased;
+mod guard;
+mod perms;
 mod proof;
+
+pub use proof::PRELUDE_SPEC_FNS;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -121,6 +125,18 @@ pub struct Walker<'a> {
     try_known: bool,
     /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
     bound_source: Option<SpanKey>,
+    /// 証明の文の中なら、その中で権限・領域を変えた操作の名前（E0520。[`perms`]）。
+    proof_ops: Option<Vec<String>>,
+    /// `assert .. by { }` の本体の中か（`borrow` を書けない。Verus がその中の `borrow` を拒む）。
+    in_assert_by: bool,
+    /// 証明の中のメソッドの受け手を見ているか（権限を持つポインタも資源とみなす。[`guard`]）。
+    guard_ptrs: bool,
+    /// 関数の中で一度でも領域だった名前と、一度でも権限を持った名前（単調。パターンで覆っても忘れない。
+    /// 証明の中のガードが使う。[`guard`]）。
+    ever_regions: BTreeSet<String>,
+    ever_held: BTreeSet<String>,
+    /// 囲むブロックの中の項目と `use` が束縛する名前（glob の `use` と Rust のままの項目は `*`。[`guard`]）。
+    local_items: Vec<String>,
 }
 
 impl<'a> Walker<'a> {
@@ -145,6 +161,12 @@ impl<'a> Walker<'a> {
             bound_source: None,
             attr_ok: false,
             attr_lead: None,
+            proof_ops: None,
+            in_assert_by: false,
+            guard_ptrs: false,
+            ever_regions: BTreeSet::new(),
+            ever_held: BTreeSet::new(),
+            local_items: Vec::new(),
         }
     }
 
@@ -195,9 +217,11 @@ impl<'a> Walker<'a> {
                         },
                     );
                     self.known.insert(ident.name.clone());
+                    self.ever_held.insert(ident.name.clone());
                 }
                 ast::UsesItem::Named { ident, ty, .. } => {
                     self.regions.insert(ident.name.clone());
+                    self.ever_regions.insert(ident.name.clone());
                     self.region_modes
                         .insert(ident.name.clone(), region_mode(ty));
                 }
@@ -334,99 +358,6 @@ impl<'a> Walker<'a> {
         false
     }
 
-    /// 権限を消費する（`free`、`put`、移動、`leak`）。
-    fn consume(&mut self, name: &str, op: Op, span: Span) {
-        if self.closure_use(name, span) {
-            return;
-        }
-        match self.env.get(name).copied() {
-            Some(Perm {
-                state: PermState::Owned,
-                ..
-            }) => {
-                self.env.remove(name);
-            }
-            Some(Perm { block: true, .. }) => self.push(
-                span,
-                CheckMsg::ConsumeBorrowed {
-                    name: name.to_string(),
-                    op,
-                },
-            ),
-            Some(p) => self.push(
-                span,
-                CheckMsg::PermNotOwned {
-                    name: name.to_string(),
-                    op,
-                    state: p.state,
-                },
-            ),
-            None => self.push(
-                span,
-                CheckMsg::PermNotOwned {
-                    name: name.to_string(),
-                    op,
-                    state: PermState::Absent,
-                },
-            ),
-        }
-    }
-
-    /// 権限を貸す（`uses &mut p@` / `uses &p@` の引数）。
-    fn lend(&mut self, name: &str, mutable: bool, span: Span) {
-        if self.closure_use(name, span) {
-            return;
-        }
-        let op = if mutable {
-            Op::MutBorrow
-        } else {
-            Op::SharedBorrow
-        };
-        match self.env.get(name).copied() {
-            None => self.push(
-                span,
-                CheckMsg::PermNotOwned {
-                    name: name.to_string(),
-                    op,
-                    state: PermState::Absent,
-                },
-            ),
-            Some(p) if mutable && p.state == PermState::Shared => self.push(
-                span,
-                CheckMsg::WriteShared {
-                    name: name.to_string(),
-                },
-            ),
-            Some(_) => {}
-        }
-    }
-
-    /// 権限を導入する（`take`、`Ptr::new`、`gives`）。既にあれば E0503。
-    fn introduce(&mut self, name: &str, state: PermState, block: bool, span: Span) -> bool {
-        // クロージャの中では権限を導入することもできない（§5.6、E0512）。
-        if self.closure_outer.is_some() {
-            self.push(
-                span,
-                CheckMsg::PermInClosure {
-                    name: name.to_string(),
-                },
-            );
-            return false;
-        }
-        if self.env.contains_key(name) {
-            self.push(
-                span,
-                CheckMsg::PermAlreadyHeld {
-                    name: name.to_string(),
-                },
-            );
-            return false;
-        }
-        self.env.insert(name.to_string(), Perm { state, block });
-        self.known.insert(name.to_string());
-        true
-    }
-
     /// 領域添字の領域を決める（仕様 §5.4、§6.3）。
     fn region(&mut self, ri: &RegionIndex, keyword: &'static str) -> Option<RegionRef> {
         match &ri.region {
@@ -519,7 +450,9 @@ impl<'a> Walker<'a> {
     /// スコープの状態（領域変数、型を書いた変数、ローカルの束縛、`known`）を取っておく。
     /// 持っている領域変数を R に足す（`let r: Region<..>`、パターンの `@r`）。
     fn add_region(&mut self, name: &str) {
+        self.proof_op(name);
         self.regions.insert(name.to_string());
+        self.ever_regions.insert(name.to_string());
         self.region_modes.insert(name.to_string(), PermMode::Move);
         self.moved_regions.remove(name);
     }
@@ -588,12 +521,19 @@ impl<'a> Walker<'a> {
     fn block(&mut self, b: &Block) -> bool {
         // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで減らさない。
         let saved = self.save_scope();
+        let n = self.local_items.len();
+        for s in &b.stmts {
+            if let StmtKind::Item(item) = &s.kind {
+                self.local_items.extend(guard::item_names(item));
+            }
+        }
         let mut diverges = false;
         for s in &b.stmts {
             if self.stmt(s) {
                 diverges = true;
             }
         }
+        self.local_items.truncate(n);
         self.restore_scope(saved);
         diverges
     }
@@ -602,6 +542,9 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
+                if self.proof_ops.is_some() && !matches!(item.kind, ast::ItemKind::UseLemmas(_)) {
+                    self.push(item.span, CheckMsg::ItemInProof);
+                }
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -647,11 +590,7 @@ impl<'a> Walker<'a> {
                 false
             }
             StmtKind::Proof(p) => {
-                // 証明の文は論理の文脈で読む。`proof { }` の中の権限の扱いは、`.eykp` を検査する
-                // ときに決める（#67）。
-                let prev = std::mem::replace(&mut self.logic, true);
-                self.proof_stmt(p, s.span);
-                self.logic = prev;
+                self.proof_stmt_in_logic(p, s.span);
                 false
             }
         }
@@ -662,6 +601,7 @@ impl<'a> Walker<'a> {
         let ExprKind::Erased { base, field } = &target.kind else {
             return;
         };
+        self.proof_op(&format!("@{}", field.name));
         let info = match &base.kind {
             ExprKind::Path { qself: None, path }
                 if path.as_ident().is_some_and(|i| i.is("self")) =>
@@ -1155,7 +1095,8 @@ impl<'a> Walker<'a> {
                     && ebykn_syntax::reserved::is_call(kind)
                     && !self.locals.contains(&i.name)
                 {
-                    // 検査するのは今は `.eyk` だけ（`.eykp` の検査は #67）。
+                    // 文言は `.eyk` の側と同じにする（`.eykp` の側の同じ診断は、`check` が `.eyk` の側と
+                    // 突き合わせて落とす。[`crate::check`]）。
                     let m = crate::names::message(kind, &i.name, &i.name, false);
                     self.diags.push(e.span, m);
                 }
@@ -1417,6 +1358,7 @@ impl<'a> Walker<'a> {
                     .as_ref()
                     .is_some_and(|(env, _)| env.contains_key(&x.name));
             if method.is("free") && args.is_empty() && uses.is_empty() && held {
+                self.proof_op(&format!("{}@", x.name));
                 if !self.logic {
                     self.consume(&x.name, Op::Free, e.span);
                     self.facts.frees.insert(e.span.into(), x.name.clone());
@@ -1491,6 +1433,9 @@ impl<'a> Walker<'a> {
 
     fn borrow(&mut self, e: &Expr, mutable: bool, ri: &RegionIndex, body: &Block) -> bool {
         let keyword = if mutable { "borrow mut" } else { "borrow" };
+        if self.in_assert_by {
+            self.push(e.span, CheckMsg::BorrowInAssertBy);
+        }
         let region = self.region(ri, keyword);
         let x = region.as_ref().and_then(|_| self.index_ident(ri));
         if let Some(r) = region {

@@ -396,7 +396,7 @@ impl Cx<'_> {
                 let ins = self.jump_inserts(l);
                 let v = expr.as_ref().map(|x| self.expr(x));
                 let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
-                with_inserts(&ins, v, |v| {
+                with_inserts(&ins, v, self.proof, |v| {
                     format!("break{l}{}", v.map(|v| format!(" {v}")).unwrap_or_default())
                 })
             }
@@ -404,12 +404,12 @@ impl Cx<'_> {
                 let l = label.as_ref().map(|l| l.name.as_str());
                 let ins = self.jump_inserts(l);
                 let l = l.map(|l| format!(" '{l}")).unwrap_or_default();
-                with_inserts(&ins, None, |_| format!("continue{l}"))
+                with_inserts(&ins, None, self.proof, |_| format!("continue{l}"))
             }
             ExprKind::Return(x) => {
                 let ins = self.return_inserts();
                 let v = x.as_ref().map(|x| self.expr(x));
-                with_inserts(&ins, v, |v| self.ret(v))
+                with_inserts(&ins, v, self.proof, |v| self.ret(v))
             }
             ExprKind::Call { func, args, uses } => self.call(e, func, args, uses),
             ExprKind::MethodCall {
@@ -489,12 +489,7 @@ impl Cx<'_> {
                 binders,
                 triggers,
                 body,
-            } => {
-                if !triggers.is_empty() {
-                    crate::eykp_only("#![trigger ..]");
-                }
-                self.quant(*kind, binders, body)
-            }
+            } => self.quant(*kind, binders, triggers, body),
             ExprKind::AndOr { kind, exprs } => {
                 let op = match kind {
                     AndOrKind::And => " && ",
@@ -693,6 +688,7 @@ impl Cx<'_> {
                 return format!("{}({}){}", f.name, self.expr(root), fields.concat());
             }
         }
+        self.note_call(func);
         let f = self.expr(func);
         let mut a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         a.extend(self.extra_args(e.span, uses));
@@ -708,6 +704,7 @@ impl Cx<'_> {
         args: &[Expr],
         uses: &[ast::RegionArg],
     ) -> String {
+        self.note_method(method);
         let key = SpanKey::from(e.span);
         if let Some(x) = self.facts.frees.get(&key).cloned() {
             return format!("{x}.free(Tracked({}))", perm_var(&x));
@@ -792,14 +789,23 @@ impl Cx<'_> {
             LoopKind::For { pat, iter } => format!("for {} in {}", self.pat(pat), self.expr(iter)),
             LoopKind::Loop => "loop".into(),
         };
+        // 同じ種類の句は連結して読む（§5.2）。Verus は種類ごとにキーワードを一つだけ受け付け、
+        // `invariant` を `decreases` の前に置く。
         let mut clauses = String::new();
-        for c in &l.clauses {
-            let kw = match c.kind {
-                ast::LoopClauseKind::Invariant => "invariant",
-                ast::LoopClauseKind::Decreases => "decreases",
-            };
-            let es: Vec<String> = c.exprs.iter().map(|e| self.in_logic(e)).collect();
-            clauses.push_str(&format!(" {kw} {},", es.join(", ")));
+        for (kind, kw) in [
+            (ast::LoopClauseKind::Invariant, "invariant"),
+            (ast::LoopClauseKind::Decreases, "decreases"),
+        ] {
+            let es: Vec<String> = l
+                .clauses
+                .iter()
+                .filter(|c| c.kind == kind)
+                .flat_map(|c| c.exprs.iter())
+                .map(|e| self.in_logic(e))
+                .collect();
+            if !es.is_empty() {
+                clauses.push_str(&format!(" {kw} {},", es.join(", ")));
+            }
         }
         self.exits.push(ExitScope::Frame {
             label: l.label.as_ref().map(|x| x.name.clone()),
@@ -857,7 +863,7 @@ impl Cx<'_> {
                 "Err(::core::convert::From::from(__eyk_err))",
             ),
         };
-        let fail = with_inserts(&ins, None, |_| self.ret(Some(fail.into())));
+        let fail = with_inserts(&ins, None, self.proof, |_| self.ret(Some(fail.into())));
         format!("match {v} {{ {ok} => __eyk_ok, {err} => {fail} }}")
     }
 
@@ -923,12 +929,26 @@ impl Cx<'_> {
         )
     }
 
-    fn quant(&mut self, kind: QuantKind, binders: &[ast::Binder], body: &Expr) -> String {
-        let prev = std::mem::replace(&mut self.logic, true);
+    /// 量化子の本体の前の `#![trigger ..]` / `#![auto]`（§7.4。Verus と同じ形）。
+    fn triggers(&mut self, triggers: &[ast::Trigger]) -> String {
+        let mut out = String::new();
+        for t in triggers {
+            match t {
+                ast::Trigger::Exprs { exprs, .. } => {
+                    let es: Vec<String> = exprs.iter().map(|e| self.in_logic(e)).collect();
+                    out.push_str(&format!("#![trigger {}] ", es.join(", ")));
+                }
+                ast::Trigger::Auto(_) => out.push_str("#![auto] "),
+            }
+        }
+        out
+    }
+
+    /// 束縛子の名前（型付き）と、範囲の条件（`x in r` の展開）。束縛した名前は `rename` から外す
+    /// （呼び出し側が `rename` を戻す）。
+    fn binders(&mut self, binders: &[ast::Binder]) -> (Vec<String>, Vec<String>) {
         let mut names = Vec::new();
         let mut conds = Vec::new();
-        // 束縛した名前は、外の `gives` の付け替えを隠す（シャドウ）。
-        let saved = self.rename.clone();
         for b in binders {
             let n = ident(&b.ident);
             match &b.kind {
@@ -936,7 +956,6 @@ impl Cx<'_> {
                 BinderKind::Bare => names.push(n.clone()),
                 BinderKind::In(r) => {
                     conds.push(self.membership(&n, r));
-                    // 範囲の束縛子には型を付ける（端のリテラルの接尾辞、なければ `int`）。
                     match range_type(r) {
                         Some(t) => names.push(format!("{n}: {t}")),
                         None => names.push(n.clone()),
@@ -945,6 +964,67 @@ impl Cx<'_> {
             }
             self.rename.remove(&b.ident.name);
         }
+        (names, conds)
+    }
+
+    /// `assert forall x in r, P by { .. };`（§7.4）。範囲の条件は `implies` の前に置き、`by` の中で
+    /// 仮定できるようにする（Verus の `assert forall|x| A implies B by { .. }`）。
+    pub(crate) fn assert_forall(
+        &mut self,
+        binders: &[ast::Binder],
+        triggers: &[ast::Trigger],
+        body: &Expr,
+        by: &Block,
+    ) -> String {
+        let prev = std::mem::replace(&mut self.logic, true);
+        let saved = self.rename.clone();
+        let (names, conds) = self.binders(binders);
+        let trig = self.triggers(triggers);
+        let body_s = self.expr(body);
+        let by_s = self.proof_block(by);
+        self.rename = saved;
+        self.logic = prev;
+        let head = format!("assert forall|{}| {trig}", names.join(", "));
+        if conds.is_empty() {
+            format!("{head}{body_s} by {by_s};")
+        } else {
+            format!("{head}{} implies {body_s} by {by_s};", conds.join(" && "))
+        }
+    }
+
+    /// 証明の文を包む：実行する関数の中なら `proof { s }`、証明の文脈（`proof { }` の中、補題の本体）では
+    /// そのまま（Verus は証明の中の入れ子の `proof { }` を受け付けない）。
+    pub(crate) fn in_proof(&self, s: &str) -> String {
+        if self.proof {
+            s.to_string()
+        } else {
+            format!("proof {{ {s} }}")
+        }
+    }
+
+    /// 証明の文脈のブロック（`proof { }` の中身、`assert .. by { }`）。
+    pub(crate) fn proof_block(&mut self, b: &Block) -> String {
+        let (pl, pp) = (self.logic, self.proof);
+        self.logic = true;
+        self.proof = true;
+        let s = self.block(b);
+        (self.logic, self.proof) = (pl, pp);
+        s
+    }
+
+    fn quant(
+        &mut self,
+        kind: QuantKind,
+        binders: &[ast::Binder],
+        triggers: &[ast::Trigger],
+        body: &Expr,
+    ) -> String {
+        let prev = std::mem::replace(&mut self.logic, true);
+        // 束縛した名前は、外の `gives` の付け替えを隠す（シャドウ）。範囲の束縛子には型を付ける
+        // （端のリテラルの接尾辞、なければ `int`）。
+        let saved = self.rename.clone();
+        let (names, conds) = self.binders(binders);
+        let trig = self.triggers(triggers);
         let body_s = self.expr(body);
         self.rename = saved;
         self.logic = prev;
@@ -954,7 +1034,7 @@ impl Cx<'_> {
             QuantKind::Exists => "exists",
         };
         if conds.is_empty() {
-            return format!("({q}|{}| {body_s})", names.join(", "));
+            return format!("({q}|{}| {trig}{body_s})", names.join(", "));
         }
         let cond = conds.join(" && ");
         let body_s = match kind {
@@ -969,7 +1049,7 @@ impl Cx<'_> {
             QuantKind::Forall => "==>",
             QuantKind::Exists => "&&",
         };
-        format!("({q}|{}| {cond} {op} {body_s})", names.join(", "))
+        format!("({q}|{}| {trig}{cond} {op} {body_s})", names.join(", "))
     }
 
     /// `x in r` の展開（§7.4）。範囲は不等式、`Map`（型で分かるとき）は `dom().contains`、
@@ -1051,7 +1131,8 @@ impl Cx<'_> {
             self.exits.pop();
             restore(&mut self.perms, &p, saved);
             format!(
-                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ proof {{ {rx}.insert({v}); }} __eyk_res }}; __eyk_res }}"
+                "{{ let tracked {v} = {rx}.remove({p}); let __eyk_res = {b}; #[allow(unreachable_code)] let __eyk_res = {{ {} __eyk_res }}; __eyk_res }}",
+                self.in_proof(&format!("{rx}.insert({v});"))
             )
         } else {
             let saved = self.perms.insert(p.clone(), PermKind::Ref);
@@ -1155,22 +1236,22 @@ impl Cx<'_> {
                     return String::new();
                 };
                 let p = index_name(ri);
-                format!(
-                    "proof {{ {}.insert({}); }}",
+                self.in_proof(&format!(
+                    "{}.insert({});",
                     self.region_exec(&r, true),
                     perm_var(&p)
-                )
+                ))
             }
             // `leak p@;` は何も出さない（§7.3）。
             StmtKind::Leak(_) => String::new(),
-            StmtKind::Proof(_) => crate::eykp_only("証明の文"),
+            StmtKind::Proof(p) => self.proof_stmt(p),
             StmtKind::SpecAssign { target, value } => {
                 let ExprKind::Erased { base, field } = &target.kind else {
                     return String::new();
                 };
                 let b = self.expr(base);
                 let v = self.in_logic(value);
-                format!("proof {{ {b}.{} = Ghost({v}); }}", erased_field(field))
+                self.in_proof(&format!("{b}.{} = Ghost({v});", erased_field(field)))
             }
         }
     }
@@ -1213,15 +1294,21 @@ fn borrow_inserts(scopes: &[ExitScope]) -> Vec<String> {
 
 /// 抜ける文 `jump` の前に、権限を戻す文 `ins` を置く。値があれば先に評価して束縛する（値の式が
 /// 借りている権限を読むことがある）。
+/// `in_proof` は証明の文脈か（そのときは `proof { }` で包まない）。
 fn with_inserts(
     ins: &[String],
     v: Option<String>,
+    in_proof: bool,
     jump: impl FnOnce(Option<String>) -> String,
 ) -> String {
     if ins.is_empty() {
         return jump(v);
     }
-    let proof = format!("proof {{ {} }}", ins.join(" "));
+    let proof = if in_proof {
+        ins.join(" ")
+    } else {
+        format!("proof {{ {} }}", ins.join(" "))
+    };
     match v {
         Some(v) => format!(
             "{{ let __eyk_exit = {v}; {proof} {} }}",

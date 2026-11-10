@@ -34,7 +34,7 @@ use ebykn_syntax::span::Span;
 
 use crate::Diags;
 use crate::index::{self, EnumInfo, Import, Index, ItemPath, PreludeFn, Resolved, type_params};
-use crate::project::Project;
+use crate::project::{Project, View};
 
 /// 型の判定をたどる深さの上限（再帰する型の別名で止まるため）。
 const MAX_DEPTH: usize = 32;
@@ -42,9 +42,9 @@ const MAX_DEPTH: usize = 32;
 /// すべての名前を覆う印（名前には使えない文字列）。
 const ALL: &str = "*";
 
-/// 全モジュールの `Ptr<T>` を検査する。
-pub fn check(project: &Project, index: &Index, diags: &mut Diags) {
-    project.for_each_module(|module, file, items| {
+/// 全モジュールの `Ptr<T>` を検査する。`view` は、モジュールをどのファイルで見るか。
+pub fn check(project: &Project, view: View, index: &Index, diags: &mut Diags) {
+    project.for_each_module_in(view, |module, file, items| {
         let mut w = Walker {
             index,
             module,

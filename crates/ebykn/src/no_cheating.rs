@@ -271,6 +271,7 @@ error: could not compile `smuggled` (lib) due to 5 previous errors
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),
+            ..Default::default()
         }
     }
 

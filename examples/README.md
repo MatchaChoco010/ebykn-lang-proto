@@ -10,7 +10,7 @@
 | [stack](stack/) | 付録 B の stack。`owns` / `spec` と不変条件。いまは `push` / `pop` が verified にならない |
 | [shared-accounts](shared-accounts/) | `Rc<RefCell<T>>` の置き換え。口座を `Ptr` のハンドルで共有し、二つの口座を `borrow mut` の入れ子で同時に借りる。全項目が verified で、`ebykn build` で実行できる |
 | [main-program](main-program/) | `src/main.eyk` のプログラムを `ebykn build` で実行ファイルにして実行する。表示は検証しない `unchecked fn` に置く（#54） |
-| [proof-file](proof-file/) | 証明を `proof/lib.eykp` に分けて書き、剥がすと `src/lib.eyk` に一致することを `ebykn check` が確かめる（E0304・E0305）。証明ファイルがあると `verify` はまだ止まる |
+| [proof-file](proof-file/) | 証明を `proof/lib.eykp` に分けて書き、剥がすと `src/lib.eyk` に一致することを `ebykn check` が確かめる（E0304・E0305）。`verify` は証明ファイルから書き下して検証する |
 
 ## 試し方
 

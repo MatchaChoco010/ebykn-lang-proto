@@ -1,0 +1,12 @@
+// 証明は実行するコードを変えられない（#67）。proof/lib.eykp の `assert .. by { }` は実行する関数を呼ぶ。
+// 剥がし一致と Ebykn の検査は通るが、Verus のモードの検査が拒むので、どの項目も verified にならない。
+
+fn bump(c: u64) -> u64 requires c < 100 { c + 1 }
+
+pub fn keep(x: u64) -> (r: u64)
+    requires x < 100
+    ensures r == x
+{
+    let mut y = x;
+    y
+}

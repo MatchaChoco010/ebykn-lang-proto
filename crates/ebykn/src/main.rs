@@ -163,20 +163,6 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
-    if step != Step::Check {
-        let blocked = ebykn::proofs_not_lowered(&report);
-        if !blocked.is_empty() {
-            for d in &blocked {
-                let file = report.project.file(d.span.file);
-                if opts.json {
-                    println!("{}", d.to_json(file, opts.lang));
-                } else {
-                    eprintln!("{}", d.render(file, opts.lang));
-                }
-            }
-            return ExitCode::from(1);
-        }
-    }
     let output = match ebykn::lower_report(&report) {
         Some(Ok(o)) => o,
         Some(Err(e)) => {
@@ -223,23 +209,14 @@ fn run(opts: &Opts, step: Step, items: &[&str]) -> ExitCode {
             );
             return ExitCode::from(1);
         }
-        // 証明ファイルがあれば、剥がし一致のほかに、まだ `.eykp` の本体を検査していないことも伝える。
-        let (en, ja) = if report.project.proofs.is_empty() {
-            ("", "")
-        } else {
-            (
-                "; the checks §6.2–§6.5 of the `.eykp` bodies come with #67",
-                "。`.eykp` の本体の §6.2〜§6.5 の検査は #67 で足します",
-            )
-        };
         say(
             opts,
             &format!(
-                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3{en})",
+                "check passed (lowered to `{}`; the self-contained check §6.6 comes with `.eykp` in M3)",
                 build.display()
             ),
             &format!(
-                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します{ja}）",
+                "検査を通りました（`{}` に書き下しました。§6.6 の自己完結検査は `.eykp` と一緒に M3 で足します）",
                 build.display()
             ),
         );
@@ -434,6 +411,27 @@ fn verify(
     // 実行関数の verified は停止を含まない（#81）。verified の実行関数があるときは、そう断る。
     if let Some(note) = ebykn::verus::termination_note(&shown, &output.exec, opts.lang) {
         eprintln!("ebykn: {note}");
+    }
+    // `results` の行は Verus が数えた件数なので、Ebykn が `unverified` にした項目を別に数えて出す。
+    let unverified: Vec<&str> = shown
+        .iter()
+        .filter(|s| s.status == "unverified")
+        .map(|s| s.item.as_str())
+        .collect();
+    if !unverified.is_empty() {
+        say(
+            opts,
+            &format!(
+                "{} item(s) passed Verus but are unverified, because they depend on a lemma without a body (the `results` line counts what Verus checked): {}",
+                unverified.len(),
+                unverified.join(", ")
+            ),
+            &format!(
+                "{} 個の項目は Verus を通りましたが、本体のない補題に頼るので unverified です（`results` の行は Verus が確かめた件数です）: {}",
+                unverified.len(),
+                unverified.join("、")
+            ),
+        );
     }
     if shown.iter().any(|s| s.status == "unknown") {
         say(

@@ -589,6 +589,8 @@ pub struct ItemStatus {
     pub status: &'static str,
     /// `status` が `macro` のとき、付いているマクロ（#49）。
     pub via: Option<(ebykn_syntax::macros::MacroKind, String)>,
+    /// `status` が `unverified` のとき、届く本体のない補題（§9.1 の 3 の「補題に本体なし」）。
+    pub depends_on: Option<String>,
 }
 
 impl ItemStatus {
@@ -601,7 +603,13 @@ impl ItemStatus {
             Some((ebykn_syntax::macros::MacroKind::Attribute, p)) => {
                 format!("{} {p} on {}", self.status, self.item)
             }
-            None => format!("{} {}", self.status, self.item),
+            None => match &self.depends_on {
+                Some(d) => format!(
+                    "{} {} (depends on {d}, a lemma without a body)",
+                    self.status, self.item
+                ),
+                None => format!("{} {}", self.status, self.item),
+            },
         }
     }
 }
@@ -738,6 +746,7 @@ pub fn statuses(
                 item: item.clone(),
                 status: decide(facts),
                 via: None,
+                depends_on: None,
             });
         }
         // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（`verus!` の外の項目に
@@ -747,7 +756,65 @@ pub fn statuses(
                 item: m.item.clone(),
                 status: "macro",
                 via: Some((m.kind, m.path.clone())),
+                depends_on: None,
             });
+        }
+    }
+    unverify_dependents(&mut out, output);
+    out
+}
+
+/// 本体のない補題（`admit`）に届く `verified` の項目を `unverified` にする（§9.1 の 3。#149 のレビューの
+/// B3）。辺は、書き下しが記録した呼び出しと `use lemmas`（[`ebykn_lower::deps`]）に加えて、項目の生成
+/// コードに現れるすべての語（値の位置のパス、マクロの引数、Rust のトークンのままの式、入れ子の項目の
+/// 中身を含む）から、その最後の名前の項目へ引く。分からないものは届くとみなす（`verified` にしない側）。
+/// Verus は `admit()` を前提として使うので、頼る側も Verus の上では通るが、証明は済んでいない。
+fn unverify_dependents(out: &mut [ItemStatus], output: &Output) {
+    let items: Vec<String> = out.iter().map(|s| s.item.clone()).collect();
+    let mut depends = output.depends.clone();
+    for f in &output.files {
+        let lines: Vec<&str> = f.text.lines().collect();
+        for (start, end, item) in &f.items {
+            let body = lines
+                .get(start.saturating_sub(1)..(*end).min(lines.len()))
+                .unwrap_or_default()
+                .join("\n");
+            let set = depends.entry(item.clone()).or_default();
+            for w in words(&body) {
+                set.insert(ebykn_lower::deps::Dep::Name(w));
+            }
+        }
+    }
+    let output = &Output {
+        depends,
+        ..output.clone()
+    };
+    for s in out.iter_mut().filter(|s| s.status == "verified") {
+        if let Some(a) = ebykn_lower::deps::reaches_admit(
+            &s.item,
+            &output.depends,
+            &output.module_depends,
+            &items,
+            &output.admitted,
+        ) {
+            s.status = "unverified";
+            s.depends_on = Some(a);
+        }
+    }
+}
+
+/// 文字列の中の語（識別子の形のもの。`r#` は外す）。文字列やコメントの中の語も数える（多めに数える）。
+fn words(s: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let mut cur = String::new();
+    for c in s.chars().chain(std::iter::once(' ')) {
+        if c.is_alphanumeric() || c == '_' {
+            cur.push(c);
+        } else if !cur.is_empty() {
+            if !cur.chars().next().is_some_and(|d| d.is_ascii_digit()) {
+                out.insert(cur.clone());
+            }
+            cur.clear();
         }
     }
     out
@@ -916,7 +983,10 @@ fn item_json(i: &ItemStatus) -> serde_json::Value {
                 ebykn_syntax::macros::MacroKind::Attribute => "attribute",
             },
         }),
-        None => serde_json::json!({"item": i.item, "status": i.status}),
+        None => match &i.depends_on {
+            Some(d) => serde_json::json!({"item": i.item, "status": i.status, "depends_on": d}),
+            None => serde_json::json!({"item": i.item, "status": i.status}),
+        },
     }
 }
 
@@ -1187,6 +1257,7 @@ mod tests {
             item: item.into(),
             status,
             via: None,
+            depends_on: None,
         }
     }
 
@@ -1317,6 +1388,7 @@ mod tests {
             item: item.into(),
             status,
             via: None,
+            depends_on: None,
         };
         let all = vec![
             st("g1::liar", "unchecked"),
@@ -1434,6 +1506,7 @@ mod tests {
             verus_patterns: Default::default(),
             macros: vec![],
             cfg_uses: Vec::new(),
+            ..Default::default()
         };
         let checked: std::collections::BTreeSet<String> = ["k::f", "k::g", "k::l"]
             .iter()

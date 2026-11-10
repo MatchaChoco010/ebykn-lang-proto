@@ -189,6 +189,9 @@ pub enum Resolved {
 
 #[derive(Debug, Default)]
 pub struct Index {
+    /// クレートの `.eyk` に識別子として現れる名前（マクロと属性の引数の中も含む。`spec let` の名前の
+    /// 検査に使う。E0521）。
+    pub source_idents: std::collections::HashSet<String>,
     pub structs: BTreeMap<ItemPath, StructInfo>,
     pub enums: BTreeMap<ItemPath, EnumInfo>,
     pub fns: BTreeMap<ItemPath, FnInfo>,

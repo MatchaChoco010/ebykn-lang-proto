@@ -1,5 +1,5 @@
-//! `.eykp` の量化子の `#![trigger ..]` の式も検査がたどること（#86 のレビュー）。`.eykp` をプロジェクトで
-//! 検査するのは #67 からなので、`parse_eykp` の AST に `ensures` の検査（E0004）を直接かける。
+//! `.eykp` の量化子の `#![trigger ..]` の式も検査がたどること（#86 のレビュー）。`parse_eykp` の AST に
+//! `ensures` の検査（E0004）を直接かける（プロジェクトを通した `.eykp` の検査は `eykp_checks.rs`）。
 
 use ebykn_syntax::ast::ItemKind;
 use ebykn_syntax::parse_eykp;

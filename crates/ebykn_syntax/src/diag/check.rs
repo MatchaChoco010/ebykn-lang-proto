@@ -176,8 +176,6 @@ pub enum ProofOnlyClash {
 /// 未実装の機能（`E0003`）。各マイルストーンで実装する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unimpl {
-    /// `.eykp` があるときの `verify` / `build`（書き下しが `.eykp` を使うのは M3 の #67）。
-    EykpLowering,
     /// `props/` の性質ファイル（M5）。
     PropsDir,
     /// `Ebykn.toml` の `[props]`（M5）。
@@ -239,12 +237,6 @@ pub enum Unimpl {
 impl Unimpl {
     fn text(self, lang: Lang) -> &'static str {
         match (self, lang) {
-            (Unimpl::EykpLowering, Lang::En) => {
-                "`verify` and `build` with proof files (`.eykp`) are implemented in M3: the lowering does not read `.eykp` yet, so it would drop the proofs written there (`check` reads `.eykp` and checks that stripping it gives the `.eyk`)"
-            }
-            (Unimpl::EykpLowering, Lang::Ja) => {
-                "証明ファイル（`.eykp`）があるときの `verify` と `build` は M3 で実装します。書き下しがまだ `.eykp` を読まないので、そこに書いた証明を捨ててしまうためです（`check` は `.eykp` を読み、剥がすと `.eyk` に一致することを確かめます）"
-            }
             (Unimpl::PropsDir, Lang::En) => "props files (`props/`) are implemented in M5",
             (Unimpl::PropsDir, Lang::Ja) => "性質ファイル（`props/`）は M5 で実装します",
             (Unimpl::PropsTable, Lang::En) => "`[props]` in `Ebykn.toml` is implemented in M5",
@@ -511,6 +503,15 @@ pub enum CheckMsg {
     NotARegionArg {
         name: String,
     },
+    /// `assert .. by { }` の本体の中の `borrow r[p] { }`（Verus はその中で権限を借りられない。#67）。
+    BorrowInAssertBy,
+    /// 証明の文の中の項目（`use` を含む。`use lemmas` は除く）。中の項目が名前を覆うと、証明の呼び出しの
+    /// 指すものを Ebykn が決められない（#67）。
+    ItemInProof,
+    /// `lemma group` の要素が、モジュールの直下の `lemma fn` に解決しない（#67）。
+    LemmaGroupMember {
+        written: String,
+    },
     /// `impl Invariant for T` の中身の形が違う。
     InvariantImplShape,
     /// `impl View for T` の中に `type V` と `spec fn` 以外がある。
@@ -686,6 +687,17 @@ pub enum CheckMsg {
         region: String,
     },
 
+    // E0520：証明の文の中の権限（#67）
+    /// 証明の文（`proof { }`、`assert .. by { }` など）の中で、権限か領域の状態を変えた。`names` は
+    /// 状態の変わった権限・領域の名前。
+    PermChangedInProof {
+        names: Vec<String>,
+    },
+    /// `spec let` のパターンが、スコープにある名前（引数・ローカル・権限・領域）を覆った（E0521。#67）。
+    SpecLetShadows {
+        name: String,
+    },
+
     // W0601
     RefinementNested {
         ty: String,
@@ -720,6 +732,9 @@ impl CheckMsg {
             NotARegion { .. }
             | NotARegionArg { .. }
             | InvariantImplShape
+            | LemmaGroupMember { .. }
+            | BorrowInAssertBy
+            | ItemInProof
             | ViewImplShape
             | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
@@ -750,6 +765,8 @@ impl CheckMsg {
             | RegionNotMovable { .. }
             | RegionSharedAsMut { .. }
             | RegionPassedTwice { .. } => Code::E0519,
+            PermChangedInProof { .. } => Code::E0520,
+            SpecLetShadows { .. } => Code::E0521,
             RefinementNested { .. } => Code::W0601,
         }
     }
@@ -825,6 +842,30 @@ impl CheckMsg {
                 "`Ebykn.toml` の依存クレート `{name}` に、`{name}` という名前は付けられません。`std`、`core`、`alloc`、`vstd`、`ebykn_prelude`、`verus_builtin`、`verus_builtin_macros` は依存クレートの名前にできません（`my_{name} = {{ package = \"..\" }}` のように別の名前にします）"
             ),
 
+            (PermChangedInProof { names }, En) => format!(
+                "this proof changes the permissions or regions {}; a proof in the proof file (`proof {{ }}`, `assert .. by {{ }}`, ..) may read permissions and regions (`borrow r[p] {{ }}`, `*p`, `r[p]`) but not take, put, leak, borrow mutably, create, move or assign them (`x@f = e`), even when it puts them back, because the source without its proofs must do the same with them",
+                names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+            ),
+            (PermChangedInProof { names }, Ja) => format!(
+                "この証明は権限か領域 {} を変えています。証明ファイルの証明（`proof {{ }}`、`assert .. by {{ }}` など）は、権限と領域を読めます（`borrow r[p] {{ }}`、`*p`、`r[p]`）が、`take`・`put`・`leak`・`borrow mut`・作成・移動・代入（`x@f = e`）はできません。戻すとしてもできません。証明を剥がしたソースが、同じ権限で同じことをしなければならないためです",
+                names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join("、")
+            ),
+            (SpecLetShadows { name }, En) => format!(
+                "`spec let` cannot bind `{name}`: a `spec let` may only introduce a new name, one that is not in scope (a parameter, a local, a permission or a region), does not appear in the source (`.eyk`) and does not name an item; otherwise the code after it could refer to the ghost value instead, so the source without its proofs would mean something else; give it another name"
+            ),
+            (SpecLetShadows { name }, Ja) => format!(
+                "`spec let` で `{name}` を束縛できません。`spec let` で束縛できるのは新しい名前だけです。スコープにある名前（引数・ローカル・権限・領域）、ソース（`.eyk`）に現れる名前、項目の名前は使えません。覆うと後ろのコードがこの ghost の値を指し、証明を剥がしたソースと意味が変わりうるので、別の名前にします"
+            ),
+            (BorrowInAssertBy, En) => "syntax error: `borrow r[p] { .. }` cannot be written in the body of `assert .. by { .. }`, because Verus cannot borrow a permission there; write it in a `proof { .. }` block instead (`proof { borrow r[p] { assert P; } }`)".into(),
+            (BorrowInAssertBy, Ja) => "構文エラー: `assert .. by { .. }` の本体の中には `borrow r[p] { .. }` を書けません。Verus がそこでは権限を借りられないためです。`proof { .. }` の中に書きます（`proof { borrow r[p] { assert P; } }`）".into(),
+            (ItemInProof, En) => "syntax error: an item (including `use`) cannot be written in a proof statement; only `use lemmas g;` can. An item there could shadow the names the proof calls, so Ebykn cannot tell which function a call reaches; move the item out of the proof (to the module or the function body)".into(),
+            (ItemInProof, Ja) => "構文エラー: 証明の文の中には項目（`use` を含む）を書けません。書けるのは `use lemmas g;` だけです。中の項目が名前を覆うと、証明の呼び出しがどの関数に届くかを Ebykn が決められないためです。項目は証明の外（モジュールか関数の本体）に移します".into(),
+            (LemmaGroupMember { written }, En) => format!(
+                "syntax error: `{written}` in `lemma group` is not a `lemma fn` at the module level of this crate; a lemma group can list only such lemmas (they become Verus `broadcast proof fn`s), not lemmas in an `impl` or in a function body, nor other groups"
+            ),
+            (LemmaGroupMember { written }, Ja) => format!(
+                "構文エラー: `lemma group` の `{written}` は、このクレートのモジュールの直下の `lemma fn` ではありません。`lemma group` に並べられるのはそうした補題だけです（Verus の `broadcast proof fn` にします）。`impl` や関数の本体の中の補題、ほかのグループは並べられません"
+            ),
             (Unimplemented(u), En) => format!("not implemented yet: {}", u.text(En)),
             (Unimplemented(u), Ja) => format!("未実装: {}", u.text(Ja)),
 

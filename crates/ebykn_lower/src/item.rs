@@ -106,6 +106,7 @@ impl Cx<'_> {
                     .collect::<Vec<_>>()
                     .join("\n")
             }
+            ItemKind::UseLemmas(p) => c.use_lemmas_stmt(p),
             _ => item_text(&c, item).0,
         }
     }
@@ -207,8 +208,23 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
         ),
         // `use` と Rust の項目のトークン列は、可視性と属性を含む。
         ItemKind::Use(tk) | ItemKind::Rust(tk) => (tk.tokens.to_string(), None),
-        ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
-        ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
+        // `lemma group g { a, b }` / `use lemmas g;`（§7.2）。
+        ItemKind::LemmaGroup(g) => (
+            format!(
+                "{a}{v}broadcast group {} {{ {} }}",
+                ident(&g.ident),
+                g.members
+                    .iter()
+                    .map(|m| cx.path(m))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None,
+        ),
+        ItemKind::UseLemmas(p) => {
+            cx.note_use_lemmas(p, true);
+            (format!("{a}broadcast use {};", cx.path(p)), None)
+        }
         // 部分集合型と `impl spec` は検査が E0003 にする。`mod` と `impl` は [`item_pieces`]。
         ItemKind::Subset(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) | ItemKind::Impl(_) => {
             (String::new(), None)
@@ -238,9 +254,12 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
             }
             return;
         }
-        ItemKind::Trait(_) | ItemKind::Impl(_) | ItemKind::ImplSpec(_) | ItemKind::Mod(_) => return,
-        ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
-        ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
+        ItemKind::LemmaGroup(g) => &g.ident,
+        ItemKind::Trait(_)
+        | ItemKind::Impl(_)
+        | ItemKind::ImplSpec(_)
+        | ItemKind::Mod(_)
+        | ItemKind::UseLemmas(_) => return,
     };
     cx.note_macros(&item.attrs, || cx.item_path(&name.name));
 }
@@ -455,6 +474,8 @@ fn struct_text(cx: &Cx, a: &str, v: &str, s: &ast::Struct) -> String {
 /// 書く（#10 の決定。裸のものは検査が E0004 にする）。
 fn fn_cx<'a>(cx: &Cx<'a>, sig: &ast::Signature, contract: &ast::Contract) -> Cx<'a> {
     let mut c = cx.clone();
+    // 依存の辺の始点（[`crate::deps`]）。
+    c.current = Some(cx.item_path(&sig.ident.name));
     c.perms = BTreeMap::new();
     c.rename = BTreeMap::new();
     c.gives = None;
@@ -659,6 +680,12 @@ fn sig_text(
         params.join(", "),
         where_clause(&sig.where_clause)
     );
+    // `lemma fn` の `by(mode)`（§7.2。Verus の署名では句の前）。
+    for cl in &contract.clauses {
+        if let ast::ClauseKind::By(m) = cl.kind {
+            s.push_str(&format!(" by ({})", m.as_str()));
+        }
+    }
     for (kw, es) in [
         ("requires", &requires),
         ("ensures", &ensures),
@@ -886,25 +913,39 @@ fn spec_fn_text(cx: &Cx, a: &str, v: &Vis, f: &ast::SpecFn) -> String {
 }
 
 fn lemma_text(cx: &Cx, a: &str, v: &str, f: &ast::LemmaFn, name: &str) -> String {
-    if f.body.is_some() {
-        crate::eykp_only("lemma fn の本体");
-    }
-    if f.contract
-        .clauses
-        .iter()
-        .any(|c| matches!(c.kind, ast::ClauseKind::By(_)))
-    {
-        crate::eykp_only("by(..)");
-    }
     let mut c = fn_cx(cx, &f.sig, &f.contract);
     let sig = sig_text(&mut c, &f.sig, &f.contract, &FnExpansion::default());
     if f.unchecked.is_some() {
         cx.report.borrow_mut().unchecked.push(name.to_string());
         return format!("{a}#[verifier::external_body] {v}proof {sig} {{ }}");
     }
-    // 本体は `.eykp`（M3）。`.eykp` がなければ `admit()`（§7.2）。`verify` が一覧に出す。
-    cx.report.borrow_mut().admitted.push(name.to_string());
-    format!("{a}{v}proof {sig} {{ vstd::prelude::admit() }}")
+    // `lemma group` の要素は `broadcast proof fn`（§7.2）。
+    let path: Vec<String> = cx
+        .module
+        .iter()
+        .cloned()
+        .chain([f.sig.ident.name.clone()])
+        .collect();
+    let broadcast =
+        if cx.self_ty.is_none() && cx.foreign_impl.is_none() && cx.broadcast.contains(&path) {
+            "broadcast "
+        } else {
+            ""
+        };
+    match &f.body {
+        // `.eykp` の本体（§7.2）。証明の文脈で書き下す。
+        Some(b) => {
+            c.logic = true;
+            c.proof = true;
+            let body = c.block(b);
+            format!("{a}{v}{broadcast}proof {sig} {body}")
+        }
+        // 本体がなければ `admit()`（§7.2）。`verify` が証明なしの前提として一覧に出す。
+        None => {
+            cx.report.borrow_mut().admitted.push(name.to_string());
+            format!("{a}{v}{broadcast}proof {sig} {{ vstd::prelude::admit() }}")
+        }
+    }
 }
 
 // ---- trait ----

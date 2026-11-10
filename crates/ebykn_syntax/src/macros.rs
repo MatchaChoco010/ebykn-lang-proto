@@ -493,7 +493,10 @@ fn classify(m: &Meta, b: &Bindings, out: &mut Vec<ExternalMacro>) {
         return;
     }
     let builtin = if single {
-        BUILTIN_ATTRS.contains(&first) || PRELUDE_ATTR_MACROS.contains(&first) && !b.binds(first)
+        // 証明の属性（`#[opaque]` など。`.eykp` だけ）は、書き下しが `#[verifier::..]` にする（§7.4）。
+        BUILTIN_ATTRS.contains(&first)
+            || crate::parse::is_proof_attr(first)
+            || PRELUDE_ATTR_MACROS.contains(&first) && !b.binds(first)
     } else {
         !m.leading_colon && TOOL_NAMESPACES.contains(&first) && !b.binds(first) && !b.unknown_crates
     };
@@ -579,7 +582,7 @@ fn non_builtin_meta(m: &Meta, pos: AttrPosition) -> Option<String> {
             .skip(skip)
             .find_map(|p| non_builtin_in_tokens(p, pos));
     }
-    let builtin = single && BUILTIN_ATTRS.contains(&first);
+    let builtin = single && (BUILTIN_ATTRS.contains(&first) || crate::parse::is_proof_attr(first));
     let tool = pos == AttrPosition::StmtExpr
         && !single
         && !m.leading_colon
