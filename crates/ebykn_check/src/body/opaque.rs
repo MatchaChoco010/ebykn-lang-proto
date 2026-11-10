@@ -132,13 +132,18 @@ impl Walker<'_> {
                             || (id(next).as_deref() == Some("mut") && region_index(i + 2))
                     }
                     "leak" => id(next).is_some() && pc(tts.get(i + 2), '@'),
-                    // トレイトを通した修飾パス `<T as Tr>::..`。関連型などを通ると権限の型に行き着くかを
-                    // 引けないので、安全側に倒す（トークンの外の `perm_fn_path` と同じ）。
+                    // トレイトを通した修飾パス `<T as Tr>::A::..`。関連型などを通ると権限の型に行き着くかを
+                    // 引けないので、安全側に倒す。トレイトの後ろが一つの名前（`<u32 as Clone>::clone`）なら
+                    // トレイトのメソッドで、契約を持てないので数えない（トークンの外の `perm_fn_path` と同じ）。
                     "as" => tts[i + 1..]
                         .iter()
                         .position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '>'))
                         .is_some_and(|k| {
-                            pc(tts.get(i + 2 + k), ':') && pc(tts.get(i + 3 + k), ':')
+                            let j = i + 2 + k;
+                            pc(tts.get(j), ':')
+                                && pc(tts.get(j + 1), ':')
+                                && !(id(tts.get(j + 2)).is_some()
+                                    && !(pc(tts.get(j + 3), ':') && pc(tts.get(j + 4), ':')))
                         }),
                     _ => false,
                 };
