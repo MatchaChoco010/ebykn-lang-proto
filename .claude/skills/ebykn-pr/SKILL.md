@@ -32,19 +32,29 @@ ebykn-limited cargo xtask ci    # ebykn-limited がない環境では cargo xtas
 
 ### 書き下しが変わったとき
 
-書き下し（`ebykn_lower`）を変えると、golden の書き下しの期待（`tests/golden/*/expected/verus/`）が合わなくなり、`lowered_verus_matches_expected` が落ちる。期待は手で直さず、生成物から作り直す。
+書き下し（`ebykn_lower`）を変えると、golden の書き下しの期待（`tests/golden/*/expected/verus/`）が合わなくなり、`lowered_verus_matches_expected` と `every_blessed_expectation_matches_the_lowering` が落ちる。期待は手で直さず、生成物から作り直す。
 
 ```bash
 ebykn-limited cargo xtask golden-bless            # 全ケース。ケースを挙げれば、そのケースだけ（golden-bless stack drop）
 git diff -- tests/golden                          # 意図した変更だけか読む
 ebykn-limited cargo test -p ebykn --test golden   # 作り直した期待が比較を通る
-ebykn-limited cargo xtask golden-verify           # Verus の結果（expected/status.txt）が変わらない
+ebykn-limited cargo xtask golden-verify           # Verus の結果が expected/status.txt と一致する
 ```
 
 - 差分は 1 行ずつ読む。変えたつもりのない形が変わっていたら、作り直した期待をコミットせず、書き下しの方を直す。期待を作り直すと、どんな出力でも比較は通る。差分を読むのが検査になる。
-- `golden-verify` は Verus が要る（`cargo xtask verus-install`）。`status.txt` が変わったら、検証の結果が変わったということなので、それが意図したものかを PR 本文に書く。`status.txt` は作り直さない。
+- `golden-verify` は Verus が要る（`cargo xtask verus-install`）。`golden-verify` は `status.txt` を書き換えず、結果が違えば落ちる。検証の結果の変化が意図どおりなら、`status.txt` を手で直し、何がなぜ変わったかを PR 本文に書く。`golden-bless` は `status.txt` を作り直さない。
 - `golden-bless` は `Cargo.lock` に触らない。依存の版を変えたときは、別に作り直す（`OPEN.md` の依存の版の固定）。
-- 期待にはコメントを書かない。ケースの説明は、ケースの `README.md`（`tests/golden/stack/README.md` など）に書く。作り直すと消えるコメントが期待にあれば、`golden-bless` は何も書かずに止まる。そのときはコメントを `README.md` に移してから作り直す。
+- 期待は生成物そのもの（バイト単位で同じ）にし、コメントを書かない。ケースの説明は、ケースの `README.md`（`tests/golden/stack/README.md` など）に書く。期待にコメントを足すと、`every_blessed_expectation_matches_the_lowering` が落ちる。作り直すと消えるコメント（生成物に同じ本文がないもの）が期待にあれば、`golden-bless` は何も書かずに、その位置と本文を挙げて止まる。そのときはコメントを `README.md` に移してから作り直す。
+
+新しいケースを足すときは、`tests/golden/<名前>/` に `Ebykn.toml`・`src/`・`expected/diag.txt` を置いてから、次のようにする。
+
+```bash
+ebykn-limited cargo xtask golden-bless <名前>      # expected/verus/ の src/ と Cargo.toml を作る
+ebykn-limited cargo generate-lockfile --manifest-path tests/golden/<名前>/expected/verus/Cargo.toml   # 依存の版を固定する
+```
+
+- `Cargo.lock` の vstd が固定した版であることは `check-verus-pin` が確かめる。
+- 検証の結果の期待（`expected/status.txt`）は、`ebykn-limited cargo build -p ebykn` のあと、ケースのディレクトリで `ebykn-limited <リポジトリ>/target/debug/ebykn verify` を走らせ、出力を読んで意図どおりなら、その出力をそのまま書く。書き出した `build/verus/` はコミットしない。
 
 ## 2. 本文を書く
 

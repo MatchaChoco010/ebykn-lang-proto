@@ -4,8 +4,9 @@
 //! （`examples/golden_bless.rs` からこのモジュールを呼ぶ）。比べ方と作り直し方を同じ場所に置き、作り直した
 //! 期待が比較を通ることをテストで固定する。
 //!
-//! 期待には手で書いたコメントを置かない（ケースの説明は `README.md` に書く。`OPEN.md`）。比較はコメントを
-//! 見ないので、置いても通るが、作り直すと消える。作り直しは、消えるコメントがあれば何も書かずに止まる。
+//! 期待は生成物そのもの（バイト単位で同じ）にし、手で書いたコメントを置かない（ケースの説明は `README.md`
+//! に書く。`OPEN.md`）。`every_blessed_expectation_matches_the_lowering` がこれを確かめる。作り直しは、消える
+//! コメント（生成物に同じ本文がないもの）があれば、何も書かずに止まる。
 
 #![allow(dead_code)] // 比べる側（テスト）と作り直す側（example）で使う関数が違う。
 
@@ -59,7 +60,12 @@ pub fn generate(dir: &Path) -> Result<Vec<(String, String)>, String> {
     let name = case_name(dir);
     let report = check_project(dir);
     let output = ebykn::lower_report(&report)
-        .ok_or_else(|| format!("{name}: 検査が通らないので書き下せません"))??;
+        .ok_or_else(|| {
+            format!(
+                "{name}: 検査が通らないので書き下せません（`ebykn check tests/golden/{name}` で確かめられます）\n{}",
+                report.render(ebykn_syntax::diag::Lang::En).join("\n")
+            )
+        })??;
     let mut out: Vec<(String, String)> =
         output.files.into_iter().map(|f| (f.rel, f.text)).collect();
     out.sort();
@@ -155,14 +161,58 @@ fn expected_rs(expected: &Path) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// コメントの印の数。`.rs` は `//` と `/*`、`Cargo.toml` は `#`。文字列の中のものも数える
-/// （生成物の文字列にあるものは、作り直したあとにも同じ数だけ残るので、消えたことにはならない）。
-fn comment_marks(rel: &str, text: &str) -> usize {
+/// コメント（行番号と本文）。`.rs` は `//` から行末までと `/* .. */`、`Cargo.toml` は `#` から行末まで。
+/// 文字列の中のものも拾う（生成物の文字列にあるものは、作り直したあとにも同じ本文で残るので、消えたことには
+/// ならない）。
+fn comments(rel: &str, text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
     if rel.ends_with(".toml") {
-        text.matches('#').count()
-    } else {
-        text.matches("//").count() + text.matches("/*").count()
+        for (i, l) in text.lines().enumerate() {
+            if let Some(at) = l.find('#') {
+                out.push((i + 1, l[at..].trim_end().to_string()));
+            }
+        }
+        return out;
     }
+    let mut rest = text;
+    let mut line = 1;
+    loop {
+        let (Some(at), kind) = (match (rest.find("//"), rest.find("/*")) {
+            (Some(a), Some(b)) if b < a => (Some(b), "/*"),
+            (Some(a), _) => (Some(a), "//"),
+            (None, Some(b)) => (Some(b), "/*"),
+            (None, None) => (None, ""),
+        }) else {
+            return out;
+        };
+        line += rest[..at].matches('\n').count();
+        let body = &rest[at..];
+        let len = if kind == "//" {
+            body.find('\n').unwrap_or(body.len())
+        } else {
+            body.find("*/").map_or(body.len(), |e| e + 2)
+        };
+        out.push((line, body[..len].trim_end().to_string()));
+        line += body[..len].matches('\n').count();
+        rest = &body[len..];
+    }
+}
+
+/// `before` のコメントのうち、`after` に同じ本文がない（作り直すと消える）もの。同じ本文が複数あれば数も比べる。
+fn lost_comments(rel: &str, before: &str, after: Option<&str>) -> Vec<(usize, String)> {
+    let mut left: Vec<String> = after
+        .map(|a| comments(rel, a).into_iter().map(|(_, c)| c).collect())
+        .unwrap_or_default();
+    let mut lost = Vec::new();
+    for (line, c) in comments(rel, before) {
+        match left.iter().position(|x| *x == c) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => lost.push((line, c)),
+        }
+    }
+    lost
 }
 
 /// 作り直しの結果。
@@ -176,8 +226,8 @@ pub struct Blessed {
 
 /// `expected/verus/` を生成物から作り直す。`Cargo.lock` には触らない。
 ///
-/// 今の期待に、生成物より多くのコメントの印があるファイル（作り直すと手で書いたコメントが消える）や、
-/// 消すことになる `.rs` にコメントがあれば、何も書かずに失敗する。
+/// 今の期待のコメントのうち、生成物に同じ本文がないもの（作り直すと消えるもの。消すことになる `.rs` の
+/// コメントを含む）があれば、何も書かずに、その位置と本文を挙げて失敗する。
 pub fn bless(dir: &Path) -> Result<Blessed, String> {
     let name = case_name(dir);
     let expected = dir.join("expected/verus");
@@ -199,16 +249,16 @@ pub fn bless(dir: &Path) -> Result<Blessed, String> {
         let after = generated
             .iter()
             .find(|(r, _)| r == rel)
-            .map_or(0, |(r, t)| comment_marks(r, t));
-        if comment_marks(rel, before) > after {
-            lost.push(rel.clone());
+            .map(|(_, t)| t.as_str());
+        for (line, c) in lost_comments(rel, before, after) {
+            lost.push(format!("  expected/verus/{rel}:{line}: {c}"));
         }
     }
     if !lost.is_empty() {
         return Err(format!(
-            "{name}: 作り直すと expected/verus/ の {} のコメントが消えます。何も書いていません。\
-             コメントはケースの README.md に移してから作り直してください",
-            lost.join("、")
+            "{name}: 作り直すと expected/verus/ の次のコメントが消えるので、何も書いていません。\
+             コメントはケースの README.md に移してから作り直してください\n{}",
+            lost.join("\n")
         ));
     }
     let mut done = Blessed::default();

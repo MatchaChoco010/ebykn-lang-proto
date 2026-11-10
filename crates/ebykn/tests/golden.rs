@@ -307,7 +307,8 @@ fn with_copy<R>(case: &str, tag: &str, f: impl FnOnce(&Path) -> R) -> R {
     r
 }
 
-/// 今のどのケースも、作り直せて（期待に消えるコメントがない）、作り直した期待が比較を通る。
+/// 今のどのケースも、コミットされた期待が生成物そのもの（作り直しても何も変わらない）で、比較を通る。
+/// 期待にどんな形のコメントを足しても、ここで落ちる（期待にコメントを置かない。`OPEN.md`）。
 #[test]
 fn every_blessed_expectation_matches_the_lowering() {
     let mut blessed = Vec::new();
@@ -317,10 +318,14 @@ fn every_blessed_expectation_matches_the_lowering() {
         }
         let name = c.file_name().unwrap().to_string_lossy().into_owned();
         let r = with_copy(&name, &name, |dir| {
-            golden_lowered::bless(dir)?;
-            compare_case(dir)
+            let b = golden_lowered::bless(dir)?;
+            Ok::<_, String>((b, compare_case(dir)?))
         });
-        assert_eq!(r, Ok("verus"), "{name}");
+        assert_eq!(
+            r,
+            Ok((golden_lowered::Blessed::default(), "verus")),
+            "{name}: 期待が生成物と違います（cargo xtask golden-bless {name} で作り直し、差分を読んでください）"
+        );
         blessed.push(name);
     }
     assert!(blessed.iter().any(|n| n == "stack"), "{blessed:?}");
@@ -361,22 +366,48 @@ fn bless_repairs_a_broken_expectation() {
 /// 期待に手で書いたコメントがあれば、作り直しは何も書かずに失敗する（コメントを消さない）。
 #[test]
 fn fails_to_bless_when_it_would_erase_comments() {
-    let cases: [(&str, &str, &str); 4] = [
-        ("src/lib.rs", "verus! {\n", "verus! {\n// 手で書いた説明\n"),
+    let cases: [(&str, &str, &str, &str); 6] = [
+        (
+            "src/lib.rs",
+            "verus! {\n",
+            "verus! {\n// 手で書いた説明\n",
+            "// 手で書いた説明",
+        ),
+        // 生成物にあるコメントに書き足したもの（印の数は変わらない）。
+        (
+            "src/lib.rs",
+            "} // verus!",
+            "} // verus! 手で書いた説明",
+            "// verus! 手で書いた説明",
+        ),
+        // 生成物にあるコメントと同じ本文を、もう 1 つ足したもの。
+        (
+            "src/lib.rs",
+            "verus! {\n",
+            "verus! {\n// verus!\n",
+            "// verus!",
+        ),
         (
             "src/lib.rs",
             "verus! {\n",
             "verus! {\n/* 手で書いた説明 */\n",
+            "/* 手で書いた説明 */",
         ),
         (
             "Cargo.toml",
             "[workspace]\n",
             "# 手で書いた説明\n[workspace]\n",
+            "# 手で書いた説明",
         ),
         // 生成物にないので消すことになる `.rs` のコメント。
-        ("src/stale.rs", "", "// 手で書いた説明\n"),
+        (
+            "src/stale.rs",
+            "",
+            "// 手で書いた説明\n",
+            "// 手で書いた説明",
+        ),
     ];
-    for (i, (rel, from, to)) in cases.into_iter().enumerate() {
+    for (i, (rel, from, to, comment)) in cases.into_iter().enumerate() {
         with_copy("stack", &format!("comment{i}"), |dir| {
             let p = dir.join("expected/verus").join(rel);
             let before = std::fs::read_to_string(&p).unwrap_or_default();
@@ -392,8 +423,14 @@ fn fails_to_bless_when_it_would_erase_comments() {
             let edited = std::fs::read_to_string(&p).unwrap();
 
             let err = golden_lowered::bless(dir).unwrap_err();
-            assert!(err.contains("コメントが消えます"), "{rel}: {err}");
-            assert!(err.contains(rel), "{rel}: {err}");
+            assert!(err.contains("コメントが消える"), "{rel}: {err}");
+            // 消える行を、位置と本文で挙げる。
+            assert!(
+                err.lines()
+                    .any(|l| l.starts_with(&format!("  expected/verus/{rel}:"))
+                        && l.ends_with(comment)),
+                "{rel}: {err}"
+            );
             // 何も書いていない。
             assert_eq!(std::fs::read_to_string(&p).unwrap(), edited, "{rel}");
             assert_eq!(std::fs::read_to_string(&lib).unwrap(), broken, "{rel}");
