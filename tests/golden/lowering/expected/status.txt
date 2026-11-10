@@ -29,4 +29,4 @@ verified lowering::set_and_put
 verified lowering::push_item
 verified lowering::count_items
 verified lowering::paren_write
-results 24 verified, 0 errors
+results 27 verified, 0 errors

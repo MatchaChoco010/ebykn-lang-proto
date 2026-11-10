@@ -163,6 +163,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "CellPointsTo",
     "CellId",
     "Loc",
+    "LocArg",
     "SeqExt",
     "View",
 ];

@@ -117,6 +117,49 @@ ensures final(r).contains(p), final(r).index(p) == old(r).index(p), {
     }
 }
 
+pub struct Acct { pub bal: u64, }
+
+pub struct Bank { n: u64, __eyk_erased_accts: Tracked < Region < Cell < Acct >>>, }
+
+impl Bank {
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn balance(&self, c: &Cell < Acct >) -> (b: u64)
+    requires self.__eyk_erased_accts@.contains(*c),
+    ensures b == self.__eyk_erased_accts@.index(*c).bal, {
+        {
+            let tracked __eyk_perm_c = self.__eyk_erased_accts.borrow().borrow(c);
+            { (*c.read(Tracked(&*__eyk_perm_c))).bal }
+        }
+    }
+
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn deposit(&mut self, c: &Cell < Acct >)
+    requires old(self).__eyk_erased_accts@.contains(*c), old(self).__eyk_erased_accts@.index(*c).bal < 100,
+    ensures final(self).__eyk_erased_accts@.contains(*c), final(self).__eyk_erased_accts@.index(*c).bal == old(self).__eyk_erased_accts@.index(*c).bal + 1, {
+        {
+            let tracked __eyk_perm_c = self.__eyk_erased_accts.borrow_mut().remove(c);
+            let __eyk_res = {
+                c.borrow_mut(Tracked(&mut __eyk_perm_c)).bal = (*c.read(Tracked(&__eyk_perm_c))).bal + 1;
+            };
+            #[allow(unreachable_code)] let __eyk_res = {
+                proof {
+                    self.__eyk_erased_accts.borrow_mut().insert(__eyk_perm_c);
+                }
+                __eyk_res
+            };
+            __eyk_res
+        }
+    }
+
+}
+
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn ref_key(p: &Ptr < Node >, Tracked(r): Tracked <&mut Region < Ptr < Node >>>)
+requires old(r).contains(*p),
+ensures final(r).contains(*p), final(r).index(*p) == old(r).index(*p), {
+    let tracked __eyk_perm_p = r.remove(p);
+    proof {
+        r.insert(__eyk_perm_p);
+    }
+}
+
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn bump(x: &mut u64) -> u64
 requires *old(x) < 100,
 returns *old(x), {
