@@ -7,6 +7,7 @@
 mod attrs;
 mod calls;
 mod erased;
+mod opaque;
 mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,9 +22,10 @@ use ebykn_syntax::span::Span;
 use crate::Diags;
 use crate::facts::{Facts, RegionRef, SpanKey};
 use crate::index::{
-    ErasedKind, FnInfo, Index, ItemPath, PreludeFn, Resolved, StructInfo, is_region_type,
-    pat_ident, region_mode,
+    ErasedKind, Index, ItemPath, PreludeFn, Resolved, StructInfo, is_region_type, pat_ident,
+    region_mode,
 };
+use opaque::Opaque;
 
 /// Γ の一つの項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +62,7 @@ struct Scope {
     var_types: BTreeMap<String, ast::Type>,
     locals: BTreeSet<String>,
     known: BTreeSet<String>,
+    local: crate::index::LocalScope,
 }
 
 /// ループ・ラベル付きブロックの枠。
@@ -121,10 +124,25 @@ pub struct Walker<'a> {
     try_known: bool,
     /// `let X = ..;` で受ける、権限を返す式の位置（S1。それ以外で権限を返す式は E0505）。
     bound_source: Option<SpanKey>,
+    /// 名前付きの戻り値の名前（契約の中だけのローカル変数。[`Self::contract`]）。
+    ret_name: Option<String>,
+    /// 本体の中の項目（[`crate::index::LocalScope`]）。ブロックの終わりで戻す。索引に入らないので、安全側の
+    /// 規則（[`Self::unresolvable_path`]）は、`use` 以外の項目を根に持つパスを通し（権限に行き着く項目は
+    /// [`crate::check_nested_items`] が拒む）、`use` の別名とクレートの中の glob から来る名前は行き先のパスに
+    /// 置き換えて検査する。
+    local: crate::index::LocalScope,
 }
 
 impl<'a> Walker<'a> {
     pub fn new(cx: FnCx<'a>, diags: &'a mut Diags, facts: &'a mut Facts) -> Self {
+        // 本体の中の項目なら、囲む本体の項目の名前を引き継ぐ。
+        let outer = cx
+            .index
+            .nested_scopes
+            .borrow()
+            .last()
+            .cloned()
+            .unwrap_or_default();
         Walker {
             cx,
             diags,
@@ -143,13 +161,21 @@ impl<'a> Walker<'a> {
             borrows: Vec::new(),
             try_known: false,
             bound_source: None,
+            ret_name: None,
             attr_ok: false,
             attr_lead: None,
+            local: outer,
         }
     }
 
     /// 引数と `uses` から入口の Γ と R を作る（仕様 §6.2 の「導入」）。
     pub fn enter(&mut self, sig: &ast::Signature, contract: &ast::Contract) {
+        // 名前付きの戻り値（`-> (r: u64)`）は契約の中だけのローカル変数（本体の `r` はモジュールの名前を指す）。
+        self.ret_name = sig
+            .ret
+            .as_ref()
+            .and_then(|r| r.name.as_ref())
+            .map(|n| n.name.clone());
         // 名前が `Option` / `Result` でも、クレートで定義した型なら std の型ではない（展開の形が合わない）。
         self.try_known = sig.ret.as_ref().is_some_and(|r| {
             try_type(&r.ty)
@@ -207,6 +233,16 @@ impl<'a> Walker<'a> {
 
     /// 契約の式（論理文脈）。
     pub fn contract(&mut self, contract: &ast::Contract) {
+        // 名前付きの戻り値は、契約を見ている間だけローカル変数にする。
+        let outer_locals = self.locals.clone();
+        if let Some(r) = &self.ret_name {
+            self.locals.insert(r.clone());
+        }
+        self.contract_clauses(contract);
+        self.locals = outer_locals;
+    }
+
+    fn contract_clauses(&mut self, contract: &ast::Contract) {
         let prev = std::mem::replace(&mut self.logic, true);
         for c in &contract.clauses {
             match &c.kind {
@@ -532,6 +568,7 @@ impl<'a> Walker<'a> {
             var_types: self.var_types.clone(),
             locals: self.locals.clone(),
             known: self.known.clone(),
+            local: self.local.clone(),
         }
     }
 
@@ -543,6 +580,7 @@ impl<'a> Walker<'a> {
         self.var_types = s.var_types;
         self.locals = s.locals;
         self.known.extend(s.known);
+        self.local = s.local;
     }
 
     /// パターンが束縛する名前をローカルに足す。
@@ -588,6 +626,12 @@ impl<'a> Walker<'a> {
     fn block(&mut self, b: &Block) -> bool {
         // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで減らさない。
         let saved = self.save_scope();
+        // 本体の中の項目はブロックのどこからでも見えるので、先に名前を集める。
+        for s in &b.stmts {
+            if let StmtKind::Item(item) = &s.kind {
+                self.add_local_item(item);
+            }
+        }
         let mut diverges = false;
         for s in &b.stmts {
             if self.stmt(s) {
@@ -602,6 +646,12 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
+                // 本体の中の項目の本体からも、同じ本体の項目（`struct L; impl L { .. L .. }`）が見える。
+                self.cx
+                    .index
+                    .nested_scopes
+                    .borrow_mut()
+                    .push(self.local.clone());
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,
@@ -609,6 +659,7 @@ impl<'a> Walker<'a> {
                     self.diags,
                     self.facts,
                 );
+                self.cx.index.nested_scopes.borrow_mut().pop();
                 false
             }
             StmtKind::Empty => false,
@@ -1109,6 +1160,7 @@ impl<'a> Walker<'a> {
                 ..
             } => {
                 let prev = std::mem::replace(&mut self.logic, true);
+                let outer_locals = self.locals.clone();
                 for b in binders {
                     if let ast::BinderKind::In(x) = &b.kind {
                         self.expr(x);
@@ -1116,9 +1168,12 @@ impl<'a> Walker<'a> {
                             self.facts.map_binders.insert(x.span.into());
                         }
                     }
+                    // 束縛した名前は本体の中のローカル変数（安全側の規則が引けない名前として止めない）。
+                    self.locals.insert(b.ident.name.clone());
                 }
                 self.triggers(triggers);
                 self.expr(body);
+                self.locals = outer_locals;
                 self.logic = prev;
                 false
             }
@@ -1148,10 +1203,11 @@ impl<'a> Walker<'a> {
                 region,
                 body,
             } => self.borrow(e, *mutable, region, body),
-            ExprKind::Path { qself: None, path } if path.as_ident().is_some() => {
+            ExprKind::Path { qself, path } => {
                 // 表の関数の名前の値としての参照（`let r = requires; r(..)`）。ローカル変数なら通す。
-                let i = path.as_ident().expect("ident");
-                if let Some(kind) = ebykn_syntax::reserved::kind_of(&i.name)
+                if qself.is_none()
+                    && let Some(i) = path.as_ident()
+                    && let Some(kind) = ebykn_syntax::reserved::kind_of(&i.name)
                     && ebykn_syntax::reserved::is_call(kind)
                     && !self.locals.contains(&i.name)
                 {
@@ -1159,18 +1215,28 @@ impl<'a> Walker<'a> {
                     let m = crate::names::message(kind, &i.name, &i.name, false);
                     self.diags.push(e.span, m);
                 }
-                false
-            }
-            ExprKind::Path { .. } | ExprKind::Lit(_) | ExprKind::Infer => false,
-            // Rust のトークンのまま持つ式（`.await` など）は中を読まないので、その中の脱出は
-            // 権限を戻せず、§6.2 の検査も見ない（E0003。#21 の案 D）。
-            ExprKind::Rust(tk) => {
-                if jump_in_tokens(tk.tokens.clone()) {
+                // 権限を持つ関数は、呼び出しの頭（`f(..)`）にだけ書ける（`call` が引く）。ここに来るのは値と
+                // しての参照か修飾パスの呼び出しで、§6.2 の検査がその呼び出しを見ない（E0003。#98）。
+                let local = qself.is_none()
+                    && path
+                        .as_ident()
+                        .is_some_and(|i| self.locals.contains(&i.name));
+                if !local && self.perm_fn_path(qself.as_ref(), path) {
                     self.diags.push(
                         e.span,
-                        Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInRustExpr)),
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::PermFnValue)),
+                    );
+                } else if !local && qself.is_none() && self.unresolvable_path(path) {
+                    self.diags.push(
+                        e.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::UnresolvedPath)),
                     );
                 }
+                false
+            }
+            ExprKind::Lit(_) | ExprKind::Infer => false,
+            ExprKind::Rust(tk) => {
+                self.opaque_tokens(e.span, &tk.tokens, Opaque::RustExpr);
                 false
             }
         }
@@ -1344,6 +1410,19 @@ impl<'a> Walker<'a> {
         let mut d = false;
         let resolved = match &func.kind {
             ExprKind::Path { qself: None, path } => {
+                // 関連型・型の引数・行き先を引けない別名を通るパスは、権限を受け渡すかを引けない（E0003）。
+                if self.type_relative(path) {
+                    self.diags.push(
+                        func.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::TypeRelativeCall)),
+                    );
+                } else if self.unresolvable_path(path) {
+                    // 解決できず、外（std と依存クレート）とも言えない頭（安全側。#75 の再確認）。
+                    self.diags.push(
+                        func.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::UnresolvedPath)),
+                    );
+                }
                 let segs: Vec<String> =
                     path.segments.iter().map(|s| s.ident.name.clone()).collect();
                 Some(self.cx.index.resolve(
@@ -1478,7 +1557,16 @@ impl<'a> Walker<'a> {
         let saved_borrows = std::mem::take(&mut self.borrows);
         self.closure_outer = Some(outer);
         let prev = std::mem::replace(&mut self.logic, true);
+        // 名前付きの戻り値（`-> (b: u64)`）は、クロージャの契約の中だけのローカル変数。
+        let outer_ret = std::mem::replace(
+            &mut self.ret_name,
+            c.ret
+                .as_ref()
+                .and_then(|r| r.name.as_ref())
+                .map(|n| n.name.clone()),
+        );
         self.contract(&c.contract);
+        self.ret_name = outer_ret;
         self.logic = prev;
         self.expr(&c.body);
         self.env = saved_env;
@@ -1519,9 +1607,12 @@ impl<'a> Walker<'a> {
     }
 
     fn if_expr(&mut self, e: &Expr, cond: &Expr, then: &Block, else_: Option<&Expr>) -> bool {
+        // 条件の `if let` / let チェーンの束縛は、then のブロックの中だけで見える。
+        let outer_locals = self.locals.clone();
         self.expr(cond);
         let start = self.env.clone();
         let d1 = self.block(then);
+        self.locals = outer_locals;
         let env1 = std::mem::replace(&mut self.env, start.clone());
         let (env2, d2) = match else_ {
             Some(x) => {
@@ -1727,23 +1818,9 @@ impl<'a> Walker<'a> {
         )
     }
 
-    /// 中を読まないマクロの引数（std のマクロ）の中の権限の操作を探す。見つけたら E0003。
-    /// グループ（括弧）の境界をまたいで形を読まない。`.` / `::` の後の名前はパスの途中か
-    /// メソッドなので、`take` などのキーワードとしては読まない。
     fn macro_tokens(&mut self, m: &ast::Macro) {
         self.field_dot_tokens(&m.tokens, m.span);
-        if self.perm_in_tokens(m.tokens.clone()) {
-            self.diags.push(
-                m.span,
-                Message::Check(CheckMsg::Unimplemented(Unimpl::PermInMacro)),
-            );
-        }
-        if jump_in_tokens(m.tokens.clone()) {
-            self.diags.push(
-                m.span,
-                Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInMacro)),
-            );
-        }
+        self.opaque_tokens(m.span, &m.tokens, Opaque::MacroArgs);
     }
 
     /// 式として読むマクロの引数の中の、抜ける式（E0003）。
@@ -1754,111 +1831,6 @@ impl<'a> Walker<'a> {
                 Message::Check(CheckMsg::Unimplemented(Unimpl::JumpInMacro)),
             );
         }
-    }
-
-    fn perm_in_tokens(&self, ts: proc_macro2::TokenStream) -> bool {
-        use proc_macro2::{Delimiter, TokenTree};
-        let tts: Vec<TokenTree> = ts.into_iter().collect();
-        let id = |t: Option<&TokenTree>| match t {
-            Some(TokenTree::Ident(i)) => Some(i.to_string()),
-            _ => None,
-        };
-        let pc = |t: Option<&TokenTree>, c: char| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == c);
-        let grp = |t: Option<&TokenTree>, d: Delimiter| matches!(t, Some(TokenTree::Group(g)) if g.delimiter() == d);
-        let held = |n: &str| {
-            self.env.contains_key(n)
-                || self.regions.contains(n)
-                || self.known.contains(n)
-                || self
-                    .closure_outer
-                    .as_ref()
-                    .is_some_and(|(e, r)| e.contains_key(n) || r.contains(n))
-        };
-        // 領域添字（`x[..]`、`self@x[..]`）が `tts[j]` から始まるか。
-        let region_index = |j: usize| {
-            (id(tts.get(j)).is_some() && grp(tts.get(j + 1), Delimiter::Bracket))
-                || (id(tts.get(j)).as_deref() == Some("self") && pc(tts.get(j + 1), '@'))
-        };
-        for (i, tt) in tts.iter().enumerate() {
-            if let TokenTree::Group(g) = tt
-                && self.perm_in_tokens(g.stream())
-            {
-                return true;
-            }
-            let Some(n) = id(Some(tt)) else {
-                continue;
-            };
-            let prev = i.checked_sub(1).and_then(|j| tts.get(j));
-            let after_dot = pc(prev, '.');
-            let after_path = pc(prev, ':') && i >= 2 && pc(tts.get(i - 2), ':');
-            let next = tts.get(i + 1);
-            // メソッドの呼び出し `x.f(..)` で `f` が `uses` / `gives` を持つ（E0514 の形）。
-            if after_dot {
-                if self.cx.index.perm_method_names.contains(&n) && grp(next, Delimiter::Parenthesis)
-                {
-                    return true;
-                }
-                if n == "free" && grp(next, Delimiter::Parenthesis) {
-                    // `X.free()` の `X` が権限を持つ名前か。
-                    if let Some(x) = i.checked_sub(2).and_then(|j| id(tts.get(j)))
-                        && held(&x)
-                    {
-                        return true;
-                    }
-                }
-                continue;
-            }
-            // パスの最後の名前の呼び出し：`uses` / `gives` を持つ関数か、`Ptr::new` などか。
-            if grp(next, Delimiter::Parenthesis) {
-                let mut segs = vec![n.clone()];
-                let mut j = i;
-                while j >= 3 && pc(tts.get(j - 1), ':') && pc(tts.get(j - 2), ':') {
-                    match id(tts.get(j - 3)) {
-                        Some(s) => {
-                            segs.insert(0, s);
-                            j -= 3;
-                        }
-                        None => break,
-                    }
-                }
-                let r = self
-                    .cx
-                    .index
-                    .resolve(self.cx.module, false, &segs, self.cx.self_ty);
-                if matches!(r, Resolved::Prelude(PreludeFn::Alloc { .. }))
-                    || self.cx.index.callee(&r).is_some_and(FnInfo::has_perms)
-                {
-                    return true;
-                }
-            }
-            if after_path {
-                continue;
-            }
-            let found = match n.as_str() {
-                "self" => pc(next, '@'),
-                "take" | "put" => region_index(i + 1),
-                "borrow" => {
-                    region_index(i + 1)
-                        || (id(next).as_deref() == Some("mut") && region_index(i + 2))
-                }
-                "leak" => id(next).is_some() && pc(tts.get(i + 2), '@'),
-                // 呼び出しで領域を渡す `f(x, uses &mut r)`（#19 の既定 P1。`uses` は予約語）。
-                "uses" => true,
-                _ => {
-                    // `*X`（前の `*` の前が式でなければ参照外し。`2 * x` は掛け算）。
-                    let deref = pc(prev, '*')
-                        && !matches!(
-                            i.checked_sub(2).and_then(|j| tts.get(j)),
-                            Some(TokenTree::Ident(_) | TokenTree::Literal(_) | TokenTree::Group(_))
-                        );
-                    held(&n) && (pc(next, '@') || deref)
-                }
-            };
-            if found {
-                return true;
-            }
-        }
-        false
     }
 }
 
@@ -1936,16 +1908,4 @@ fn try_type(t: &ast::Type) -> bool {
             .is_some_and(|s| matches!(s.ident.name.as_str(), "Option" | "Result")),
         _ => false,
     }
-}
-
-/// 中を読まないマクロの引数の中の `return` / `break` / `continue` / `?`（グループの中も見る）。クロージャの
-/// 中かどうかは読み分けない（#21 の既定 D。読めない形は大きく失敗させる）。
-fn jump_in_tokens(ts: proc_macro2::TokenStream) -> bool {
-    use proc_macro2::TokenTree;
-    ts.into_iter().any(|t| match t {
-        TokenTree::Ident(i) => matches!(i.to_string().as_str(), "return" | "break" | "continue"),
-        TokenTree::Punct(p) => p.as_char() == '?',
-        TokenTree::Group(g) => jump_in_tokens(g.stream()),
-        TokenTree::Literal(_) => false,
-    })
 }

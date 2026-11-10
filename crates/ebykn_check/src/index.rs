@@ -5,6 +5,7 @@
 //! 名前は「現在のモジュール → `use` 宣言 → prelude」の順に引く。解決できない名前は外のもの
 //! （そのまま Verus に渡す）。`interface.json`（`[ebykn-dependencies]`）は M5。
 
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use ebykn_syntax::ast::{self, ItemKind, PermMode, TypeKind, UsesItem, Vis};
@@ -129,6 +130,8 @@ enum Ext {
     External(Vec<String>),
     /// モジュールの中に見つからない。
     NotFound,
+    /// 深さの守りで打ち切った（分からない。外とも見つからないとも言わない）。
+    Cut,
 }
 
 /// 一つのモジュールの名前。
@@ -153,6 +156,63 @@ pub enum PreludeFn {
     Alloc { cell: bool },
 }
 
+/// 名前を通して権限に行き着けるか（#117）。「行き着かない」と言えるとき（肯定の事実）だけ `false` にする。
+/// [`perm_resolved`] に加え、行き先を引けない型の別名（`alias_unresolved`）、`uses` / `gives` を持つメソッド
+/// のある型（`WW::mkw()`）、prelude のクレートの根、そうした名前を持つモジュール（`mm::mk2()`。入れ子の
+/// モジュールと、モジュールの中の `use`（glob を含む）をたどる）。モジュールの中の名前と glob のパスを
+/// 解決できない（`Unknown`、深さの打ち切り）ときは、外の根と言えなければ行き着くとみなす。可視性は見ない。
+pub fn leads_to_perm(index: &Index, r: &Resolved) -> bool {
+    leads_to_perm_in(index, r, &mut BTreeSet::new())
+}
+
+fn leads_to_perm_in(index: &Index, r: &Resolved, seen: &mut BTreeSet<ItemPath>) -> bool {
+    if perm_resolved(index, r) {
+        return true;
+    }
+    match r {
+        // prelude のクレートの根は権限の型を持つ（`use ebykn_prelude as ep;`。#131）。
+        Resolved::PreludeCrate => true,
+        Resolved::Type(p) => {
+            alias_unresolved(index, p, 0)
+                || index
+                    .methods
+                    .get(p)
+                    .is_some_and(|ms| ms.values().any(FnInfo::has_perms))
+        }
+        Resolved::Module(m) => {
+            // たどり中のモジュール（循環）。一つの問い合わせの中で一度ずつたどるので、答えは変わらない。
+            if !seen.insert(m.clone()) {
+                return false;
+            }
+            let Some(scope) = index.modules.get(m) else {
+                return true;
+            };
+            // 解決できない名前とパスは、外の根と言えるときだけ行き着かないとする。
+            let via = |path: &[String], seen: &mut BTreeSet<ItemPath>| match index
+                .resolve(m, false, path, None)
+            {
+                Resolved::Unknown => !index.is_external_path(m, path),
+                r => leads_to_perm_in(index, &r, seen),
+            };
+            let named: Vec<String> = scope
+                .items
+                .keys()
+                .chain(scope.imports.iter().filter_map(|i| match i {
+                    Import::Name { alias, .. } => Some(alias),
+                    Import::Glob { .. } => None,
+                }))
+                .cloned()
+                .collect();
+            named.iter().any(|n| via(std::slice::from_ref(n), seen))
+                || scope.imports.iter().any(|i| match i {
+                    Import::Glob { path } => via(path, seen),
+                    Import::Name { .. } => false,
+                })
+        }
+        _ => false,
+    }
+}
+
 /// prelude が定義する型の名前。
 pub const PRELUDE_TYPES: &[&str] = &[
     "Invariant",
@@ -166,6 +226,41 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "SeqExt",
     "View",
 ];
+
+/// prelude の権限の型の名前（読まないトークンの中に現れたら権限の操作とみなす）。
+pub const PERM_TYPES: &[&str] = &["Ptr", "Cell", "Region", "PointsTo", "CellPointsTo"];
+
+/// 解決した名前が、権限の型・権限を作る関数・`uses` / `gives` を持つ関数か。
+pub fn perm_resolved(index: &Index, r: &Resolved) -> bool {
+    matches!(r, Resolved::Prelude(PreludeFn::Alloc { .. }))
+        || matches!(r, Resolved::PreludeType(t) if PERM_TYPES.contains(t))
+        || index.callee(r).is_some_and(FnInfo::has_perms)
+}
+
+/// 型の別名の行き先を引けないか（右辺が修飾パス `<T as Tr>::A`、別名の型の引数 `T`、`T::A`。別名の鎖も
+/// たどる）。
+pub fn alias_unresolved(index: &Index, p: &[String], depth: usize) -> bool {
+    let Some(a) = index.aliases.get(p) else {
+        return false;
+    };
+    if depth > 16 {
+        return true;
+    }
+    match &a.ty.kind {
+        TypeKind::Path { qself: Some(_), .. } => true,
+        TypeKind::Path { qself: None, path } => {
+            let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+            if segs.first().is_some_and(|f| a.params.contains(f)) {
+                return true;
+            }
+            match index.resolve_exact(&a.module, path.leading_colon, &segs, None) {
+                Resolved::Type(q) => alias_unresolved(index, &q, depth + 1),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
 
 /// 名前を解決した結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +278,10 @@ pub enum Resolved {
     Prelude(PreludeFn),
     /// prelude の型（`Ptr` など）。
     PreludeType(&'static str),
+    /// クレートの中の値（`const`・`static`・列挙子）。関数でも型でもない。
+    Value(ItemPath),
+    /// prelude のクレートの根（`ebykn_prelude`、その別名 `use ebykn_prelude as ep;`。#131）。
+    PreludeCrate,
     /// 解決できない（外のクレート、std、ローカル変数など）。
     Unknown,
 }
@@ -210,7 +309,120 @@ pub struct Index {
     pub gated_methods: BTreeSet<(ItemPath, String)>,
     /// 同じモジュール・同じ名前空間に同じ名前の定義が二つ以上ある位置（cfg で分けた定義など）。
     pub duplicates: Vec<Span>,
+    /// 依存クレートがコードで使われる名前（`Ebykn.toml` の `[dependencies]`。[`Index::is_external_root`]）。
+    pub dependencies: BTreeSet<String>,
+    /// [`Index::perm_fn_names`] と [`Index::perm_token_names`] の結果（索引ができたあとに一度だけ作る）。
+    perm_fn_names_cache: OnceCell<BTreeSet<String>>,
+    perm_token_names_cache: OnceCell<BTreeSet<String>>,
+    /// [`Index::find_ext`] が一つの問い合わせの中でたどった glob の（モジュール、名前、根か）。glob が
+    /// 互いに取り込み合っても、同じところを二度たどらない。
+    ext_seen: RefCell<BTreeSet<(ItemPath, String, bool)>>,
+    /// 検査している本体の中の項目を囲む本体の項目（[`LocalScope`]）。入れ子の本体ごとに積む。
+    pub nested_scopes: NestedScopes,
+    /// クレートのルートの `extern crate X as Y;`（extern prelude。別名 → 行き先のパス）。どのモジュールから
+    /// も `Y::..` と `::Y::..` で引ける。行き先は `crate`（`extern crate self as Y;`）か、クレートの名前。
+    pub extern_prelude: BTreeMap<String, Vec<String>>,
+    /// [`Index::lookup_scoped`] が見つけた結果（モジュール、名前、prelude を引くか）。見つかった結果だけを
+    /// 覚える（見つからなかった・深さで打ち切った・循環の途中だった結果は、問い合わせの順番で変わるので
+    /// 覚えない）。索引に項目を足すたびに消す。
+    lookup_cache: RefCell<BTreeMap<(ItemPath, String, bool), Resolved>>,
+    /// 一つの問い合わせ（いちばん外の [`Index::lookup_scoped`]）の中でたどった（モジュール、名前、prelude）。
+    /// glob が互いに取り込み合っても、同じところを二度たどらない（[`Index::find_ext`] の `ext_seen` と同じ）。
+    lookup_seen: RefCell<BTreeSet<(ItemPath, String, bool)>>,
+    lookup_active: std::cell::Cell<usize>,
 }
+
+/// [`Index::nested_scopes`] の型。
+pub type NestedScopes = RefCell<Vec<LocalScope>>;
+
+/// 関数の本体の中の項目（索引に入らない）。ブロックに入るときに集め、ブロックの終わりで戻し、入れ子の項目の
+/// 本体に引き継ぐ（[`crate::body::Walker`]）。
+#[derive(Debug, Clone, Default)]
+pub struct LocalScope {
+    /// `use` 以外の項目の名前（`fn`・型・定数など）。
+    pub items: BTreeSet<String>,
+    /// 行き先が外と分かる glob の `use`（`use std::collections::*;`）があるか。
+    pub ext_glob: bool,
+    /// クレートの中の glob の `use` の行き先（`use crate::Color::*;` の `[crate, Color]`）。
+    pub globs: Vec<Vec<String>>,
+    /// `use` の別名と、その行き先のパス（`use crate::m as mm;` の `mm` → `[crate, m]`）。
+    pub aliases: BTreeMap<String, Vec<String>>,
+}
+
+/// 外のクレートと std とみなす根の名前（[`Index::is_external_root`]）。std の prelude の名前と、`.eyk` が
+/// 裸の名前で書く vstd の名前（§3.1）、組み込みの型。
+const STD_ROOTS: &[&str] = &["std", "core", "alloc"];
+const STD_PRELUDE_NAMES: &[&str] = &[
+    "Vec",
+    "String",
+    "Box",
+    "Option",
+    "Some",
+    "None",
+    "Result",
+    "Ok",
+    "Err",
+    "ToString",
+    "ToOwned",
+    "Default",
+    "Iterator",
+    "IntoIterator",
+    "DoubleEndedIterator",
+    "ExactSizeIterator",
+    "Extend",
+    "FromIterator",
+    "Clone",
+    "Copy",
+    "Send",
+    "Sync",
+    "Sized",
+    "Unpin",
+    "Drop",
+    "Fn",
+    "FnMut",
+    "FnOnce",
+    "From",
+    "Into",
+    "TryFrom",
+    "TryInto",
+    "AsRef",
+    "AsMut",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "Hash",
+    "Debug",
+    "drop",
+    "Seq",
+    "Set",
+    "Map",
+    "int",
+    "nat",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "f32",
+    "f64",
+    "bool",
+    "char",
+    "str",
+    "size_of",
+    "size_of_val",
+    "align_of",
+    "align_of_val",
+    "Future",
+    "IntoFuture",
+];
 
 /// 型の別名の定義。
 #[derive(Debug, Clone)]
@@ -368,6 +580,16 @@ fn last_segment(ty: &ast::Type) -> Option<&str> {
 impl Index {
     /// モジュール `module` の項目の索引を作る（[`crate::project::Project::for_each_module`] から呼ぶ）。
     pub fn add_module(&mut self, module: &[String], file: FileId, items: &[ast::Item]) {
+        self.lookup_cache.borrow_mut().clear();
+        if module.is_empty() {
+            for item in items {
+                if let ItemKind::Rust(t) = &item.kind
+                    && let Some(Import::Name { alias, path }) = parse_extern_crate(&t.tokens)
+                {
+                    self.extern_prelude.insert(alias, path);
+                }
+            }
+        }
         let scope = self.modules.entry(module.to_vec()).or_default();
         let path_of = |name: &str| {
             let mut p = module.to_vec();
@@ -375,6 +597,7 @@ impl Index {
             p
         };
         let mut defs = Vec::new();
+        let mut rust_defs = Vec::new();
         // 名前空間（型とモジュール、値）ごとに、すでに見た名前。
         let mut seen: BTreeSet<(String, bool)> = BTreeSet::new();
         for item in items {
@@ -395,6 +618,16 @@ impl Index {
                     scope.imports.extend(parse_use(&t.tokens));
                     continue;
                 }
+                // `extern crate X as Y;` は `use X as Y;` と同じに引く（#127 の再確認）。
+                ItemKind::Rust(t) => {
+                    scope.imports.extend(parse_extern_crate(&t.tokens));
+                    for (n, kind) in rust_item_names(&t.tokens) {
+                        let p = path_of(&n);
+                        scope.items.insert(n, p.clone());
+                        rust_defs.push((p, kind));
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             let p = path_of(&name.name);
@@ -408,6 +641,9 @@ impl Index {
             }
             scope.items.insert(name.name.clone(), p.clone());
             defs.push((p, kind, item));
+        }
+        for (p, kind) in rust_defs {
+            self.kinds.insert(p, kind);
         }
         for (p, kind, item) in defs {
             self.kinds.insert(p.clone(), kind);
@@ -513,6 +749,7 @@ impl Index {
 
     /// 2 回目の走査：impl を型に結び付ける（型の名前の解決に全モジュールの名前が要る）。
     pub fn add_impls(&mut self, module: &[String], file: FileId, items: &[ast::Item]) {
+        self.lookup_cache.borrow_mut().clear();
         for item in items {
             let ItemKind::Impl(imp) = &item.kind else {
                 continue;
@@ -639,11 +876,14 @@ impl Index {
     /// （その先の `use` も）、`crate` / `self` / `super` をたどる。`root` は、パスの先頭（どこにもなければ
     /// 外のクレートか std の prelude の名前）か。モジュールの中をたどる途中なら、見つからないのは `NotFound`。
     fn find_ext(&self, m: &[String], segs: &[String], root: bool, depth: usize) -> Ext {
+        if depth == 0 {
+            self.ext_seen.borrow_mut().clear();
+        }
         let Some(first) = segs.first() else {
             return Ext::Module(m.to_vec());
         };
         if depth > 32 {
-            return Ext::NotFound;
+            return Ext::Cut;
         }
         let rest = &segs[1..];
         let into = |r: Ext| match r {
@@ -677,6 +917,19 @@ impl Index {
             return Ext::NotFound;
         };
         if let Some(p) = scope.items.get(first) {
+            // 型の別名は右辺のパスをたどる（`type V = Vec<u64>;` の `V::new` は std の `Vec::new`）。
+            if let Some(a) = self.aliases.get(p)
+                && let TypeKind::Path { qself: None, path } = &a.ty.kind
+                && !path.leading_colon
+                && !path
+                    .segments
+                    .first()
+                    .is_some_and(|f| a.params.contains(&f.ident.name))
+            {
+                let segs: Vec<String> =
+                    path.segments.iter().map(|s| s.ident.name.clone()).collect();
+                return into(self.find_ext(&a.module, &segs, true, depth + 1));
+            }
             return into(match self.kinds.get(p) {
                 Some(DefKind::Module) => Ext::Module(p.clone()),
                 _ => Ext::Crate,
@@ -690,16 +943,47 @@ impl Index {
             }
         }
         for imp in &scope.imports {
-            if let Import::Glob { path } = imp
-                && let Ext::Module(g) = self.find_ext(m, path, true, depth + 1)
+            let Import::Glob { path } = imp else {
+                continue;
+            };
+            // 同じ glob のパスを引いている途中なら飛ばす（glob のパスの根を引くと、同じ glob にまた来る循環）。
+            // 引き終えたら印を外す。
+            let key = (m.to_vec(), format!("glob {}", path.join("::")), true);
+            if !self.ext_seen.borrow_mut().insert(key.clone()) {
+                continue;
+            }
+            let found = self.find_ext(m, path, true, depth + 1);
+            self.ext_seen.borrow_mut().remove(&key);
+            // glob のパス自身を引いた結果も、打ち切り（`Cut`）は捨てずにそのまま返す（分からない）。
+            let g = match found {
+                Ext::Module(g) => g,
+                Ext::Cut => return Ext::Cut,
+                _ => continue,
+            };
+            // 一つの問い合わせの中で、同じ glob の先を二度たどらない（互いに取り込む glob で指数的に
+            // 増えないように）。
+            if !self
+                .ext_seen
+                .borrow_mut()
+                .insert((g.clone(), first.clone(), false))
             {
-                match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
-                    Ext::NotFound => {}
-                    r => return into(r),
-                }
+                continue;
+            }
+            match self.find_ext(&g, std::slice::from_ref(first), false, depth + 1) {
+                Ext::NotFound => {}
+                r => return into(r),
             }
         }
-        if root {
+        if root && PRELUDE_TYPES.contains(&first.as_str()) {
+            // prelude の型（`Ptr` など）は外のクレートでも std でもない。
+            Ext::Crate
+        } else if root
+            && let Some(path) = self.extern_prelude.get(first)
+            && path.first() != Some(first)
+        {
+            // ルートの `extern crate X as Y;` の `Y`。
+            into(self.find_ext(&[], path, true, depth + 1))
+        } else if root {
             into(Ext::External(vec![first.clone()]))
         } else {
             Ext::NotFound
@@ -770,6 +1054,11 @@ impl Index {
         let Some(a) = self.aliases.get(p) else {
             return r;
         };
+        // 行き先を引けない別名は別名のまま返す（`use mm::X as Y;` の `Y` を `mm::X` と引けるように。
+        // [`alias_unresolved`]）。
+        if alias_unresolved(self, p, 0) {
+            return r;
+        }
         if depth > 16 {
             return Resolved::Unknown;
         }
@@ -778,6 +1067,164 @@ impl Index {
         };
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
         self.resolve_with(&a.module, path.leading_colon, &segs, None, true, depth + 1)
+    }
+
+    /// 権限を作る・受け渡す関数の名前（prelude の `new` / `empty` と、クレートの `uses` / `gives` を持つ
+    /// 関数とメソッドの名前）。索引ができたあとに一度だけ作る。
+    pub fn perm_fn_names(&self) -> &BTreeSet<String> {
+        self.perm_fn_names_cache.get_or_init(|| {
+            let mut out: BTreeSet<String> =
+                ["new", "empty"].iter().map(|s| s.to_string()).collect();
+            for (p, f) in &self.fns {
+                if f.has_perms()
+                    && let Some(n) = p.last()
+                {
+                    out.insert(n.clone());
+                }
+            }
+            for ms in self.methods.values() {
+                for (n, f) in ms {
+                    if f.has_perms() {
+                        out.insert(n.clone());
+                    }
+                }
+            }
+            out
+        })
+    }
+
+    /// クレートのどこかで、権限の型・権限を作る関数・`uses` / `gives` を持つ関数に行き着く名前と、行き先を
+    /// 引けない型の別名の名前（読まないトークンの検査が数える。モジュールの直下の `type` と `use` の別名を、
+    /// 鎖をたどって解決する）。トークンの中ではパスを読めないので、どのモジュールの名前かによらず数える。
+    /// 索引ができたあとに一度だけ作る。
+    pub fn perm_token_names(&self) -> &BTreeSet<String> {
+        self.perm_token_names_cache.get_or_init(|| {
+            let mut out = BTreeSet::new();
+            for (m, scope) in &self.modules {
+                let names = scope
+                    .items
+                    .keys()
+                    .cloned()
+                    .chain(scope.imports.iter().filter_map(|i| match i {
+                        Import::Name { alias, .. } => Some(alias.clone()),
+                        Import::Glob { .. } => None,
+                    }));
+                for n in names {
+                    let r = self.resolve(m, false, std::slice::from_ref(&n), None);
+                    // 行き先を引けない別名を取り込んだ名前（`use mm::X as Y;`）も数える。
+                    let unresolved_alias =
+                        matches!(&r, Resolved::Type(p) if alias_unresolved(self, p, 0));
+                    if perm_resolved(self, &r) || unresolved_alias {
+                        out.insert(n);
+                    }
+                }
+            }
+            for p in self.aliases.keys() {
+                if alias_unresolved(self, p, 0)
+                    && let Some(n) = p.last()
+                {
+                    out.insert(n.clone());
+                }
+            }
+            out
+        })
+    }
+
+    /// 根の名前が、外のクレートか std のもの（std / core / alloc、依存クレート、std の prelude の名前、
+    /// 裸で書く vstd の名前、組み込みの型）か。
+    pub fn is_external_root(&self, name: &str) -> bool {
+        let base = |n: &str| {
+            STD_ROOTS.contains(&n)
+                || STD_PRELUDE_NAMES.contains(&n)
+                || self.dependencies.contains(n)
+        };
+        // ルートの `extern crate X as Y;` の `Y` は、`X` が外なら外。
+        base(name)
+            || self
+                .extern_prelude
+                .get(name)
+                .is_some_and(|p| p.len() == 1 && base(&p[0]))
+    }
+
+    /// モジュールに外の glob の `use`（`use std::collections::*;`）があるか。あれば、そのモジュールの知らない
+    /// 根の名前は、そこから来た外の名前かもしれない。
+    fn has_external_glob(&self, module: &[String]) -> bool {
+        self.modules.get(module).is_some_and(|scope| {
+            scope.imports.iter().any(|i| match i {
+                Import::Glob { path } => self.is_external_path(module, path),
+                Import::Name { .. } => false,
+            })
+        })
+    }
+
+    /// パスの名前を、クレートの中で定義しているかもしれないか（見つからないと言えないもの。打ち切りを含む）。
+    pub fn may_define(&self, module: &[String], segs: &[String]) -> bool {
+        !matches!(self.find_ext(module, segs, true, 0), Ext::NotFound)
+    }
+
+    /// パスの行き先が外（根が [`Index::is_external_root`] の名前）と分かるか（`use` の別名もたどる）。
+    pub fn is_external_path(&self, module: &[String], segs: &[String]) -> bool {
+        matches!(self.find_ext(module, segs, true, 0), Ext::External(p)
+            if p.first().is_some_and(|r| self.is_external_root(r)))
+    }
+
+    /// 解決できないパスで、外（std と依存クレート）と言えないもの。権限の検査はその先の関数が権限を
+    /// 受け渡すかを引けないので、呼び出しの頭・値・読まないトークンの中では E0003 にする（#75 の再確認。
+    /// 綴りを一つずつ追わず、外と言える根の許可リストで決める）。
+    /// - 外とみなすのは、根が [`Index::is_external_root`] の名前のときと、根がどこにも見つからない
+    ///   一つの名前（ローカル変数、本体の中の項目）のときと、知らない根をそのモジュールの外の glob が
+    ///   持ち込んだかもしれないときだけ。
+    /// - 前半がクレートの型（型の別名でない）か prelude の型で、最後の名前を引けないもの（トレイトの
+    ///   メソッド `S5::new`）は止めない。トレイトのメソッドは契約を持てないので権限を受け渡さない。
+    #[allow(clippy::too_many_arguments)]
+    pub fn unresolvable_path(
+        &self,
+        module: &[String],
+        leading_colon: bool,
+        segs: &[String],
+        self_ty: Option<&ItemPath>,
+        type_params: &[String],
+        strict: bool,
+        body_ext_glob: bool,
+    ) -> bool {
+        let Some(first) = segs.first() else {
+            return false;
+        };
+        if self.resolve(module, leading_colon, segs, self_ty) != Resolved::Unknown {
+            return false;
+        }
+        if segs.len() >= 2 {
+            match self.resolve(module, leading_colon, &segs[..segs.len() - 1], self_ty) {
+                Resolved::Type(t) if !self.aliases.contains_key(&t) => return false,
+                Resolved::PreludeType(_) => return false,
+                _ => {}
+            }
+        }
+        if segs.len() == 1 && matches!(first.as_str(), "self" | "Self" | "super" | "crate") {
+            return false;
+        }
+        if type_params.contains(first) {
+            return false;
+        }
+        // 先頭の `::` は外のクレートの名前。
+        if leading_colon {
+            return !self.is_external_root(first);
+        }
+        // 通すのは、外と言える肯定の事実があるときだけ（根が許可リストの名前、行き先が外の glob）。深さで
+        // 打ち切った（`Cut`）、クレートの中に見つかった、どこにも見つからない、はどれも分からないとして止める。
+        // `strict` でない（読まないトークンの中）ときだけ、どこにも見つからない一つの名前を通す（ローカル変数
+        // かもしれないが、トークンの中では区別できない）。
+        match self.find_ext(module, segs, true, 0) {
+            Ext::External(p) => {
+                !(p.first().is_some_and(|r| self.is_external_root(r))
+                    || (!strict && segs.len() == 1 && p.len() == 1)
+                    // 根の名前そのものがモジュールのどこにもなく（`use` の別名でもなく）、外の glob（モジュールか
+                    // 本体の中）があれば、そこから来た外の名前かもしれない。
+                    || (p.first() == segs.first()
+                        && (body_ext_glob || self.has_external_glob(module))))
+            }
+            _ => true,
+        }
     }
 
     /// パスを解決する。型の別名はたどらない（`type P = Ptr<N>;` の `P` は別名のまま）。
@@ -811,8 +1258,23 @@ impl Index {
         follow: bool,
         depth: usize,
     ) -> Resolved {
-        if leading_colon || segs.is_empty() {
+        if segs.is_empty() || depth > 32 {
             return Resolved::Unknown;
+        }
+        // 先頭の `::` は外のクレート。prelude（`::ebykn_prelude::Ptr`）だけを引く。
+        if leading_colon {
+            return if segs[0] == "ebykn_prelude" {
+                self.descend(Resolved::PreludeCrate, &segs[1..], follow, depth)
+            } else if let Some(path) = self.extern_prelude.get(&segs[0])
+                && path.first() != Some(&segs[0])
+            {
+                match self.resolve_import(&[], path, depth + 1) {
+                    Resolved::Unknown => Resolved::Unknown,
+                    start => self.descend(start, &segs[1..], follow, depth + 1),
+                }
+            } else {
+                Resolved::Unknown
+            };
         }
         let (start, rest) = match segs[0].as_str() {
             "crate" => (Resolved::Module(Vec::new()), &segs[1..]),
@@ -829,12 +1291,7 @@ impl Index {
                 None => return Resolved::Unknown,
             },
             // 全 `.eyk` に暗黙に `use ebykn_prelude::*;` が付く（§3.1）。パスでも書ける。
-            "ebykn_prelude" if segs.len() > 1 => {
-                match PRELUDE_TYPES.iter().find(|t| **t == segs[1]) {
-                    Some(t) => (Resolved::PreludeType(t), &segs[2..]),
-                    None => return Resolved::Unknown,
-                }
-            }
+            "ebykn_prelude" => (Resolved::PreludeCrate, &segs[1..]),
             first => (self.lookup(module, first, 0), &segs[1..]),
         };
         self.descend(start, rest, follow, depth)
@@ -846,13 +1303,33 @@ impl Index {
                 cur = self.follow(cur, depth);
             }
             cur = match cur {
-                Resolved::Module(m) => self.lookup_in(&m, seg),
+                // 途中の `super`（`super::super::f`）は親のモジュール。
+                Resolved::Module(mut m) if seg == "super" => {
+                    if m.pop().is_none() {
+                        return Resolved::Unknown;
+                    }
+                    Resolved::Module(m)
+                }
+                // モジュールの中の名前は、定義と `use`（再公開と glob を含む）を引く（#127 の再確認）。
+                Resolved::Module(m) => self.lookup_scoped(&m, seg, depth + 1 + i, false),
+                Resolved::PreludeCrate => match PRELUDE_TYPES.iter().find(|t| **t == seg) {
+                    Some(t) => Resolved::PreludeType(t),
+                    None => Resolved::Unknown,
+                },
                 Resolved::Type(t) if i + 1 == rest.len() => {
                     if self.methods.get(&t).is_some_and(|ms| ms.contains_key(seg)) {
                         Resolved::Method {
                             ty: t,
                             name: seg.clone(),
                         }
+                    } else if self
+                        .enums
+                        .get(&t)
+                        .is_some_and(|e| e.variants.iter().any(|(v, _, _)| v == seg))
+                    {
+                        let mut p = t;
+                        p.push(seg.clone());
+                        Resolved::Value(p)
                     } else {
                         Resolved::Unknown
                     }
@@ -871,28 +1348,62 @@ impl Index {
         cur
     }
 
-    /// モジュール `m` で定義した名前（`use` を見ない）。
-    fn lookup_in(&self, m: &[String], name: &str) -> Resolved {
-        match self.modules.get(m).and_then(|s| s.items.get(name)) {
-            Some(p) => self.def(p),
-            None => Resolved::Unknown,
-        }
-    }
-
     fn def(&self, p: &ItemPath) -> Resolved {
         match self.kinds.get(p) {
             Some(DefKind::Fn) => Resolved::Fn(p.clone()),
             Some(DefKind::Type) => Resolved::Type(p.clone()),
             Some(DefKind::Module) => Resolved::Module(p.clone()),
-            _ => Resolved::Unknown,
+            Some(DefKind::Other) => Resolved::Value(p.clone()),
+            None => Resolved::Unknown,
         }
     }
 
     /// 名前を「現在のモジュール → `use` 宣言 → prelude」の順に引く。
     fn lookup(&self, module: &[String], name: &str, depth: usize) -> Resolved {
-        if depth > 16 {
+        self.lookup_scoped(module, name, depth, true)
+    }
+
+    /// モジュール `module` の名前を、定義 → `use` の別名（`extern crate .. as ..` を含む）→ glob の `use`
+    /// の順に引く。`prelude` なら、最後に暗黙の `use ebykn_prelude::*;` を引く（パスの途中のモジュールの
+    /// 中では引かない）。深さで循環を止める。
+    fn lookup_scoped(
+        &self,
+        module: &[String],
+        name: &str,
+        depth: usize,
+        prelude: bool,
+    ) -> Resolved {
+        if depth > 32 {
             return Resolved::Unknown;
         }
+        let key = (module.to_vec(), name.to_string(), prelude);
+        if let Some(r) = self.lookup_cache.borrow().get(&key) {
+            return r.clone();
+        }
+        if self.lookup_active.get() == 0 {
+            self.lookup_seen.borrow_mut().clear();
+        }
+        // この問い合わせの中ですでにたどった（glob の循環か、同じところへの別の道）。いちばん外の問い合わせ
+        // が、たどれるところを一度ずつたどるので、ここで見つからないとしても答えは変わらない。
+        if !self.lookup_seen.borrow_mut().insert(key.clone()) {
+            return Resolved::Unknown;
+        }
+        self.lookup_active.set(self.lookup_active.get() + 1);
+        let r = self.lookup_scoped_uncached(module, name, depth, prelude);
+        self.lookup_active.set(self.lookup_active.get() - 1);
+        if r != Resolved::Unknown {
+            self.lookup_cache.borrow_mut().insert(key, r.clone());
+        }
+        r
+    }
+
+    fn lookup_scoped_uncached(
+        &self,
+        module: &[String],
+        name: &str,
+        depth: usize,
+        prelude: bool,
+    ) -> Resolved {
         let Some(scope) = self.modules.get(module) else {
             return Resolved::Unknown;
         };
@@ -903,17 +1414,44 @@ impl Index {
             if let Import::Name { alias, path } = imp
                 && alias == name
             {
-                return self.resolve_import(module, path, depth);
+                return self.resolve_import(module, path, depth + 1);
             }
         }
         for imp in &scope.imports {
-            if let Import::Glob { path } = imp
-                && let Resolved::Module(m) = self.resolve_import(module, path, depth)
-                && let r @ (Resolved::Fn(_) | Resolved::Type(_) | Resolved::Module(_)) =
-                    self.lookup_in(&m, name)
-            {
+            let Import::Glob { path } = imp else {
+                continue;
+            };
+            let r = match self.resolve_import(module, path, depth + 1) {
+                Resolved::Module(m) => self.lookup_scoped(&m, name, depth + 1, false),
+                Resolved::PreludeCrate => match PRELUDE_TYPES.iter().find(|t| **t == name) {
+                    Some(t) => Resolved::PreludeType(t),
+                    None => Resolved::Unknown,
+                },
+                // 列挙の glob（`use Color::*;`）は列挙子を取り込む。
+                Resolved::Type(t)
+                    if self
+                        .enums
+                        .get(&t)
+                        .is_some_and(|e| e.variants.iter().any(|(v, _, _)| v == name)) =>
+                {
+                    let mut p = t;
+                    p.push(name.to_string());
+                    Resolved::Value(p)
+                }
+                _ => Resolved::Unknown,
+            };
+            if r != Resolved::Unknown {
                 return r;
             }
+        }
+        if !prelude {
+            return Resolved::Unknown;
+        }
+        // ルートの `extern crate X as Y;` の `Y`（extern prelude）。`extern crate X;` の `X` は外のクレート。
+        if let Some(path) = self.extern_prelude.get(name)
+            && path.first().map(String::as_str) != Some(name)
+        {
+            return self.resolve_import(&[], path, depth + 1);
         }
         if let Some(t) = PRELUDE_TYPES.iter().find(|t| **t == name) {
             return Resolved::PreludeType(t);
@@ -935,23 +1473,14 @@ impl Index {
                 }
                 Resolved::Module(m)
             }
-            "ebykn_prelude" => {
-                return match path.get(1).map(String::as_str) {
-                    Some(t) if path.len() == 2 => PRELUDE_TYPES
-                        .iter()
-                        .find(|x| **x == t)
-                        .map_or(Resolved::Unknown, |t| Resolved::PreludeType(t)),
-                    _ => Resolved::Unknown,
-                };
-            }
-            // 2018 以降の `use a::b;` の `a` は、このモジュールの名前か外のクレート。
-            name => match self.modules.get(module).and_then(|s| s.items.get(name)) {
-                Some(p) => self.def(p),
-                None => return Resolved::Unknown,
+            "ebykn_prelude" => Resolved::PreludeCrate,
+            // 2018 以降の `use a::b;` の `a` は、このモジュールの名前（定義と `use`）か外のクレート。
+            name => match self.lookup(module, name, depth + 1) {
+                Resolved::Unknown => return Resolved::Unknown,
+                r => r,
             },
         };
-        let _ = depth;
-        self.descend(start, &path[1..], true, depth)
+        self.descend(start, &path[1..], true, depth + 1)
     }
 
     /// 項目か、それを囲むモジュールのどれかが `#[cfg(..)]` を持つか。
@@ -1010,12 +1539,53 @@ pub fn parse_use(tokens: &TokenStream) -> Vec<Import> {
     out
 }
 
+/// `extern crate X [as Y];` のトークン列（可視性と `;` を含んでよい）を読む。`extern crate` でなければ空。
+pub fn parse_extern_crate(tokens: &TokenStream) -> Option<Import> {
+    let tts: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    let mut i = 0;
+    if matches!(tts.first(), Some(TokenTree::Ident(p)) if p == "pub") {
+        i = 1;
+        if matches!(tts.get(1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis)
+        {
+            i = 2;
+        }
+    }
+    let ident = |j: usize| match tts.get(j) {
+        Some(TokenTree::Ident(x)) => {
+            let s = x.to_string();
+            Some(s.strip_prefix("r#").map(str::to_string).unwrap_or(s))
+        }
+        _ => None,
+    };
+    if ident(i).as_deref() != Some("extern") || ident(i + 1).as_deref() != Some("crate") {
+        return None;
+    }
+    let name = ident(i + 2)?;
+    let alias = match ident(i + 3).as_deref() {
+        Some("as") => ident(i + 4)?,
+        _ => name.clone(),
+    };
+    // `extern crate self as foo;` はこのクレートの根。
+    let path = if name == "self" {
+        "crate".to_string()
+    } else {
+        name
+    };
+    Some(Import::Name {
+        alias,
+        path: vec![path],
+    })
+}
+
 fn use_tree(tts: &[TokenTree], prefix: &[String], out: &mut Vec<Import>) {
     let mut i = 0;
     let mut path = prefix.to_vec();
-    // 先頭の `::` は外のクレート。
+    // 先頭の `::` は外のクレート。prelude（`use ::ebykn_prelude::Ptr;`）だけは引く。
     if is_path_sep(tts, 0) {
-        return;
+        match tts.get(2) {
+            Some(TokenTree::Ident(id)) if prefix.is_empty() && id == "ebykn_prelude" => i = 2,
+            _ => return,
+        }
     }
     loop {
         match tts.get(i) {
@@ -1031,7 +1601,7 @@ fn use_tree(tts: &[TokenTree], prefix: &[String], out: &mut Vec<Import>) {
                 // 末尾の名前（`as` が続くかもしれない）。
                 let alias = match (tts.get(i), tts.get(i + 1)) {
                     (Some(TokenTree::Ident(a)), Some(TokenTree::Ident(b))) if a == "as" => {
-                        b.to_string()
+                        ident_name(b)
                     }
                     _ => name.clone(),
                 };
@@ -1068,6 +1638,51 @@ fn use_tree(tts: &[TokenTree], prefix: &[String], out: &mut Vec<Import>) {
             _ => return,
         }
     }
+}
+
+/// トークンの識別子の名前。`r#` を外す（構文木の識別子と同じに比べる。`use crate::mk as r#k;` の `k`）。
+pub fn ident_name(i: &proc_macro2::Ident) -> String {
+    let s = i.to_string();
+    s.strip_prefix("r#").map(str::to_string).unwrap_or(s)
+}
+
+/// 索引の項目にならない Rust の項目（トークンのまま持つ `union`、`extern` ブロックの `fn` / `static`）が
+/// 定義する名前。索引が名前を取りこぼさないように、モジュールの名前に入れる（引けない型の上のメソッドを
+/// 安全側の規則が見るため）。
+fn rust_item_names(tokens: &TokenStream) -> Vec<(String, DefKind)> {
+    let tts: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    let mut out = Vec::new();
+    for (i, t) in tts.iter().enumerate() {
+        let TokenTree::Ident(id) = t else {
+            continue;
+        };
+        match (ident_name(id).as_str(), tts.get(i + 1)) {
+            ("union", Some(TokenTree::Ident(n))) => out.push((ident_name(n), DefKind::Type)),
+            ("extern", _) => {
+                for g in tts[i + 1..].iter() {
+                    if let TokenTree::Group(g) = g
+                        && g.delimiter() == Delimiter::Brace
+                    {
+                        let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                        for (j, u) in inner.iter().enumerate() {
+                            if let (TokenTree::Ident(k), Some(TokenTree::Ident(n))) =
+                                (u, inner.get(j + 1))
+                            {
+                                match ident_name(k).as_str() {
+                                    "fn" => out.push((ident_name(n), DefKind::Fn)),
+                                    "static" => out.push((ident_name(n), DefKind::Other)),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn is_path_sep(tts: &[TokenTree], i: usize) -> bool {
