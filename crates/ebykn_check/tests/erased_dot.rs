@@ -56,7 +56,8 @@ fn e0404_for_every_receiver() {
         "pub fn f(&mut self, o: &mut Pool) { std::mem::swap(&mut self.nodes, &mut o.nodes); }",
         "pub fn f(&mut self, o: &mut Pool) { std::mem::swap(&mut self.order, &mut o.order); }",
         // 関数に `&mut` で渡す。
-        "pub fn f(&mut self) { g(&mut self.nodes); }",
+        // `g` を定義しておく（定義のない関数の呼び出しは、解決できないパスとして E0003 になる）。
+        "pub fn f(&mut self) { fn g<T>(_x: T) {} g(&mut self.nodes); }",
         // 型が分からない受け手。
         "pub fn f() { let r = Pool::new().nodes; }",
         "pub fn f(v: Vec<Pool>) { let r = &v[0].order; }",

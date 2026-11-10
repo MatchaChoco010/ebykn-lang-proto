@@ -211,6 +211,15 @@ pub enum Unimpl {
     JumpInMacro,
     /// Rust のトークンのまま持つ式（`.await` など）の中の `return` / `break` / `continue` / `?`（同上）。
     JumpInRustExpr,
+    /// Rust のトークンのまま持つ式（`.await` など）の中の権限の操作（#74）。
+    PermInRustExpr,
+    /// 権限を持つ関数を、呼び出しの頭以外（値、修飾パス）で使う（#98）。
+    PermFnValue,
+    /// 関連型・型の引数・行き先を引けない型の別名を通るパスの呼び出し（`Self::A::f(..)`、`T::A::f(..)`。
+    /// #75 の再確認）。
+    TypeRelativeCall,
+    /// 解決できず、外（std と依存クレート）とも言えないパスの呼び出しか値（#75 の再確認）。
+    UnresolvedPath,
     /// 同じモジュールに同じ名前の定義が二つ以上ある（cfg で分けた定義。索引は cfg を評価しない）。
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
@@ -344,10 +353,34 @@ impl Unimpl {
                 "マクロの引数の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこれらを書き換えないので、そこから `borrow mut` のブロックを抜けると権限を戻さずに抜け、権限の検査も見ないためです。抜ける文をマクロの外に出します（クロージャの中にあるなら、クロージャを `let` でマクロの外に出します）"
             }
             (Unimpl::JumpInRustExpr, Lang::En) => {
-                "`return`, `break`, `continue` and `?` inside this expression (such as `.await`, which Ebykn keeps as Rust tokens) are not supported yet, because Ebykn does not read it: a jump out there would skip putting a `borrow mut` permission back, and the permission checks would not see it; compute the value with `let` before the expression"
+                "`return`, `break`, `continue` and `?` inside this expression (such as `.await`, which Ebykn keeps as Rust tokens) are not supported yet, because Ebykn does not read it: a jump out there would skip putting a `borrow mut` permission back, and the permission checks would not see it; compute the value with `let` before the expression (if it is inside a closure, bind the closure with `let` before the expression)"
             }
             (Unimpl::JumpInRustExpr, Lang::Ja) => {
-                "この式（Ebykn が Rust のトークンのまま持つ `.await` など）の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこの式の中を読まないので、そこから抜けると `borrow mut` の権限を戻さずに抜け、権限の検査も見ないためです。値は式の前で `let` に束縛してから使います"
+                "この式（Ebykn が Rust のトークンのまま持つ `.await` など）の中の `return`・`break`・`continue`・`?` はまだ扱えません。Ebykn はこの式の中を読まないので、そこから抜けると `borrow mut` の権限を戻さずに抜け、権限の検査も見ないためです。値は式の前で `let` に束縛してから使います（クロージャの中にあるなら、クロージャを式の前で `let` に束縛します）"
+            }
+            (Unimpl::UnresolvedPath, Lang::En) => {
+                "a path that cannot be resolved and does not come from std, core, alloc, a dependency or the std prelude is not supported yet in a call or as a value, because the permission checks cannot tell whether it creates or passes permissions; write the path to where the item is defined (`Ptr::new(..)`, `crate::m::f(..)`)"
+            }
+            (Unimpl::UnresolvedPath, Lang::Ja) => {
+                "解決できず、std・core・alloc・依存クレート・std の prelude のどれから来たとも言えないパスは、呼び出しや値としてはまだ扱えません。権限の検査が、その先の関数が権限を作るか受け渡すかを引けないためです。項目を定義した場所へのパスで書きます（`Ptr::new(..)`、`crate::m::f(..)`）"
+            }
+            (Unimpl::TypeRelativeCall, Lang::En) => {
+                "a call through an associated type, a type parameter or a type alias whose target cannot be resolved (`Self::A::f(..)`, `T::A::f(..)`, `X::f(..)` with `type X = <T as Tr>::A;` or `type X<T> = T;`) is not supported yet, because the permission checks cannot tell whether it takes or returns permissions; call it through the concrete type (`Ptr::<Node>::new(..)`)"
+            }
+            (Unimpl::TypeRelativeCall, Lang::Ja) => {
+                "関連型・型の引数・行き先を引けない型の別名を通るパスの呼び出し（`Self::A::f(..)`、`T::A::f(..)`、`type X = <T as Tr>::A;` や `type X<T> = T;` の `X::f(..)`）はまだ扱えません。権限の検査が、その関数が権限を受け渡すかを引けないためです。具体的な型を通して呼びます（`Ptr::<Node>::new(..)`）"
+            }
+            (Unimpl::PermFnValue, Lang::En) => {
+                "a function that takes or returns permissions (one with `uses` / `gives`, or `Ptr::new` and the like) can only be called directly as `f(..)` or `T::f(..)` for now; using it as a value or through a qualified path (`<T>::f`) hides the call from the permission checks"
+            }
+            (Unimpl::PermFnValue, Lang::Ja) => {
+                "権限を受け渡す関数（`uses` / `gives` を持つ関数や `Ptr::new` など）は、今は `f(..)` や `T::f(..)` の形で直接呼ぶことしかできません。値として使ったり修飾パス（`<T>::f`）で呼んだりすると、権限の検査がその呼び出しを見ないためです"
+            }
+            (Unimpl::PermInRustExpr, Lang::En) => {
+                "permissions cannot be used inside this expression (such as `.await` or an async block, which Ebykn keeps as Rust tokens) yet, because Ebykn does not read it and the permission checks would not see the operation; do it with `let` before the expression"
+            }
+            (Unimpl::PermInRustExpr, Lang::Ja) => {
+                "この式（Ebykn が Rust のトークンのまま持つ `.await` や async ブロックなど）の中ではまだ権限を使えません。Ebykn はこの式の中を読まず、権限の検査がその操作を見ないためです。操作は式の前で `let` を使って行います"
             }
             (Unimpl::CfgStmt, Lang::En) => {
                 "`#[cfg]` on a statement, an expression (such as an array or tuple element or an argument) or a struct literal field that operates on permissions (`take`, `put`, `leak`, `free`, a call that consumes or returns a permission, a spec assignment `x@f = e`) or leaves the block (`return`, `break`, `continue`) is not supported yet, and neither is any attribute on an assignment, binary operation or cast statement or on `take` / `put` / `leak` / a spec assignment, because the check of §6 would see code that is not compiled (and attributes on assignment, binary operation and cast statements are not stable Rust); put the conditional code in separate functions"

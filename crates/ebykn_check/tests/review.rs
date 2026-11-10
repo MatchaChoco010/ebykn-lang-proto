@@ -236,7 +236,7 @@ fn s4_try_inside_borrow_mut_needs_option_or_result() {
 /// （PR #51 のレビューの B1）。
 #[test]
 fn s4_short_circuit_rhs_does_not_always_diverge() {
-    // 前は `let` が必ず抜けると数え、本体の末尾の E0505 を見なかった。
+    // 右辺の `return` を必ず実行されると数えると、続く文が届かないとみなされ、本体の末尾の E0505 を見ない。
     rejects(
         &in_pool(
             "pub fn f(c: bool) { let _b = c && { return; }; let p = Ptr::new(Node { val: 1 }); }",
@@ -299,8 +299,8 @@ fn s4_jumps_inside_macro_arguments_are_e0003() {
     ));
 }
 
-/// Rust のトークンのまま持つ式（`.await`）の中の脱出は E0003（PR #51 の再レビューの B3）。前は
-/// 検査が中を見ず、`?` の経路で権限を捨てても E0505 にならなかった。
+/// Rust のトークンのまま持つ式（`.await`）の中の脱出は E0003（PR #51 の再レビューの B3）。検査は中を
+/// 読まないので、`?` の経路で権限を捨てても E0505 にならない。
 #[test]
 fn s4_jumps_inside_raw_rust_expressions_are_e0003() {
     const ID: &str = "async fn id(x: u64) -> (r: u64) ensures r == x, { x }\n";
@@ -321,6 +321,674 @@ fn s4_jumps_inside_raw_rust_expressions_are_e0003() {
     // 脱出のない `.await` は今のまま。
     accepts(&format!(
         "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self, p: Ptr<Node>) -> u64 {{ let v = id(1).await; borrow mut self@nodes[p] {{ (*p).val = v; }} v }} }}\n"
+    ));
+}
+
+/// Rust のトークンのまま持つ式（`.await`、async ブロック）の中の権限の操作は E0003（#74）。検査は中を
+/// 読まないので、そこで作った権限を捨てても解放し忘れにならない。
+#[test]
+fn perms_inside_raw_rust_expressions_are_e0003() {
+    const ID: &str = "async fn id(x: u64) -> (r: u64) ensures r == x, { x }\n";
+    for body in [
+        // #74 の例：`.await` の中で作った `q@` を捨てる。
+        "let v = id({ let q = Ptr::new(Node { val: 1 }); 1 }).await; v",
+        // async ブロックの中の領域の操作。
+        "let _f = async { take self@nodes[p]; }; 0",
+    ] {
+        rejects(
+            &format!(
+                "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self, p: Ptr<Node>) -> u64 {{ {body} }} }}\n"
+            ),
+            "E0003",
+            "permissions cannot be used inside this expression",
+        );
+    }
+    // 持っている権限を `.await` の中で解放する（検査は解放を見ないので、末尾の E0505 も出る）。
+    let (_, lines) = run(&format!(
+        "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self) -> u64 {{ let q = Ptr::new(Node {{ val: 1 }}); let v = id({{ let n = q.free(); n.val }}).await; v }} }}\n"
+    ));
+    assert!(
+        lines.iter().any(|l| l.contains("E0003")
+            && l.contains("permissions cannot be used inside this expression")),
+        "{}",
+        lines.join("\n")
+    );
+    // 権限の操作のない `.await` と、ポインタの値を使うだけの式は今のまま。
+    accepts(&format!(
+        "{PRELUDE}{ID}impl Pool {{ async fn f(&mut self, p: Ptr<Node>) -> u64 {{ let v = id(1).await; let w = id(p.addr() as u64).await; v + w }} }}\n"
+    ));
+}
+
+/// 権限を作る・受け渡す呼び出しの綴りの表（#74 のレビューの B1、#98）。読まないトークンの中では、
+/// ターボフィッシュ・修飾パス・値としての関数・局所の `use` のどれでも E0003。
+const SPELL_PRE: &str = "async fn id(x: u64) -> (r: u64) ensures r == x, { x }
+fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }
+fn mkg<T>(v: T) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q }
+type P = Ptr<Node>;
+type C = Cell<u64>;
+type PP<T> = Ptr<T>;
+use ebykn_prelude::Ptr as PU;
+pub trait Tr { type Out; }
+impl Tr for Node { type Out = Ptr<Node>; }
+pub mod m { pub type Q = Ptr<super::Node>; }
+type X = <Node as Tr>::Out;
+type PX<T> = T;
+";
+const SPELL_IMPL: &str =
+    "fn mks() -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q }
+fn mkm(&self) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q }
+";
+const SPELLINGS: &[&str] = &[
+    "let q = Ptr::<Node>::new(Node { val: 1 })",
+    "let q = Ptr::<Node>::empty()",
+    "let q = Cell::<u64>::new(1)",
+    "let q = ebykn_prelude::Ptr::<Node>::new(Node { val: 1 })",
+    "let q = mk::<>(1)",
+    "let q = mkg::<u8>(0)",
+    "let q = Self::mks::<>()",
+    "let q = self.mkm::<>()",
+    "let q = <Ptr<Node>>::new(Node { val: 1 })",
+    "let q = <Self>::mks()",
+    "let q = (Ptr::new)(Node { val: 1 })",
+    "let g = Ptr::new; let q = g(Node { val: 1 })",
+    "let g = mk; let q = g(1)",
+    "use crate::mk as m2; let q = m2(1)",
+    // モジュールの直下の別名（`type`、`use .. as`、型の引数を持つもの）。
+    "let q = P::new(Node { val: 1 })",
+    "let q = <P>::new(Node { val: 1 })",
+    "let q = C::new(1)",
+    "let q = PP::<Node>::new(Node { val: 1 })",
+    "let q = PU::new(Node { val: 1 })",
+    // 別のモジュールの別名（パスを読まないので、名前で数える）。
+    "let q = m::Q::new(Node { val: 1 })",
+    // raw の識別子。
+    "let q = r#Ptr::new(Node { val: 1 })",
+    "let q = r#mk(1)",
+    "let q = self.r#mkm()",
+    // 関連型を通した修飾パス。
+    "let q = <Node as Tr>::Out::new(Node { val: 1 })",
+    // 行き先を引けない別名（射影、型の引数）と、型に相対的なパス（#75 の再確認）。
+    "let q = X::new(Node { val: 1 })",
+    "let q = PX::<Ptr<Node>>::new(Node { val: 1 })",
+    "let q = Self::Out2::new(Node { val: 1 })",
+];
+
+#[test]
+fn perm_spellings_inside_unread_tokens_are_e0003() {
+    for x in SPELLINGS {
+        for (body, needle) in [
+            (
+                format!("let v = id({{ {x}; 1 }}).await; v"),
+                "permissions cannot be used inside this expression",
+            ),
+            (
+                format!("let _b = matches!({{ {x}; 1u64 }}, 1); 0"),
+                "arguments of this macro",
+            ),
+        ] {
+            let src = format!(
+                "{PRELUDE}{SPELL_PRE}impl Pool {{ {SPELL_IMPL}async fn f(&self) -> u64 {{ {body} }} }}\n"
+            );
+            let (_, lines) = run(&src);
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains("E0003") && l.contains(needle)),
+                "{x}:\n{}",
+                lines.join("\n")
+            );
+        }
+    }
+    // 誤検出しない：名前の一部が重なるメソッド、文字列と文字、権限に関わらない名前。
+    for x in [
+        "let n = v.freeze()",
+        "let n = \"Ptr::new free take\".len()",
+        "let n = 'q'",
+        "let n = v.len()",
+    ] {
+        accepts(&format!(
+            "{PRELUDE}{SPELL_PRE}pub struct V {{ a: u64 }}\nimpl V {{ fn freeze(&self) -> u64 {{ 1 }} fn len(&self) -> u64 {{ 1 }} }}\nasync fn f(v: V) -> u64 {{ let w = id({{ {x}; 1 }}).await; let _b = matches!({{ {x}; 1u64 }}, 1); w }}\n"
+        ));
+    }
+}
+
+/// 領域を渡す呼び出し（`f(x, uses &mut r)`。#19）をマクロの引数の中に書くと E0003。
+#[test]
+fn region_passing_calls_inside_macro_arguments_are_e0003() {
+    rejects(
+        &format!(
+            "{PRELUDE}fn g(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> requires old(r).contains(p), {{ take r[p]; put r[p]; }}\nfn f(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>> requires old(r).contains(p), {{ let _b = matches!(g(p, uses &mut r), ()); }}\n"
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
+}
+
+/// 権限を持つ関数を値として使うか修飾パスで呼ぶと、読むトークンの中でも E0003（#98）。
+#[test]
+fn perm_functions_used_as_values_are_e0003() {
+    for x in [
+        "let g = Ptr::new; let q = g(Node { val: 1 });",
+        "let q = (Ptr::new)(Node { val: 1 });",
+        "let g = mk; let q = g(1);",
+        "let g = Self::mks; let q = g();",
+        "let q = <Ptr<Node>>::new(Node { val: 1 });",
+        "let q = <Self>::mks();",
+        // 引けない修飾パス（関連型を通したもの）は安全側に倒す（#75 の再確認の B3）。
+        "let q = <Node as Tr>::Out::new(Node { val: 1 });",
+    ] {
+        let src = format!(
+            "{PRELUDE}{SPELL_PRE}impl Pool {{ {SPELL_IMPL}fn f(&self) -> u64 {{ {x} 1 }} }}\n"
+        );
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains("can only be called directly")),
+            "{x}:\n{}",
+            lines.join("\n")
+        );
+    }
+    // 呼び出しの頭に書くのは今のまま。同じ名前のローカル変数も通す。
+    accepts(&format!(
+        "{PRELUDE}{SPELL_PRE}impl Pool {{ {SPELL_IMPL}fn f(&self) -> u64 {{ let q = Ptr::<Node>::new(Node {{ val: 1 }}); let r = mk(2); let s = Self::mks(); leak q@; leak r@; leak s@; let mk = 3u64; mk }} }}\n"
+    ));
+}
+
+/// 関連型・型の引数・行き先を引けない別名を通るパスは、トークンの中でも外でも E0003（#75 の再確認）。
+/// 索引は関連型を解決しないので、`Self::Out2::new` が `Ptr::new` かを引けない。
+#[test]
+fn type_relative_paths_are_e0003() {
+    const PRE: &str = "pub trait Tr2 { type Out2; fn go(&self) -> u64; fn go2(&self) -> u64; }\n";
+    const TOKENS: &str = "permissions cannot be used inside this expression";
+    const MACRO: &str = "arguments of this macro";
+    const CALL: &str = "through an associated type";
+    for (item, needle) in [
+        (
+            "impl Tr2 for Node { type Out2 = Ptr<Node>; fn go(&self) -> u64 { let _b = matches!({ let q = Self::Out2::new(Node { val: 1 }); 1u64 }, 1); 0 } fn go2(&self) -> u64 { 0 } }",
+            MACRO,
+        ),
+        (
+            "impl Tr2 for Node { type Out2 = Ptr<Node>; fn go(&self) -> u64 { 0 } fn go2(&self) -> u64 { let q = Self::Out2::new(Node { val: 1 }); 0 } }",
+            CALL,
+        ),
+        (
+            "pub fn g1<T: Tr<Out = Ptr<Node>>>() -> u64 { let _b = matches!({ let q = T::Out::new(Node { val: 1 }); 1u64 }, 1); 0 }",
+            MACRO,
+        ),
+        (
+            "pub fn g2<T: Tr<Out = Ptr<Node>>>() -> u64 { let q = T::Out::new(Node { val: 1 }); 0 }",
+            CALL,
+        ),
+        (
+            "pub async fn h4<T: Tr<Out = Ptr<Node>>>() -> u64 { let v = id({ let q = T::Out::new(Node { val: 1 }); 1 }).await; v }",
+            TOKENS,
+        ),
+        (
+            "pub fn h1() -> u64 { let _b = matches!({ let q = X::new(Node { val: 1 }); 1u64 }, 1); 0 }",
+            MACRO,
+        ),
+        (
+            "pub fn h2() -> u64 { let q = X::new(Node { val: 1 }); 0 }",
+            CALL,
+        ),
+        (
+            "pub fn h3() -> u64 { let q = PX::<Ptr<Node>>::new(Node { val: 1 }); 0 }",
+            CALL,
+        ),
+        // 別名の鎖と、impl の型の引数。
+        (
+            "type X2 = X; pub fn h5() -> u64 { let q = X2::new(Node { val: 1 }); 0 }",
+            CALL,
+        ),
+        (
+            "pub struct S<T> { t: T }\nimpl<T: Tr<Out = Ptr<Node>>> S<T> { pub fn h6(&self) -> u64 { let q = T::Out::new(Node { val: 1 }); 0 } }",
+            CALL,
+        ),
+        // 値として使う形は #98 の診断。
+        (
+            "pub fn h7<T: Tr<Out = Ptr<Node>>>() -> u64 { let g = T::Out::new; let q = g(Node { val: 1 }); 0 }",
+            "can only be called directly",
+        ),
+    ] {
+        let src = format!("{PRELUDE}{SPELL_PRE}{PRE}{item}\n");
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains(needle)),
+            "{item}:\n{}",
+            lines.join("\n")
+        );
+    }
+    // 行き先を引ける別名、2 つの区切りの `T::f`、クレートの外の型のパスは今のまま。
+    accepts(&format!(
+        "{PRELUDE}{SPELL_PRE}type V = Vec<u64>;\npub fn k<T: Default>() -> u64 {{ let _t = T::default(); let _v = V::new(); let _w = Vec::<u64>::new(); let _x = std::vec::Vec::<u64>::new(); let _b = matches!(T::default(), _); 0 }}\n"
+    ));
+}
+
+/// 行き先を引けない別名を `use` で取り込んでも、別名として引く（#75 の再確認の B1）。これまでは
+/// `use` の先で別名を `Unknown` までたどってしまい、`Y::new(..)` を見逃していた。
+#[test]
+fn unresolved_aliases_imported_by_use_are_e0003() {
+    const PRE: &str = "pub trait Tr { type Out; }
+impl Tr for Node { type Out = Ptr<Node>; }
+async fn id(x: u64) -> (r: u64) ensures r == x, { x }
+pub mod mm { pub type X = <super::Node as super::Tr>::Out; pub type PX<T> = T; }
+";
+    for (items, body, needle) in [
+        (
+            "use mm::X as Y;",
+            "let q = Y::new(Node { val: 1 }); 0",
+            "through an associated type",
+        ),
+        (
+            "use mm::X;",
+            "let q = X::new(Node { val: 1 }); 0",
+            "through an associated type",
+        ),
+        (
+            "use mm::PX as PY;",
+            "let q = PY::<Ptr<Node>>::new(Node { val: 1 }); 0",
+            "through an associated type",
+        ),
+        (
+            "use mm::X as Y;",
+            "let _b = matches!({ let q = Y::new(Node { val: 1 }); 1u64 }, 1); 0",
+            "arguments of this macro",
+        ),
+        (
+            "use mm::X as Y;",
+            "let v = id({ let q = Y::new(Node { val: 1 }); 1 }).await; v",
+            "permissions cannot be used inside this expression",
+        ),
+    ] {
+        let src = format!("{PRELUDE}{PRE}{items}\npub async fn f() -> u64 {{ {body} }}\n");
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains(needle)),
+            "{items} {body}:\n{}",
+            lines.join("\n")
+        );
+    }
+}
+
+/// 解決できない頭で、最後の名前が権限を作る・受け渡す関数の名前（`new`、`empty`、`uses` / `gives` を
+/// 持つ関数）なら E0003（#75 の再確認）。解決できない綴りが新しく見つかっても黙って通さない。
+#[test]
+fn unresolved_heads_with_perm_function_names_are_e0003() {
+    const PRE: &str =
+        "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }
+use ebykn_prelude::Ptr as PU;
+use ebykn_prelude as ep;
+use ep::Ptr as P3;
+pub mod pm { pub use super::mk; }
+";
+    const CALL: &str = "a path that cannot be resolved";
+    for (body, needle) in [
+        (
+            "let q = ::ebykn_prelude::Ptr::new(Node { val: 1 }); 0",
+            CALL,
+        ),
+        ("let q = pm::mk(1); 0", CALL),
+        ("let q = ep::Ptr::new(Node { val: 1 }); 0", CALL),
+        ("let q = ep::Cell::new(1u64); 0", CALL),
+        ("let q = P3::new(Node { val: 1 }); 0", CALL),
+        ("let q = P3::<Node>::empty(); 0", CALL),
+        // 値として使う形も同じ。
+        ("let g = P3::new; let q = g(Node { val: 1 }); 0", CALL),
+        // 読まないトークンの中。
+        (
+            "let _b = matches!({ let q = P3::new(Node { val: 1 }); 1u64 }, 1); 0",
+            "arguments of this macro",
+        ),
+    ] {
+        let src = format!("{PRELUDE}{PRE}pub fn f() -> u64 {{ {body} }}\n");
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains(needle)),
+            "{body}:\n{}",
+            lines.join("\n")
+        );
+    }
+    // サブモジュールから、モジュールの直下の別名を通す形。
+    let src = format!(
+        "{PRELUDE}{PRE}pub mod sm {{ pub fn g() -> u64 {{ let q = crate::PU::new(crate::Node {{ val: 1 }}); 0 }} }}\n"
+    );
+    let (_, lines) = run(&src);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("E0003") && l.contains(CALL)),
+        "{}",
+        lines.join("\n")
+    );
+    // std と依存クレートのパス、外への別名、クレートの型の上のトレイトのメソッドは今のまま。
+    accepts(&format!(
+        "{PRELUDE}use std::collections::BTreeMap;\ntype V = Vec<u64>;\nuse crate::V as W;\npub trait Mk {{ fn new() -> Self; }}\npub struct S5 {{ x: u64 }}\nimpl Mk for S5 {{ fn new() -> Self {{ S5 {{ x: 0 }} }} }}\npub fn k() -> u64 {{ let _a = Vec::<u64>::new(); let _b = String::new(); let _c = std::vec::Vec::<u64>::new(); let _d = V::new(); let _e = W::new(); let _f = BTreeMap::<u64, u64>::new(); let _g = S5::new(); let _h = matches!(Vec::<u64>::new().len(), 0); let new = 1u64; new }}\n"
+    ));
+}
+
+/// 解決できないパスは、根が外（std・core・alloc・依存クレート・std の prelude の名前）と言えなければ、最後の
+/// 名前によらず E0003（#75 の 4 回目の再確認。綴りを一つずつ追わず、外の許可リストで決める）。
+#[test]
+fn unresolved_roots_outside_the_allow_list_are_e0003() {
+    const CALL: &str = "a path that cannot be resolved";
+    for body in [
+        "let x = foo::bar(1); 0",
+        "let x = baz(1); 0",
+        "let g = foo::bar; 0",
+    ] {
+        rejects(
+            &format!("{PRELUDE}use foo::bar as baz;\npub fn f() -> u64 {{ {body} }}\n"),
+            "E0003",
+            CALL,
+        );
+    }
+    // self 型を引けない impl（`impl Mk for Ptr<Node>`）の中の `Self::new(..)`（develop では黙って通った）。
+    let (_, lines) = run(&format!(
+        "{PRELUDE}pub trait Mk {{ fn mk() -> Self; }}\nimpl Mk for Ptr<Node> {{ fn mk() -> Self {{ Self::new(Node {{ val: 1 }}) }} }}\n"
+    ));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("E0003") && l.contains(CALL)),
+        "{}",
+        lines.join("\n")
+    );
+    // 読まないトークンの中も同じ。
+    rejects(
+        &format!("{PRELUDE}pub fn f() -> u64 {{ let _b = matches!(foo::bar(1), 1); 0 }}\n"),
+        "E0003",
+        "arguments of this macro",
+    );
+    // 本体の中の項目（`use` の別名、型と impl、glob の `use`）を根に持つパスは今のまま。権限に行き着く項目は
+    // 本体の中の項目の検査が拒む。
+    accepts(&format!(
+        "{PRELUDE}pub mod m5 {{ pub fn id5(x: u64) -> u64 {{ x }} }}\npub fn f() -> u64 {{ let a = m6::id5(1); use crate::m5 as m6; struct L5; impl L5 {{ fn new() -> L5 {{ L5 }} }} let _l = L5::new(); {{ use crate::m5::*; let _b = id5(2); }} a }}\n"
+    ));
+    // 外の glob があるモジュールの知らない根、定数、列挙子、ローカルのクロージャ、本体の中の関数、型の引数は
+    // 今のまま。
+    accepts(&format!(
+        "{PRELUDE}pub mod sx {{ use std::collections::*; pub fn g() -> u64 {{ let _m = BTreeMap::<u64, u64>::new(); 0 }} }}\npub const MAX: u64 = 3;\npub enum Color {{ Red, Blue }}\nuse Color::Blue;\npub fn f<T: Default>() -> u64 {{ let _c = Color::Red; let _d = Blue; let g = |x: u64| x; fn h() -> u64 {{ 1 }} let _t = T::default(); let _b = matches!(Color::Red, Color::Red); g(MAX) + h() }}\n"
+    ));
+}
+
+/// 2 つ目以降の区切りの `super`（`super::super::mk`）を解決し、§6.2 の検査に通す（#75 の 4 回目の再確認）。
+/// これまでは解決できず、別名（`zz`、`yy`）で呼ぶと安全側の規則にも掛からずに抜けていた。別名はモジュールの
+/// 中の `use` を読まないと引けないので、ここでは安全側の規則で E0003 になる。
+#[test]
+fn super_after_the_first_segment_is_resolved() {
+    const PRE: &str = "fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\nuse crate::mk as zz;\n";
+    let src = |uses: &str, body: &str| {
+        format!(
+            "{PRELUDE}{PRE}pub mod a {{ pub mod b {{ {uses} use super::super::Node; pub fn f() -> u64 {{ {body} }} }} }}\n"
+        )
+    };
+    for (uses, call) in [
+        ("", "super::super::mk(1)"),
+        ("use super::super::mk;", "mk(1)"),
+    ] {
+        rejects(
+            &src(uses, &format!("let q = {call}; 0")),
+            "E0505",
+            "still owned",
+        );
+        accepts(&src(uses, &format!("let q = {call}; leak q@; 0")));
+    }
+    for (uses, body, needle) in [
+        (
+            "",
+            "let q = super::super::zz(1); 0",
+            "a path that cannot be resolved",
+        ),
+        (
+            "use super::super::zz as yy;",
+            "let q = yy(1); 0",
+            "a path that cannot be resolved",
+        ),
+        (
+            "use super::super::zz as yy;",
+            "let _b = matches!({ let q = yy(1); 1u64 }, 1); 0",
+            "arguments of this macro",
+        ),
+    ] {
+        let (_, lines) = run(&src(uses, body));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains(needle)),
+            "{uses} {body}:\n{}",
+            lines.join("\n")
+        );
+    }
+}
+
+/// 5 回目の再確認：安全側の規則の例外は、肯定の事実（ローカル変数、本体の中の項目、許可リストの根、
+/// 行き先が外と分かった glob）があるときだけ通す。索引が名前を取りこぼす綴り（`r#` の別名、本体の中の
+/// glob、深さの打ち切り）で黙って抜けない。
+#[test]
+fn allow_list_exceptions_need_positive_facts() {
+    const MK: &str =
+        "pub fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\n";
+    const CALL: &str = "a path that cannot be resolved";
+    // blocker 1：`use .. as r#k;` の別名は `k` と同じ（`r#` を外して比べる）。
+    for (pre, body) in [
+        ("use crate::mk as r#k;", "let q = k(1); 0"),
+        ("use crate::mk as r#k;", "let q = r#k(1); 0"),
+        (
+            "pub struct W;\nimpl W { pub fn mkw() -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: 1 }); q } }\nuse crate::W as r#WW;",
+            "let q = WW::mkw(); 0",
+        ),
+    ] {
+        rejects(
+            &format!("{PRELUDE}{MK}{pre}\npub fn f() -> u64 {{ {body} }}\n"),
+            "E0505",
+            "still owned",
+        );
+    }
+    rejects(
+        &format!(
+            "{PRELUDE}{MK}use crate::mk as r#k;\npub fn f() -> u64 {{ let _b = matches!({{ let q = k(1); 1u64 }}, 1); 0 }}\n"
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
+    // blocker 2：本体の中の glob は、行き先が外と分かるときだけ、知らない根を通す。クレートの中の glob も、
+    // 内側のブロックの外の glob も、self 型を引けない impl の `Self::new` を通さない。
+    for body in [
+        "use crate::Color::*; let q = Self::new(Node { val: 1 }); 0",
+        "{ use std::collections::*; } let q = Self::new(Node { val: 1 }); 0",
+        "use std::collections::*; let q = Self::new(Node { val: 1 }); 0",
+    ] {
+        let (_, lines) = run(&format!(
+            "{PRELUDE}pub enum Color {{ Red }}\npub trait Mk {{ fn mkt() -> u64; }}\nimpl Mk for Ptr<Node> {{ fn mkt() -> u64 {{ {body} }} }}\n"
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && l.contains(CALL)),
+            "{body}:\n{}",
+            lines.join("\n")
+        );
+    }
+    // 本体の中の外の glob は、クレートの名前（24 段の別名の鎖の `e24`）を外にしない。
+    let mut chain = String::from("use ebykn_prelude as e0;\n");
+    for k in 1..=24 {
+        chain.push_str(&format!("use e{} as e{k};\n", k - 1));
+    }
+    rejects(
+        &format!(
+            "{PRELUDE}{chain}pub fn f() -> u64 {{ use std::collections::*; let q = e24::Ptr::new(Node {{ val: 1 }}); 0 }}\n"
+        ),
+        "E0003",
+        CALL,
+    );
+    // 内側のブロックの本体の項目は、ブロックの外に効かない（`mm` はモジュールの直下の別名に戻る）。
+    rejects(
+        &format!(
+            "{PRELUDE}pub mod m2 {{ use super::*; pub fn mk2(v: u64) -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: v }}); q }} }}\npub mod util {{ pub fn mk2(v: u64) -> u64 {{ v }} }}\nuse crate::m2 as r#mm;\npub fn f() -> u64 {{ {{ use crate::util as mm; }} let q = mm::mk2(1); 0 }}\n"
+        ),
+        "E0505",
+        "still owned",
+    );
+    rejects(
+        &format!(
+            "{PRELUDE}pub mod util {{ pub fn id(v: u64) -> u64 {{ v }} }}\npub fn f() -> u64 {{ {{ use crate::util as zz; }} let x = zz::id(1); x }}\n"
+        ),
+        "E0003",
+        CALL,
+    );
+    // 本体の中の外の glob から来る名前（`BTreeMap`）は通す（この例外を外すと落ちる）。
+    accepts(&format!(
+        "{PRELUDE}pub fn f() -> u64 {{ use std::collections::*; let _m = BTreeMap::<u64, u64>::new(); 0 }}\n"
+    ));
+    // blocker 4：深さで打ち切った glob の探索は、外の名前にしない（40 段の glob の鎖）。
+    let mut globs = String::new();
+    for k in 0..40 {
+        globs.push_str(&format!(
+            "pub mod g{k} {{ pub use super::g{}::*; }}\n",
+            k + 1
+        ));
+    }
+    globs.push_str("pub mod g40 { use super::Node; pub fn mk40(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } }\nuse g0::*;\n");
+    let (_, lines) = run(&format!(
+        "{PRELUDE}{globs}pub fn f() -> u64 {{ let q = mk40(1); 0 }}\n"
+    ));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("E0003") || l.contains("E0505")),
+        "{}",
+        lines.join("\n")
+    );
+    // should-fix：トレイトの既定のメソッドの `Self::new2()` は通す（トレイトのメソッドは契約を持てない）。
+    accepts(&format!(
+        "{PRELUDE}pub trait Mk2: Sized {{ fn new2() -> Self; fn make() -> Self {{ Self::new2() }} }}\n"
+    ));
+    // should-fix：索引の項目にならない `union` も名前を持つ（その上の gives のメソッドを引く）。
+    rejects(
+        &format!(
+            "{PRELUDE}pub union U {{ a: u64 }}\nimpl U {{ pub fn mku() -> (q: Ptr<Node>) gives q@ {{ let q = Ptr::new(Node {{ val: 1 }}); q }} }}\npub fn f() -> u64 {{ let q = U::mku(); 0 }}\n"
+        ),
+        "E0505",
+        "still owned",
+    );
+}
+
+/// 6 回目の再確認：肯定の事実の一覧のそれぞれが穴にならない。
+#[test]
+fn positive_facts_do_not_leak() {
+    const MK: &str =
+        "pub fn mk(v: u64) -> (q: Ptr<Node>) gives q@ { let q = Ptr::new(Node { val: v }); q }\n";
+    const VALUE: &str = "can only be called directly";
+    const CALL: &str = "a path that cannot be resolved";
+    let rejects_any = |src: String, needles: &[&str]| {
+        let (_, lines) = run(&src);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") && needles.iter().any(|n| l.contains(n))),
+            "{src}\n{}",
+            lines.join("\n")
+        );
+    };
+    // blocker 1：名前付きの戻り値は契約の中だけのローカル変数（本体の `mk` はモジュールの関数）。
+    rejects_any(
+        format!("{PRELUDE}{MK}pub fn f() -> (mk: u64) {{ let g = mk; let q = g(1); 0 }}\n"),
+        &[VALUE],
+    );
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let c = |v: u64| -> (mk: u64) {{ let g = mk; let q = g(v); 0 }}; c(1) }}\n"
+        ),
+        &[VALUE],
+    );
+    // blocker 2：`if let` の束縛は then のブロックの中だけ。
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let o = Some(1u64); if let Some(mk) = o {{ }} let g = mk; let q = g(1); 0 }}\n"
+        ),
+        &[VALUE],
+    );
+    rejects_any(
+        format!(
+            "{PRELUDE}{MK}pub fn f() -> u64 {{ let o = Some(1u64); if let Some(mk) = o {{ }} else {{ let g = mk; let q = g(1); }} 0 }}\n"
+        ),
+        &[VALUE],
+    );
+    // blocker 3：glob のパスを引く探索を深さで打ち切ったら、外の glob があっても止める。
+    let mut chain = String::new();
+    for k in 0..40 {
+        chain.push_str(&format!(
+            "pub mod g{k} {{ pub use super::g{}::*; }}\n",
+            k + 1
+        ));
+        chain.push_str(&format!(
+            "pub mod h{k} {{ pub use super::h{}::*; }}\n",
+            k + 1
+        ));
+    }
+    chain.push_str("pub mod g40 { use super::Node; pub fn mk40(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } }\n");
+    chain.push_str("pub mod h40 { pub mod tgt { use crate::Node; pub fn mk3(v: u64) -> (q: ebykn_prelude::Ptr<Node>) gives q@ { let q = ebykn_prelude::Ptr::new(Node { val: v }); q } } }\n");
+    for (uses, body) in [
+        (
+            "use g0::*;\nuse std::collections::*;\n",
+            "let q = mk40(1); 0",
+        ),
+        (
+            "use h0::tgt::*;\nuse std::collections::*;\n",
+            "let q = mk3(1); 0",
+        ),
+        (
+            "use h0::tgt::*;\n",
+            "use std::collections::*; let q = mk3(1); 0",
+        ),
+        // 本体の glob の先が深い鎖のとき、その名前を外の glob の例外に落とさない。
+        (
+            "pub mod mh { pub use crate::h0::tgt::*; }\n",
+            "use crate::mh::*; use std::collections::*; let q = mk3(1); 0",
+        ),
+        (
+            "pub mod mh { pub use crate::h0::tgt::*; }\n",
+            "use crate::mh as mm; let q = mm::mk3(1); 0",
+        ),
+    ] {
+        let (_, lines) = run(&format!(
+            "{PRELUDE}{chain}{uses}pub fn f() -> u64 {{ {body} }}\n"
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("E0003") || l.contains("E0505")),
+            "{uses} {body}\n{}",
+            lines.join("\n")
+        );
+    }
+    // 本体の中の `use` の別名とクレートの glob は、行き先のパスに置き換えて検査する（行き先を引けない別名）。
+    const M: &str = "pub trait Tr { type Out; }\nimpl Tr for Node { type Out = Ptr<Node>; }\npub mod m { pub type PX<T> = T; pub type X = <crate::Node as crate::Tr>::Out; pub fn id(v: u64) -> u64 { v } }\n";
+    for body in [
+        "use crate::m as mm; let q = mm::X::new(Node { val: 1 }); 0",
+        "use crate::m as mm; let q = mm::PX::<Ptr<Node>>::new(Node { val: 1 }); 0",
+        "use crate::m::*; use std::collections::*; let q = X::new(Node { val: 1 }); 0",
+        "use crate::m::*; use std::collections::*; let q = PX::<Ptr<Node>>::new(Node { val: 1 }); 0",
+    ] {
+        rejects_any(
+            format!("{PRELUDE}{M}pub fn f() -> u64 {{ {body} }}\n"),
+            &[CALL],
+        );
+    }
+    // 権限に行き着かない別名と glob は今のまま。
+    accepts(&format!(
+        "{PRELUDE}{M}pub fn f() -> u64 {{ use crate::m as mm; use crate::m::*; mm::id(1) + id(2) }}\n"
+    ));
+    // should-fix：`<Node as Mk2>::make()`（トレイトの後ろが一つの名前）はトレイトのメソッドなので通す。
+    accepts(&format!(
+        "{PRELUDE}pub trait Mk2 {{ fn make() -> Self; }}\nimpl Mk2 for Node {{ fn make() -> Self {{ Node {{ val: 1 }} }} }}\npub fn f() -> u64 {{ let _n = <Node as Mk2>::make(); 0 }}\n"
     ));
 }
 
@@ -435,8 +1103,16 @@ fn permissions_in_unread_macro_arguments_are_e0003() {
         "arguments of this macro",
     );
     accepts(&in_pool(
-        "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); assert!(x > 0); println!(\"{}\", p.addr()); leak p@; }",
+        "pub fn f(x: u64) { let p = Ptr::new(Node { val: 1 }); let a = p.addr(); assert!(x > 0); println!(\"{}\", a); leak p@; }",
     ));
+    // Γ にある名前は、値として使うだけでも数える（綴りを列挙しない。#74 のレビュー）。値はマクロの外で求める。
+    rejects(
+        &in_pool(
+            "pub fn f() { let p = Ptr::new(Node { val: 1 }); println!(\"{}\", p.addr()); leak p@; }",
+        ),
+        "E0003",
+        "arguments of this macro",
+    );
 }
 
 // ---- 再レビュー ----
