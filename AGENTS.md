@@ -211,6 +211,7 @@ Issue には 3 つの軸を独立に付ける。付けるまでが起票です�
 | `cargo xtask verus-install` | 固定した Verus（ルートの `Cargo.toml` の `[workspace.metadata.verus]`）を `~/.cache/ebykn/verus/<版>/` に入れ、sha256 を確かめ、Verus が要求する toolchain を rustup で入れる |
 | `cargo xtask verus-verify` | `ebykn_prelude` と §6.2 の参照モデル（`formal/linearity`）を `--no-cheating` で検証し、Verus なしの cargo でもビルドする。参照モデルは、定理（`xtask/src/verus.rs` の `REQUIRED`）が検証されたことを名前で確かめる |
 | `cargo xtask golden-verify` | golden の各ケース（`tests/golden/*/expected/status.txt` のあるもの）に `ebykn verify` をかけて期待と比べ、書き出した `build/verus/` を Verus なしの cargo と `ebykn build` の両方でビルドし、成功を期待する（検証に失敗した項目があっても）。`expected/build-error.txt` のあるケースは、両方がその行を出して失敗することを期待する（`ebykn build` だけが止まるケースは `expected/ebykn-build-error.txt`）。続けて、Verus が要るので `#[ignore]` にしたテスト（`xtask/src/golden.rs` の `IGNORED`）を走らせる |
+| `cargo xtask golden-bless [<ケース>...]` | golden の書き下しの期待（`tests/golden/*/expected/verus/` の `src/` と `Cargo.toml`）を、今の書き下しの生成物から作り直す。ケースを省くと `expected/verus/` のある全ケース。`Cargo.lock` と `status.txt` には触らない。期待は生成物そのもの（コメントなし。ケースの説明は `README.md`）で、作り直すと消えるコメントがあれば何も書かずに止まる。書き下しが変わったら、作り直す → 差分を読んで意図した変更だけか確かめる → `golden-verify` が通る（`status.txt` と一致する）ことを確かめる。手順と新しいケースの作り方は [ebykn-pr](.claude/skills/ebykn-pr/SKILL.md) の 1 |
 | `cargo xtask examples-verify` | `examples/` の各例を `target/examples/` に写し、README の ` ```console ` のコマンドを実行して、出力を README と比べる |
 | `cargo xtask playground` | `ebykn` をビルドし、`examples/` を git が追跡しない `playground/` に写す。すでにあるファイルは上書きしない |
 | `cargo xtask verus-probes` | 設計ノート §7.2 の前提を確かめるプローブ（`tests/verus-probes/`）を走らせ、各ファイルの先頭の期待と比べる |

@@ -7,52 +7,30 @@ use vstd::prelude::old;
 use ebykn_prelude::*;
 verus! {
 
-// 付録 B の `stack` の `.eyk` だけを書き下した、M2 の書き下しの期待（`ebykn` の出力とトークン列で比べる）。
-// M0 の手書きの目標（2bca455 の同じファイル）から、証明として足した部分（M3 の `.eykp` で足す部分）を
-// 除いたもの。そのため `push` / `pop` は検証を通らない（`expected/status.txt`）。
-// ほかに変えたのは、先頭の `use`（#16）、`and { }` の括弧、範囲の束縛子の型（`forall|i: int|`）。
-// 表の形どおりでは通らず形を変えた箇所は `OPEN.md` に記録してある。
-// `.eyk` は、付録 B の不変条件の `self.head == self@order.first()` を、vstd の `first()`（要素を返す）の
-// 意味で正しい `self.head == self@order.get(0)` に書き直したもの（#11 の決定：案 B）。
+pub struct Node < T > { pub val: T, next: Option < Ptr < Node < T >>>, }
 
-pub struct Node<T> {
-    pub val: T,
-    next: Option<Ptr<Node<T>>>,
-}
-
-pub struct Stack<T> {
-    head: Option<Ptr<Node<T>>>,
-    __eyk_erased_nodes: Tracked<Region<Ptr<Node<T>>>>,
-    __eyk_erased_order: Ghost<Seq<Ptr<Node<T>>>>,
+pub struct Stack < T > {
+    head: Option < Ptr < Node < T >>>, __eyk_erased_nodes: Tracked < Region < Ptr < Node < T >>>>, __eyk_erased_order: Ghost < Seq < Ptr < Node < T >>>>,
 }
 
 impl<T> Stack<T> {
     pub closed spec fn invariant(&self) -> bool {
-        (((forall|p| self.__eyk_erased_order@.contains(p) ==> self.__eyk_erased_nodes@.contains(p))) && (self.head
-            == self.__eyk_erased_order@.get(0)) && ((forall|i: int|
-            0 <= i < self.__eyk_erased_order@.len() ==> self.__eyk_erased_nodes@.index(self.__eyk_erased_order@[i]).next
-                == self.__eyk_erased_order@.get(i + 1))))
+        (((forall | p | self.__eyk_erased_order@.contains(p) ==> self.__eyk_erased_nodes@.contains(p))) && (self.head == self.__eyk_erased_order@.get(0)) && ((forall | i: int | 0 <= i < self.__eyk_erased_order@.len() ==> self.__eyk_erased_nodes@.index(self.__eyk_erased_order@[i]).next == self.__eyk_erased_order@.get(i + 1))))
     }
+
 }
 
 impl<T> Stack<T> {
-    #[verifier::exec_allows_no_decreases_clause]
-    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
-    pub fn new() -> (__eyk_r: Self)
-        ensures
-            __eyk_r.invariant(),
-    {
-        Stack { head: None, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty()) }
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn new() -> (__eyk_r: Self)
+    ensures __eyk_r.invariant(), {
+        Stack {
+            head: None, __eyk_erased_nodes: Tracked(Region::empty()), __eyk_erased_order: Ghost(Seq::empty())
+        }
     }
 
-    #[verifier::exec_allows_no_decreases_clause]
-    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
-    pub fn push(&mut self, v: T)
-        requires
-            old(self).invariant(),
-        ensures
-            final(self).invariant(),
-    {
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn push(&mut self, v: T)
+    requires old(self).invariant(),
+    ensures final(self).invariant(), {
         let (n, Tracked(__eyk_perm_n)) = Ptr::new(Node { val: v, next: self.head });
         self.head = Some(n);
         proof {
@@ -63,14 +41,9 @@ impl<T> Stack<T> {
         }
     }
 
-    #[verifier::exec_allows_no_decreases_clause]
-    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
-    pub fn pop(&mut self) -> Option<T>
-        requires
-            old(self).invariant(),
-        ensures
-            final(self).invariant(),
-    {
+    #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn pop(&mut self) -> Option < T >
+    requires old(self).invariant(),
+    ensures final(self).invariant(), {
         let h = self.head?;
         let tracked __eyk_perm_h = self.__eyk_erased_nodes.borrow_mut().remove(h);
         let node = h.free(Tracked(__eyk_perm_h));
@@ -80,8 +53,7 @@ impl<T> Stack<T> {
         }
         Some(node.val)
     }
+
 }
-
-
 
 } // verus!

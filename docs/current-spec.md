@@ -706,7 +706,7 @@ M3 の `.eykp` で示す義務は次のとおりです。
 - `push`：新しい `n` が古い `nodes` にないこと（`Ptr::new` の権限と `Region::insert` の `ensures`）と、`order` の添字が一つずれることから、不変条件の `forall` の 2 項を示す。
 - `pop`：`order` に重複がないこと（`next` をたどると末尾の `None` に着くことからの帰納法。M0 の `lemma_no_duplicates` / `lemma_shifted_equal`）から、`h` が残りの `order` にないことと添字のずれを示す。
 
-`tests/golden/stack/expected/verus/` は、M0 の手書きの stack（2bca455）から `// +` の証明を除いたものです（ほかの違いは先頭の `use`、`and { }` の括弧、範囲の束縛子の型 `: int`）。
+`tests/golden/stack/expected/verus/` は、`.eyk` だけを書き下した生成物そのものです（`cargo xtask golden-bless` で作り直します）。M3 の `.eykp` で足す証明は、M0 の手書きの stack（2bca455）の `// +` の部分にあります。
 
 * 元の仕様：§12 の M2 の完了条件は「`stack` が verified」。
 * 根拠：#17（PR #26）。証明は M0 の手書きの stack（2bca455）にある。

@@ -6,11 +6,17 @@
 //! `expected/verus/` とトークン列で比べる（空白・コメント・記号の結合の仕方は見ない）。`Cargo.toml` は
 //! `ebykn_prelude` への `path` だけを除いて行で比べる。`verify` の結果と `expected/status.txt` の比較は
 //! Verus が要るので `cargo xtask golden-verify`（CI の verus ジョブ）が行う。
+//!
+//! 書き下しの比べ方と作り直し方（`cargo xtask golden-bless`）は `golden_lowered/mod.rs` にある。
 
 use std::path::{Path, PathBuf};
 
 use ebykn::check_project;
 use ebykn_syntax::diag::Lang;
+
+mod golden_lowered;
+
+use golden_lowered::{compare_lowered, token_list};
 
 fn golden_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden")
@@ -199,117 +205,6 @@ fn verify_and_build_stop_when_there_are_proof_files() {
     );
 }
 
-/// トークン列（空白・コメント・記号の結合を除いた形）。
-fn token_list(src: &str) -> Result<Vec<String>, String> {
-    use proc_macro2::{TokenStream, TokenTree};
-    fn flat(ts: TokenStream, out: &mut Vec<String>) {
-        for t in ts {
-            match t {
-                TokenTree::Group(g) => {
-                    out.push(format!("{:?}(", g.delimiter()));
-                    flat(g.stream(), out);
-                    out.push(")".into());
-                }
-                TokenTree::Punct(p) => out.push(p.as_char().to_string()),
-                t => out.push(t.to_string()),
-            }
-        }
-    }
-    let ts: TokenStream = src.parse().map_err(|e| format!("{e}"))?;
-    let mut out = Vec::new();
-    flat(ts, &mut out);
-    Ok(out)
-}
-
-/// `ebykn_prelude = { path = ".." }` の行の値を除く（置き場所は環境で変わる。`OPEN.md`）。
-fn normalize_toml(s: &str) -> String {
-    s.lines()
-        .map(|l| {
-            if l.starts_with("ebykn_prelude = ") {
-                "ebykn_prelude = <path>".to_string()
-            } else {
-                l.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// 書き下しを `expected/verus/` と比べる。違えば説明を返す。
-fn compare_lowered(dir: &Path) -> Result<(), String> {
-    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-    let expected = dir.join("expected/verus");
-    let report = check_project(dir);
-    let output = ebykn::lower_report(&report)
-        .ok_or_else(|| format!("{name}: 検査が通らないので書き下せません"))??;
-    let mut want: Vec<String> = Vec::new();
-    collect_rs(&expected.join("src"), "src", &mut want);
-    want.sort();
-    let mut got: Vec<String> = output.files.iter().map(|f| f.rel.clone()).collect();
-    got.sort();
-    if want != got {
-        return Err(format!(
-            "{name}: 生成したファイルが違います（期待 {want:?}、実際 {got:?}）"
-        ));
-    }
-    for f in &output.files {
-        let exp =
-            std::fs::read_to_string(expected.join(&f.rel)).map_err(|e| format!("{name}: {e}"))?;
-        let a = token_list(&exp).map_err(|e| format!("{name}: {}: {e}", f.rel))?;
-        let b = token_list(&f.text).map_err(|e| format!("{name}: 生成した {}: {e}", f.rel))?;
-        if a != b {
-            let at = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-            return Err(format!(
-                "{name}: {} のトークン列が {at} 個目から違います\n--- 期待: {}\n--- 実際: {}\n--- 生成した全文\n{}",
-                f.rel,
-                a[at.min(a.len())..]
-                    .iter()
-                    .take(20)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                b[at.min(b.len())..]
-                    .iter()
-                    .take(20)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                f.text
-            ));
-        }
-    }
-    let toml = ebykn_lower::cargo_toml(
-        &report.project,
-        &ebykn_lower::Deps {
-            vstd: &ebykn::verus_pin().vstd,
-            prelude_path: "-",
-        },
-    );
-    let exp =
-        std::fs::read_to_string(expected.join("Cargo.toml")).map_err(|e| format!("{name}: {e}"))?;
-    if normalize_toml(&toml) != normalize_toml(&exp) {
-        return Err(format!(
-            "{name}: Cargo.toml が違います\n--- 期待\n{exp}\n--- 実際\n{toml}"
-        ));
-    }
-    Ok(())
-}
-
-fn collect_rs(dir: &Path, rel: &str, out: &mut Vec<String>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        let n = e.file_name().to_string_lossy().into_owned();
-        if p.is_dir() {
-            collect_rs(&p, &format!("{rel}/{n}"), out);
-        } else if n.ends_with(".rs") {
-            out.push(format!("{rel}/{n}"));
-        }
-    }
-}
-
 /// ケースの比べ方。`expected/verus/` があれば書き下しを比べる。なければ検査が失敗するケース
 /// （診断だけを比べる）でなければならない。書き下せるのに `expected/verus/` がないケースは失敗にする
 /// （黙って飛ばさない）。
@@ -382,4 +277,163 @@ fn fails_when_the_lowered_verus_differs() {
     assert_ne!(broken, exp);
     assert_ne!(token_list(&exp).unwrap(), token_list(&broken).unwrap());
     assert!(compare_lowered(&dir).is_ok());
+}
+
+/// ケースのディレクトリを `to` に写す（`build/` と `target/` は写さない）。
+fn copy_case(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let n = e.file_name();
+        if n == "build" || n == "target" {
+            continue;
+        }
+        if e.path().is_dir() {
+            copy_case(&e.path(), &to.join(&n));
+        } else {
+            std::fs::copy(e.path(), to.join(&n)).unwrap();
+        }
+    }
+}
+
+/// 写したケースで `f` を走らせ、写しを消してから結果を返す。
+fn with_copy<R>(case: &str, tag: &str, f: impl FnOnce(&Path) -> R) -> R {
+    let tmp = std::env::temp_dir().join(format!("ebykn-bless-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let dir = tmp.join(case);
+    copy_case(&golden_root().join(case), &dir);
+    let r = f(&dir);
+    let _ = std::fs::remove_dir_all(&tmp);
+    r
+}
+
+/// 今のどのケースも、コミットされた期待が生成物そのもの（作り直しても何も変わらない）で、比較を通る。
+/// 期待にどんな形のコメントを足しても、ここで落ちる（期待にコメントを置かない。`OPEN.md`）。
+#[test]
+fn every_blessed_expectation_matches_the_lowering() {
+    let mut blessed = Vec::new();
+    for c in cases() {
+        if !c.join("expected/verus").is_dir() {
+            continue;
+        }
+        let name = c.file_name().unwrap().to_string_lossy().into_owned();
+        let r = with_copy(&name, &name, |dir| {
+            let b = golden_lowered::bless(dir)?;
+            Ok::<_, String>((b, compare_case(dir)?))
+        });
+        assert_eq!(
+            r,
+            Ok((golden_lowered::Blessed::default(), "verus")),
+            "{name}: 期待が生成物と違います（cargo xtask golden-bless {name} で作り直し、差分を読んでください）"
+        );
+        blessed.push(name);
+    }
+    assert!(blessed.iter().any(|n| n == "stack"), "{blessed:?}");
+}
+
+/// 壊した期待を作り直すと、比較を通る形に戻る。生成物にない `.rs` は消し、`Cargo.lock` には触らない。
+/// もう一度作り直しても何も変わらない。
+#[test]
+fn bless_repairs_a_broken_expectation() {
+    with_copy("stack", "repair", |dir| {
+        let verus = dir.join("expected/verus");
+        let lib = verus.join("src/lib.rs");
+        let exp = std::fs::read_to_string(&lib).unwrap();
+        let broken = exp.replacen("final(self)", "self", 1);
+        assert_ne!(broken, exp);
+        std::fs::write(&lib, broken).unwrap();
+        let toml = std::fs::read_to_string(verus.join("Cargo.toml")).unwrap();
+        let broken = toml.replacen("panic = \"abort\"\n", "", 1);
+        assert_ne!(broken, toml);
+        std::fs::write(verus.join("Cargo.toml"), broken).unwrap();
+        std::fs::write(verus.join("src/stale.rs"), "fn f() {}\n").unwrap();
+        let lock = std::fs::read(verus.join("Cargo.lock")).unwrap();
+        assert!(compare_lowered(dir).is_err());
+
+        let b = golden_lowered::bless(dir).unwrap();
+        assert_eq!(b.written, ["src/lib.rs", "Cargo.toml"]);
+        assert_eq!(b.removed, ["src/stale.rs"]);
+        assert!(!verus.join("src/stale.rs").exists());
+        assert_eq!(std::fs::read(verus.join("Cargo.lock")).unwrap(), lock);
+        compare_lowered(dir).unwrap();
+        assert_eq!(
+            golden_lowered::bless(dir).unwrap(),
+            golden_lowered::Blessed::default()
+        );
+    });
+}
+
+/// 期待に手で書いたコメントがあれば、作り直しは何も書かずに失敗する（コメントを消さない）。
+#[test]
+fn fails_to_bless_when_it_would_erase_comments() {
+    let cases: [(&str, &str, &str, &str); 6] = [
+        (
+            "src/lib.rs",
+            "verus! {\n",
+            "verus! {\n// 手で書いた説明\n",
+            "// 手で書いた説明",
+        ),
+        // 生成物にあるコメントに書き足したもの（印の数は変わらない）。
+        (
+            "src/lib.rs",
+            "} // verus!",
+            "} // verus! 手で書いた説明",
+            "// verus! 手で書いた説明",
+        ),
+        // 生成物にあるコメントと同じ本文を、もう 1 つ足したもの。
+        (
+            "src/lib.rs",
+            "verus! {\n",
+            "verus! {\n// verus!\n",
+            "// verus!",
+        ),
+        (
+            "src/lib.rs",
+            "verus! {\n",
+            "verus! {\n/* 手で書いた説明 */\n",
+            "/* 手で書いた説明 */",
+        ),
+        (
+            "Cargo.toml",
+            "[workspace]\n",
+            "# 手で書いた説明\n[workspace]\n",
+            "# 手で書いた説明",
+        ),
+        // 生成物にないので消すことになる `.rs` のコメント。
+        (
+            "src/stale.rs",
+            "",
+            "// 手で書いた説明\n",
+            "// 手で書いた説明",
+        ),
+    ];
+    for (i, (rel, from, to, comment)) in cases.into_iter().enumerate() {
+        with_copy("stack", &format!("comment{i}"), |dir| {
+            let p = dir.join("expected/verus").join(rel);
+            let before = std::fs::read_to_string(&p).unwrap_or_default();
+            let edited = before.replacen(from, to, 1);
+            assert_ne!(edited, before, "{rel}");
+            // 壊した期待でも作り直しが止まることを見るため、トークンも 1 つ壊す。
+            let lib = dir.join("expected/verus/src/lib.rs");
+            std::fs::write(&p, &edited).unwrap();
+            let lib_text = std::fs::read_to_string(&lib).unwrap();
+            let broken = lib_text.replacen("final(self)", "self", 1);
+            assert_ne!(broken, lib_text);
+            std::fs::write(&lib, &broken).unwrap();
+            let edited = std::fs::read_to_string(&p).unwrap();
+
+            let err = golden_lowered::bless(dir).unwrap_err();
+            assert!(err.contains("コメントが消える"), "{rel}: {err}");
+            // 消える行を、位置と本文で挙げる。
+            assert!(
+                err.lines()
+                    .any(|l| l.starts_with(&format!("  expected/verus/{rel}:"))
+                        && l.ends_with(comment)),
+                "{rel}: {err}"
+            );
+            // 何も書いていない。
+            assert_eq!(std::fs::read_to_string(&p).unwrap(), edited, "{rel}");
+            assert_eq!(std::fs::read_to_string(&lib).unwrap(), broken, "{rel}");
+        });
+    }
 }
