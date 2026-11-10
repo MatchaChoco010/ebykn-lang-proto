@@ -566,7 +566,7 @@ fn sig_text(
             }
             Param::Typed {
                 attrs: at, pat, ty, ..
-            } => format!("{}{}: {}", attrs(at), c.pat_fresh(pat), c.ty(ty)),
+            } => format!("{}{}: {}", attrs(at), c.pat_wrapped(pat), c.ty(ty)),
         })
         .collect();
     let mut requires = Vec::new();
@@ -795,8 +795,8 @@ fn pure_fn(c: &mut Cx, a: &str, v: &Vis, f: &ast::Fn, e: &ast::Expr, exp: &FnExp
     for p in &f.sig.params {
         match p {
             Param::Receiver { .. } => recv = Some("self"),
-            // 引数のパターンを式として渡す。`@x` は引数のパターンが束縛した別の名前（#152）。
-            Param::Typed { pat, .. } => args.push(c.pat_fresh(pat)),
+            // 引数のパターンを式として渡す。`@x` は引数のパターンが束縛した包みの値（#152）。
+            Param::Typed { pat, .. } => args.push(c.pat_wrapped(pat)),
         }
     }
     let call = match recv {
@@ -863,7 +863,7 @@ fn pure_fn(c: &mut Cx, a: &str, v: &Vis, f: &ast::Fn, e: &ast::Expr, exp: &FnExp
                     ""
                 }
             ),
-            Param::Typed { pat, ty, .. } => format!("{}: {}", c.pat_fresh(pat), c.ty(ty)),
+            Param::Typed { pat, ty, .. } => format!("{}: {}", c.pat_wrapped(pat), c.ty(ty)),
         })
         .collect();
     format!(

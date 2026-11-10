@@ -16,12 +16,9 @@ pub struct Bag {
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_match(b: Bag) -> (r: Bag)
 ensures r.n == b.n, r.__eyk_erased_items@ == b.__eyk_erased_items@, r.__eyk_erased_hist@ == b.__eyk_erased_hist@, {
     match b {
-        Bag {
-            __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-        }
-        => {
-            let Tracked(items) = __eyk_pat_items;
-            let Ghost(hist) = __eyk_pat_hist;
+        Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist } => {
+            let Tracked(items) = items;
+            let Ghost(hist) = hist;
             Bag {
                 n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
             }
@@ -32,21 +29,15 @@ ensures r.n == b.n, r.__eyk_erased_items@ == b.__eyk_erased_items@, r.__eyk_eras
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_guard(b: Bag) -> (r: Bag)
 ensures r.__eyk_erased_items@ == b.__eyk_erased_items@, {
     match b {
-        Bag {
-            __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-        }
-        if n > 0 => {
-            let Tracked(items) = __eyk_pat_items;
-            let Ghost(hist) = __eyk_pat_hist;
+        Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist } if n > 0 => {
+            let Tracked(items) = items;
+            let Ghost(hist) = hist;
             Bag {
                 n: n - 1, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
             }
-        }, Bag {
-            __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-        }
-        => {
-            let Tracked(items) = __eyk_pat_items;
-            let Ghost(hist) = __eyk_pat_hist;
+        }, Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist } => {
+            let Tracked(items) = items;
+            let Ghost(hist) = hist;
             Bag {
                 n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
             }
@@ -57,24 +48,18 @@ ensures r.__eyk_erased_items@ == b.__eyk_erased_items@, {
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_or(o: Option < Bag >) -> (r: u64)
 ensures matches!(o, None) ==> r == 0, {
     match o {
-        Some(Bag {
-            __eyk_erased_items: __eyk_pat_items, n: 0, __eyk_erased_hist: __eyk_pat_hist
-        }) | Some(Bag {
-            __eyk_erased_items: __eyk_pat_items, n: 1, __eyk_erased_hist: __eyk_pat_hist
-        }) => {
-            let Tracked(items) = __eyk_pat_items;
-            let Ghost(hist) = __eyk_pat_hist;
+        Some(Bag { __eyk_erased_items: items, n: 0, __eyk_erased_hist: hist }) | Some(Bag { __eyk_erased_items: items, n: 1, __eyk_erased_hist: hist }) => {
+            let Tracked(items) = items;
+            let Ghost(hist) = hist;
             {
                 let b = Bag {
                     n: 7, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
                 };
                 b.n
             }
-        }, Some(Bag {
-            __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-        }) => {
-            let Tracked(items) = __eyk_pat_items;
-            let Ghost(hist) = __eyk_pat_hist;
+        }, Some(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }) => {
+            let Tracked(items) = items;
+            let Ghost(hist) = hist;
             n
         }, None => 0,
     }
@@ -82,11 +67,9 @@ ensures matches!(o, None) ==> r == 0, {
 
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_if_let(o: Option < Bag >) -> (r: Option < Bag >)
 ensures matches!(o, None) ==> matches!(r, None), {
-    if let Some(Bag {
-        __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-    }) = o {
-        let Tracked(items) = __eyk_pat_items;
-        let Ghost(hist) = __eyk_pat_hist;
+    if let Some(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }) = o {
+        let Tracked(items) = items;
+        let Ghost(hist) = hist;
         Some(Bag {
             n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
         })
@@ -96,12 +79,10 @@ ensures matches!(o, None) ==> matches!(r, None), {
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_while_let(v: Vec < Bag >) -> (r: u64) {
     let mut v = v;
     let mut total: u64 = 0;
-    while let Some(Bag {
-        __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-    }) = v.pop()
+    while let Some(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }) = v.pop()
     decreases v.len(), {
-        let Tracked(items) = __eyk_pat_items;
-        let Ghost(hist) = __eyk_pat_hist;
+        let Tracked(items) = items;
+        let Ghost(hist) = hist;
         let b = Bag {
             n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
         };
@@ -114,12 +95,9 @@ ensures matches!(o, None) ==> matches!(r, None), {
 
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_for(v: Vec < Bag >) -> (r: u64) {
     let mut count: u64 = 0;
-    for Bag {
-        __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-    }
-    in v {
-        let Tracked(items) = __eyk_pat_items;
-        let Ghost(hist) = __eyk_pat_hist;
+    for Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist } in v {
+        let Tracked(items) = items;
+        let Ghost(hist) = hist;
         let b = Bag {
             n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
         };
@@ -131,12 +109,9 @@ ensures matches!(o, None) ==> matches!(r, None), {
 }
 
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_closure(b: Bag) -> (r: u64) {
-    let f = | Bag {
-        __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-    }
-    : Bag | -> u64 {
-        let Tracked(items) = __eyk_pat_items;
-        let Ghost(hist) = __eyk_pat_hist;
+    let f = | Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }: Bag | -> u64 {
+        let Tracked(items) = items;
+        let Ghost(hist) = hist;
         {
             let c = Bag {
                 n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
@@ -147,13 +122,11 @@ ensures matches!(o, None) ==> matches!(r, None), {
     f(b)
 }
 
-#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_param(Bag {
-    __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-}: Bag) -> (r: Bag)
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn by_param(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }: Bag) -> (r: Bag)
 requires n > 0,
 ensures r.n == n, {
-    let Tracked(items) = __eyk_pat_items;
-    let Ghost(hist) = __eyk_pat_hist;
+    let Tracked(items) = items;
+    let Ghost(hist) = hist;
     Bag {
         n, __eyk_erased_items: Tracked(items), __eyk_erased_hist: Ghost(hist)
     }
@@ -161,44 +134,38 @@ ensures r.n == n, {
 
 spec fn hist_of(b: Bag) -> Seq < u64 > {
     {
-        let Bag { __eyk_erased_hist: __eyk_pat_hist,.. } = b;
-        let hist = __eyk_pat_hist@;
+        let Bag { __eyk_erased_hist: hist,.. } = b;
+        let hist = hist@;
         hist
     }
 }
 
 spec fn has(o: Option < Bag >, p: Ptr < Node >) -> bool {
     match o {
-        Some(Bag { __eyk_erased_items: __eyk_pat_items,.. }) => {
-            let items = __eyk_pat_items@;
+        Some(Bag { __eyk_erased_items: items,.. }) => {
+            let items = items@;
             items.contains(p)
         }, None => false,
     }
 }
 
-spec fn hist_len(Bag { __eyk_erased_hist: __eyk_pat_hist,.. }: Bag) -> nat {
-    let hist = __eyk_pat_hist@;
+spec fn hist_len(Bag { __eyk_erased_hist: hist,.. }: Bag) -> nat {
+    let hist = hist@;
     hist.len()
 }
 
 #[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] fn uses_spec(b: Bag, p: Ptr < Node >) -> (r: Bag)
 ensures hist_of(r) == b.__eyk_erased_hist@, has(Some(r), p) == b.__eyk_erased_items@.contains(p), hist_len(r) == b.__eyk_erased_hist@.len(), { b }
 
-#[verifier::when_used_as_spec(__eyk_spec_count_of)] fn count_of(Bag {
-    __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-}: Bag) -> (__eyk_r: u64)
-ensures __eyk_r == __eyk_spec_count_of(Bag {
-    __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-}), {
-    let Tracked(items) = __eyk_pat_items;
-    let Ghost(hist) = __eyk_pat_hist;
+#[verifier::when_used_as_spec(__eyk_spec_count_of)] fn count_of(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }: Bag) -> (__eyk_r: u64)
+ensures __eyk_r == __eyk_spec_count_of(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }), {
+    let Tracked(items) = items;
+    let Ghost(hist) = hist;
     n
 }
-spec fn __eyk_spec_count_of(Bag {
-    __eyk_erased_items: __eyk_pat_items, n, __eyk_erased_hist: __eyk_pat_hist
-}: Bag) -> u64 {
-    let items = __eyk_pat_items@;
-    let hist = __eyk_pat_hist@;
+spec fn __eyk_spec_count_of(Bag { __eyk_erased_items: items, n, __eyk_erased_hist: hist }: Bag) -> u64 {
+    let items = items@;
+    let hist = hist@;
     (n) as u64
 }
 

@@ -340,13 +340,15 @@ fn erased_fields_are_lowered_under_reserved_names() {
 }
 
 /// 実行文脈の `let` の文のほかの位置の `@x`（#152）：Verus は `Tracked(x)` / `Ghost(x)` のパターンを
-/// 受けないので、別の名前 `__eyk_pat_x` に束縛し、腕・本体の先頭で束縛し直す（実行文脈は
-/// `let Tracked(x) = ..;` / `let Ghost(x) = ..;`、論理文脈は `let x = ..@;`）。
+/// 受けないので、同じ名前 `x` に包みの値のまま束縛し、腕・本体の先頭で中身に束縛し直す（実行文脈は
+/// `let Tracked(x) = x;` / `let Ghost(x) = x;`、論理文脈は `let x = x@;`）。名前を変えないので、
+/// 同じ名前を二度束縛すれば rustc が E0415 / E0416 で止める（PR #168 のレビュー。
+/// `tests/verus-probes/erased_pat_rebind.rs`）。
 #[test]
 fn erased_patterns_outside_exec_let_are_rebound_in_the_body() {
-    const PAT: &str = "P { a, __eyk_erased_r: __eyk_pat_r, __eyk_erased_q: __eyk_pat_q }";
-    const EXEC: &str = "let Tracked(r) = __eyk_pat_r; let Ghost(q) = __eyk_pat_q;";
-    const LOGIC: &str = "let r = __eyk_pat_r@; let q = __eyk_pat_q@;";
+    const PAT: &str = "P { a, __eyk_erased_r: r, __eyk_erased_q: q }";
+    const EXEC: &str = "let Tracked(r) = r; let Ghost(q) = q;";
+    const LOGIC: &str = "let r = r@; let q = q@;";
     const LIT: &str = "P { a, @r: r, @q: q }";
     const OUT: &str = "P { a, __eyk_erased_r: Tracked(r), __eyk_erased_q: Ghost(q) }";
     let cases = [
@@ -383,7 +385,7 @@ fn erased_patterns_outside_exec_let_are_rebound_in_the_body() {
             format!("pub fn f(P {{ a, @r, @q }}: P) -> P {{ {LIT} }}"),
             format!("fn f({PAT}: P) -> P {{ {EXEC} {OUT} }}"),
         ),
-        // 論理文脈：`let` の文も別の名前に束縛する。
+        // 論理文脈：`let` の文も包みの値に束縛する。
         (
             "spec fn h(x: P) -> Seq<u64> = { let P { a, @r, @q } = x; q };".to_string(),
             format!("{{ let {PAT} = x; {LOGIC} q }}"),

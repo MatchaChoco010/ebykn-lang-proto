@@ -5,12 +5,16 @@
 //! `E0532`（タプル構造体のパターンが見つからない）になり、論理文脈（`spec fn` の本体など）では `let` の
 //! 文でも `Tracked(x)` を受けない（`tests/verus-probes/erased_pat_*.rs`）。
 //!
-//! そこで、実行文脈の `let` の文のほかは、消去フィールドを別の名前 `__eyk_pat_x`（型は `Tracked<..>` /
-//! `Ghost<..>`）に束縛し（[`Cx::pat_fresh`]）、束縛が効く範囲（腕・`if` / ループ・クロージャ・関数の本体、
-//! 論理文脈の `let` の後）の先頭で `x` に束縛し直す（[`Cx::erased_rebind`]）。実行文脈では
-//! `let Tracked(x) = __eyk_pat_x;` / `let Ghost(x) = __eyk_pat_x;`（`let` の文と同じ形）、論理文脈では
-//! `let x = __eyk_pat_x@;`。束縛し直す前の位置（match のガード、`&&` で続く条件、ループ句、関数と
-//! クロージャの契約）で `x` を使うものは、検査が E0003 にする（`ebykn_check` の `body/erased_pat.rs`）。
+//! そこで、実行文脈の `let` の文のほかは、消去フィールドを同じ名前 `x` に、値の `Tracked<..>` / `Ghost<..>`
+//! のまま束縛し（[`Cx::pat_wrapped`]）、束縛が効く範囲（腕・`if` / ループ・クロージャ・関数の本体、論理文脈
+//! の `let` の後）の先頭で、中身に束縛し直して覆う（[`Cx::erased_rebind`]）。実行文脈では
+//! `let Tracked(x) = x;` / `let Ghost(x) = x;`（`let` の文と同じ形）、論理文脈では `let x = x@;`。
+//!
+//! 名前を変えないので、同じパターンや引数の並びで `x` を二度束縛すれば、`.eyk` で書いたときと同じく
+//! rustc が E0415 / E0416 で止める（別の名前に変えると、重複が見えなくなり片方を黙って選んだ。PR #168 の
+//! レビュー）。束縛し直す前の位置（match のガード、`&&` で続く条件、ループ句、関数とクロージャの契約）
+//! では `x` がまだ包みの値なので、そこで `x` を使うものは検査が E0003 にする（`ebykn_check` の
+//! `body/erased_pat.rs`）。
 
 use ebykn_check::facts::SpanKey;
 use ebykn_check::index::ErasedKind;
@@ -19,18 +23,13 @@ use ebykn_syntax::ast::{self, Expr, ExprKind, Param};
 use crate::Cx;
 use crate::expr::ident;
 
-/// 消去フィールド `@x` を束縛する別の名前。`__eyk_` は利用者が書けない（E0101）。
-pub fn fresh_name(i: &ast::Ident) -> String {
-    format!("__eyk_pat_{}", i.name)
-}
-
 impl Cx<'_> {
-    /// 消去フィールドを別の名前に束縛したパターン（`@x` ⇒ `__eyk_erased_x: __eyk_pat_x`）。
-    pub fn pat_fresh(&self, p: &ast::Pat) -> String {
+    /// 消去フィールドを包みの値のまま束縛したパターン（`@x` ⇒ `__eyk_erased_x: x`）。
+    pub fn pat_wrapped(&self, p: &ast::Pat) -> String {
         self.pat_m(p, true)
     }
 
-    /// [`Cx::pat_fresh`] で別の名前にした `@x` を `x` に束縛し直す文。`@x` がなければ空。
+    /// [`Cx::pat_wrapped`] で包みの値に束縛した `@x` を、中身に束縛し直す文。`@x` がなければ空。
     pub fn erased_rebind(&self, p: &ast::Pat) -> String {
         let found = p.erased_idents();
         // `|` の各選択肢は同じ名前を束縛するので、一つにまとめる。
@@ -39,14 +38,13 @@ impl Cx<'_> {
             .into_iter()
             .filter(|i| seen.insert(i.name.clone()))
             .map(|i| {
-                let v = fresh_name(i);
                 let x = ident(i);
                 if self.logic {
-                    return format!("let {x} = {v}@; ");
+                    return format!("let {x} = {x}@; ");
                 }
                 match self.facts.erased.get(&SpanKey::from(i.span)) {
-                    Some(ErasedKind::Owns) => format!("let Tracked({x}) = {v}; "),
-                    _ => format!("let Ghost({x}) = {v}; "),
+                    Some(ErasedKind::Owns) => format!("let Tracked({x}) = {x}; "),
+                    _ => format!("let Ghost({x}) = {x}; "),
                 }
             })
             .collect()

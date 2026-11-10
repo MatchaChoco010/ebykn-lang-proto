@@ -1,6 +1,6 @@
 //! 消去フィールドのパターン `@x` の位置（#152）。
 //!
-//! 書き下しは、実行文脈の `let` の文のほかの位置の `@x` を別の名前に束縛し、腕・本体の先頭で束縛し
+//! 書き下しは、実行文脈の `let` の文のほかの位置の `@x` を包みの値のまま束縛し、腕・本体の先頭で束縛し
 //! 直す。その前に評価される位置（match のガード、`&&` で続く条件、`for` のループ句、関数とクロージャの
 //! 契約）で `@x` の名前を使うものは E0003。使わないものは通す。生成したものが Verus を通ることは
 //! golden の `tests/golden/erased_pat` が確かめる。
@@ -30,6 +30,7 @@ fn the_reported_positions_are_accepted() {
         // 束縛し直す前の位置でも、`@x` でない名前は使える。
         "fn f(b: B) -> B { match b { B { @items, n, @hist } if n > 0 => B { n, @items: items, @hist: hist }, B { @items, n, @hist } => B { n, @items: items, @hist: hist } } }",
         "fn g(B { @items, n, @hist }: B) -> (r: B) requires n > 0, ensures r.n == n, { B { n, @items: items, @hist: hist } }",
+        // 検査だけを通る形（let chain は #166 のとおり、固定した Verus が受けない）。
         "fn f(o: Option<B>) -> u64 { if let Some(B { @items, n, @hist }) = o && n > 0 { let b = B { n, @items: items, @hist: hist }; b.n } else { 0 } }",
         // 論理文脈（`spec fn` の本体と引数）。
         "spec fn h(b: B) -> Seq<u64> = { let B { @hist, @.. } = b; hist };",
@@ -66,6 +67,19 @@ fn e0003_when_a_for_clause_uses_the_binding() {
     rejects(
         &src(
             "fn f(v: Vec<B>) { for B { @items, n, @hist } in v invariant hist.len() >= 0, { let b = B { n, @items: items, @hist: hist }; } }",
+        ),
+        "E0003",
+        "`invariant` / `decreases`",
+    );
+}
+
+/// `while let` の句も同じ（PR #168 のレビュー）。外に同じ名前があっても、句は外の名前を指さない：Verus は
+/// `while let` のパターンの名前を句の中でも見えるものとして扱うので、書き下しの後では句が別のものを指す。
+#[test]
+fn e0003_when_a_while_let_clause_uses_the_binding() {
+    rejects(
+        &src(
+            "fn f(b0: B, v: Vec<B>) -> (r: u64) requires b0@hist.len() == 3, { let B { @items, @hist, n: _n0 } = b0; let c0 = B { n: 0, @items: items, @hist: hist }; let mut v = v; while let Some(B { @items, @hist, n }) = v.pop() invariant hist.len() == 3, decreases v.len(), { let c = B { n, @items: items, @hist: hist }; } 0 }",
         ),
         "E0003",
         "`invariant` / `decreases`",

@@ -1,6 +1,6 @@
 // #152：構造体パターンの消去フィールド `@x` を、`let` の文のほかの位置にも書ける。Verus は
 // `Tracked(x)` / `Ghost(x)` のパターンを実行文脈の `let` の文でしか受けないので、書き下しはほかの位置の
-// `@x` を別の名前に束縛し、腕・本体の先頭で `x` に束縛し直す（`tests/verus-probes/erased_pat_*.rs`）。
+// `@x` を包みの値のまま同じ名前に束縛し、腕・本体の先頭で中身に束縛し直す（`tests/verus-probes/erased_pat_*.rs`）。
 pub struct Node { pub val: u64 }
 
 pub struct Bag { pub n: u64 } owns { items: Region<Ptr<Node>> } spec { hist: Seq<u64> }

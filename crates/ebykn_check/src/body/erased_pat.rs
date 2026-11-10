@@ -1,10 +1,10 @@
 //! 消去フィールドのパターン `@x` の束縛を、書き下しが束縛し直す前の位置で使うもの（#152）。
 //!
 //! Verus は `Tracked(x)` / `Ghost(x)` のパターンを実行文脈の `let` の文でしか受けないので、書き下しは
-//! ほかの位置（match の腕、`if let` / `while let`、`for`、クロージャと関数の引数）の `@x` を別の名前に
-//! 束縛し、腕・本体の先頭で `x` に束縛し直す（`ebykn_lower` の `erased_pat.rs`）。その前に評価される
-//! 位置（match のガード、`&&` で続く条件、`for` のループ句、関数とクロージャの契約）では `x` がまだない
-//! ので、そこで `x` を使うものは E0003 にする。
+//! ほかの位置（match の腕、`if let` / `while let`、`for`、クロージャと関数の引数）の `@x` を包みの値
+//! （`Tracked<..>` / `Ghost<..>`）のまま束縛し、腕・本体の先頭で中身に束縛し直す（`ebykn_lower` の
+//! `erased_pat.rs`）。その前に評価される位置（match のガード、`&&` で続く条件、`for` / `while let` の
+//! ループ句、関数とクロージャの契約）では `x` がまだ包みの値なので、そこで `x` を使うものは E0003 にする。
 //!
 //! 使っているかは、名前が式の中に現れるかで決める（[`mentions`]）。内側で同じ名前を束縛し直したものや、
 //! マクロの引数の中のトークンも「使う」に数える（多めに拒否する。黙って通さない）。
@@ -53,6 +53,25 @@ impl Walker<'_> {
                 );
             }
         }
+    }
+
+    /// `for` / `while let` のパターンの `@x` を、そのループの句（`invariant` / `decreases`）が使うもの。
+    /// Verus は `while let` のパターンの名前も句の中で見えるものとして扱う（PR #168 のレビュー）。
+    pub(super) fn erased_in_loop_clauses(&mut self, l: &ast::Loop) {
+        let pats: Vec<&ast::Pat> = match &l.kind {
+            ast::LoopKind::For { pat, .. } => vec![pat],
+            ast::LoopKind::While(cond) => cond
+                .and_chain()
+                .into_iter()
+                .filter_map(|e| match &e.kind {
+                    ExprKind::Let { pat, .. } => Some(&**pat),
+                    _ => None,
+                })
+                .collect(),
+            ast::LoopKind::Loop => Vec::new(),
+        };
+        let clauses = l.clauses.iter().flat_map(|c| &c.exprs);
+        self.erased_before_rebind(&pats, clauses, Unimpl::ErasedBindInLoopClause);
     }
 
     /// 関数・クロージャの引数の `@x` を、その契約の式が使うもの。

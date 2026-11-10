@@ -1,0 +1,15 @@
+// PR #168 のレビュー：消去フィールドのパターン `@k` と同じ名前を、同じ引数の並びやパターンでもう一度
+// 束縛したもの。Rust なら E0415 / E0416 になる。書き下しが `@k` を別の名前に変えていたときは、重複が
+// 見えず、`k` は消去フィールドの方を黙って選んで verified になった。今は `@k` を同じ名前で束縛するので、
+// 生成した Verus を rustc が E0415 / E0416 で止め、どの項目も verified にならない。
+pub struct S { pub n: u64 } spec { k: nat }
+
+spec fn pick(S { @k, @.. }: S, k: nat) -> nat = k;
+
+spec fn pick2(s: S, k: nat) -> nat = match (s, k) { (S { @k, @.. }, k) => k };
+
+fn caller(s: S) -> (r: u64)
+    ensures pick(s, 5) == s@k, pick2(s, 5) == s@k,
+{
+    0
+}

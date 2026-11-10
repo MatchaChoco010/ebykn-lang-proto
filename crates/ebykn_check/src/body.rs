@@ -1603,16 +1603,13 @@ impl<'a> Walker<'a> {
             }
             self.logic = prev;
         }
+        self.erased_in_loop_clauses(l);
         match &l.kind {
             LoopKind::While(cond) => {
                 self.erased_in_cond(cond);
                 self.expr(cond);
             }
-            LoopKind::For { pat, .. } => {
-                let clauses = l.clauses.iter().flat_map(|c| &c.exprs);
-                self.erased_before_rebind(&[pat], clauses, Unimpl::ErasedBindInLoopClause);
-                self.bind(pat)
-            }
+            LoopKind::For { pat, .. } => self.bind(pat),
             LoopKind::Loop => {}
         }
         self.frames.push(Frame {

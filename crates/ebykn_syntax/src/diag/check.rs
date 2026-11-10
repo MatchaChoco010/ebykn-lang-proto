@@ -239,7 +239,8 @@ pub enum Unimpl {
     ErasedBindInGuard,
     /// 同上を、`if let` / `while let` の `&&` で続く条件で使った（本体の先頭で束縛し直す）。
     ErasedBindInCond,
-    /// 同上を、`for` のパターンで束縛し、そのループの `invariant` / `decreases` で使った（本体の先頭で束縛し直す）。
+    /// 同上を、`for` / `while let` のパターンで束縛し、そのループの `invariant` / `decreases` で使った（本体の
+    /// 先頭で束縛し直す）。
     ErasedBindInLoopClause,
     /// 同上を、関数・クロージャの引数のパターンで束縛し、その契約で使った（本体の先頭で束縛し直す）。
     ErasedBindInContract,
@@ -401,10 +402,10 @@ impl Unimpl {
                 "`if let` / `while let` の条件の消去フィールドのパターン（`@x`）で束縛した名前は、同じ `&&` で続く条件ではまだ使えません。Verus がそこの `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前を本体の先頭で束縛するためです。続く条件を内側の `if` に移します"
             }
             (Unimpl::ErasedBindInLoopClause, Lang::En) => {
-                "a name bound by an erased-field pattern (`@x`) in a `for` pattern cannot be used in the loop's `invariant` / `decreases` yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern in a `for` loop, so the lowering binds the name at the start of the loop body; state the clause without the name"
+                "a name bound by an erased-field pattern (`@x`) in a `for` / `while let` pattern cannot be used in the loop's `invariant` / `decreases` yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern in a loop, so the lowering binds the name at the start of the loop body; for a `for` loop, bind the element to a name (`for b in v`), write `b@x` in the clause, and destructure it with `let` in the body"
             }
             (Unimpl::ErasedBindInLoopClause, Lang::Ja) => {
-                "`for` のパターンの消去フィールドのパターン（`@x`）で束縛した名前は、そのループの `invariant` / `decreases` ではまだ使えません。Verus が `for` の `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前をループの本体の先頭で束縛するためです。句をその名前を使わずに書きます"
+                "`for` / `while let` のパターンの消去フィールドのパターン（`@x`）で束縛した名前は、そのループの `invariant` / `decreases` ではまだ使えません。Verus がループの `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前をループの本体の先頭で束縛するためです。`for` なら要素を名前で受け（`for b in v`）、句では `b@x` と書き、本体の `let` で分けます"
             }
             (Unimpl::ErasedBindInContract, Lang::En) => {
                 "a name bound by an erased-field pattern (`@x`) in a parameter cannot be used in the contract of the function or closure yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern inside a parameter, so the lowering binds the name at the start of the body; name the parameter (`b: B`), write `b@x` in the contract, and destructure it with `let` in the body"

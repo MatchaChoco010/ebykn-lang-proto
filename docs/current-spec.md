@@ -521,19 +521,21 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 構造体パターンの `@r` は、どのパターンの位置にも書けます。実行文脈の `let` の文（`let-else` を含む）では、上の「消去フィールドの名前」のとおり `__eyk_erased_r: Tracked(r)` / `__eyk_erased_q: Ghost(q)` に書き下します。
 
-ほかの位置では、欄を別の名前 `__eyk_pat_r` に束縛し、束縛が効く範囲の先頭で `r` に束縛し直します。ほかの位置とは、match の腕、`if let` / `while let` の条件、`for`、クロージャの引数、関数の引数、論理文脈（`spec fn` の本体など）の `let` の文です。束縛し直す範囲の先頭は、腕の本体、`if` とループの本体、クロージャと関数の本体、論理文脈の `let` の文の直後です。束縛し直す文は、実行文脈では `let Tracked(r) = __eyk_pat_r;` / `let Ghost(q) = __eyk_pat_q;`、論理文脈では `let r = __eyk_pat_r@;` です。
+ほかの位置では、欄を同じ名前 `r` に包みの値（`Tracked<R>` / `Ghost<Q>`）のまま束縛し、束縛が効く範囲の先頭で中身に束縛し直して覆います。ほかの位置とは、match の腕、`if let` / `while let` の条件、`for`、クロージャの引数、関数の引数、論理文脈（`spec fn` の本体など）の `let` の文です。束縛し直す範囲の先頭は、腕の本体、`if` とループの本体、クロージャと関数の本体、論理文脈の `let` の文の直後です。束縛し直す文は、実行文脈では `let Tracked(r) = r;` / `let Ghost(q) = q;`、論理文脈では `let r = r@;` です。
 
 ```text
 match b { S { a, @r, @q } => e }
-  ⇒ match b { S { a, __eyk_erased_r: __eyk_pat_r, __eyk_erased_q: __eyk_pat_q } => { let Tracked(r) = __eyk_pat_r; let Ghost(q) = __eyk_pat_q; e } }
+  ⇒ match b { S { a, __eyk_erased_r: r, __eyk_erased_q: q } => { let Tracked(r) = r; let Ghost(q) = q; e } }
 ```
 
-束縛し直す前に評価する位置では、`@r` で束縛した名前を使えません（`E0003`）。match のガード、`if let` / `while let` の `&&` で続く条件、`for` の `invariant` / `decreases`、その引数を持つ関数とクロージャの契約（`requires` / `ensures` / `returns` / `decreases`）です。使うかどうかは、その名前が式の中に現れるかで決めます。内側で同じ名前を束縛し直したものと、マクロの引数のトークンの中の同じ名前も、使ったものとして数えます。診断は位置ごとに書き換え方を案内します（条件を本体に移す、引数を名前で受けて契約では `b@r` と書く、など）。
+名前を変えないので、同じ引数の並びや同じパターンで `@r` と同じ名前をもう一度束縛すると、`.eyk` で書いたときの Rust と同じく、生成した Verus を rustc が `E0415` / `E0416` で止めます（`ebykn check` が止まる）。
+
+束縛し直す前に評価する位置では、`@r` で束縛した名前を使えません（`E0003`）。match のガード、`if let` / `while let` の `&&` で続く条件、`for` / `while let` の `invariant` / `decreases`、その引数を持つ関数とクロージャの契約（`requires` / `ensures` / `returns` / `decreases`）です。使うかどうかは、その名前が式の中に現れるかで決めます。内側で同じ名前を束縛し直したものと、マクロの引数のトークンの中の同じ名前も、使ったものとして数えます。診断は位置ごとに書き換え方を案内します（条件を本体に移す、引数を名前で受けて契約では `b@r` と書く、など）。
 
 関数の引数のパターンも、本体の中のパターンと同じく検査します（`owns` の欄の欠落は `E0402`、消去フィールドでない名前の `@x` も `E0402`）。
 
 * 元の仕様：§7.3 の表は `S { a, @r }` ⇒ `S { a, r: Tracked(r) }` だけで、位置を分けない。
-* 根拠：#152。Verus は `Tracked(r)` / `Ghost(r)` のパターンを、実行文脈の `let` の文でしか受けない。match の腕・`if let`・クロージャの引数・関数の引数の中では `E0532` になる（`tests/verus-probes/erased_pat_positions.rs`）。論理文脈では `let` の文でも `Tracked(r)` を受けない（`erased_pat_logic_let.rs`）。束縛し直す形は通る（`erased_pat_rebind.rs`、`tests/golden/erased_pat`）。
+* 根拠：#152。Verus は `Tracked(r)` / `Ghost(r)` のパターンを、実行文脈の `let` の文でしか受けない。match の腕・`if let`・クロージャの引数・関数の引数の中では `E0532` になる（`tests/verus-probes/erased_pat_positions.rs`）。論理文脈では `let` の文でも `Tracked(r)` を受けない（`erased_pat_logic_let.rs`）。束縛し直す形は通る（`erased_pat_rebind.rs`、`tests/golden/erased_pat`）。別の名前（`__eyk_pat_r`）に束縛すると、名前の重複が rustc に見えず、片方を黙って選んで verified になった（PR #168 のレビュー。`erased_pat_duplicate.rs`、`tests/golden/erased_pat_duplicate`）。`while let` の句は、Verus がパターンの名前を句の中でも見えるものとして扱うので、外の同じ名前を指さないよう `for` と同じく `E0003` にする。
 * 状態：実測で決めた。
 
 ### §7.4 式の書き下し
