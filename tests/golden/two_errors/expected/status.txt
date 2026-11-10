@@ -1,0 +1,3 @@
+verified two_errors::ok
+failed two_errors::bad
+results 1 verified, 1 errors

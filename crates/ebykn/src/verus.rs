@@ -12,10 +12,13 @@ use std::process::Command;
 pub use crate::sites::ErrorSites;
 
 use ebykn_check::project::Project;
-use ebykn_lower::{Deps, OutFile, Output};
+use ebykn_lower::{Deps, Output};
 
 use crate::no_cheating::{self, Cheating};
 use crate::{VerusPin, verus_pin};
+
+mod attribution;
+pub use attribution::{ItemFacts, decide, failed_functions, statuses};
 
 /// 見つけた Verus。
 pub struct Verus {
@@ -191,6 +194,8 @@ pub struct Run {
     pub errors: Vec<VerusError>,
     /// Verus が検証した関数（`--output-json` の `func-details` の鍵）。
     pub checked: Option<std::collections::BTreeSet<String>>,
+    /// Verus が失敗とした関数（[`failed_functions`]）。読めなければ `None`。
+    pub failed: Option<std::collections::BTreeSet<String>>,
     /// cargo がこのクレートを作り直した（`Checking 名前 v..` か `Compiling 名前 v..` の行がある）。
     /// ない実行は、Verus がこのクレートを見ていない。
     pub compiled: bool,
@@ -313,6 +318,8 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
             "--triggers-mode",
             "silent",
             "--output-json",
+            // 関数ごとの成否（`times-ms` の `function-breakdown`）を出させる（#79）。
+            "--time",
         ]),
         // `--verified` なしの `build` は、検証の結果によらずビルドする（現行仕様 §9。#80）。
         Mode::Build => cmd.args(["verus", "build", "--", "--no-verify"]),
@@ -354,6 +361,7 @@ pub fn run(verus: &Verus, build: &Path, mode: Mode) -> Result<Run, String> {
         results,
         text,
         errors,
+        failed: json.as_ref().and_then(|j| j.failed.clone()),
         checked: json.map(|j| j.checked),
         compiled,
     })
@@ -431,6 +439,7 @@ pub fn compiled(text: &str, name: &str) -> bool {
 struct Json {
     results: Option<(u64, u64)>,
     checked: std::collections::BTreeSet<String>,
+    failed: Option<std::collections::BTreeSet<String>>,
 }
 
 /// 標準出力の JSON（`{` から最後の `}` まで）を読む。
@@ -450,7 +459,11 @@ fn parse_json(stdout: &str) -> Option<Json> {
         (Some(a), Some(b)) => Some((a, b)),
         _ => None,
     };
-    Some(Json { results, checked })
+    Some(Json {
+        results,
+        checked,
+        failed: failed_functions(&v),
+    })
 }
 
 /// 診断を読む：生成コードの位置に `（生成コード）` を付け、エラーごとの主な位置を集める。
@@ -604,153 +617,6 @@ impl ItemStatus {
             None => format!("{} {}", self.status, self.item),
         }
     }
-}
-
-/// 一つの項目の事実。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ItemFacts {
-    /// 本体のない `lemma fn`（`admit()`）。
-    pub admitted: bool,
-    pub unchecked: bool,
-    /// `#[test]`（`#[verifier::external]`。Verus は見ない）。
-    pub external: bool,
-    /// Verus のエラーの失敗の場所がこの項目の行にある（[`ErrorSites::blamed`]）。
-    pub error: bool,
-    /// Verus のエラーがこの項目の行を副の位置として指す（[`ErrorSites::related`]。PR #76 のレビューの B1）。
-    pub related: bool,
-    /// Verus の `func-details` にこの項目の関数がある（Verus が見た）。
-    pub checked: bool,
-    /// どの項目にも割り当てられないエラーがある（生成コードの外、位置がない、項目の外）。
-    pub stray_errors: bool,
-    /// Verus が検証の前に止まった（[`Summary::Stopped`]）。`func-details` に関数があっても、検証はしていない。
-    pub stopped: bool,
-    /// `--no-cheating` の照合で、Ebykn が出した前提のほかの前提が見つかったか、ないと言えない
-    /// （[`crate::no_cheating`]）。どの項目がそれに頼るか分からないので、どの項目も verified にしない。
-    pub tainted: bool,
-}
-
-/// 項目の状態を決める（PR #26 のレビューの方針）。`verified` と表示してよいのは、Verus が見た関数
-/// （`func-details` にある）で、その項目にエラーがなく、どの項目にも割り当てられないエラーがないときだけ。
-///
-/// - `admit` / `unchecked` / `external`：証明なしの前提。`verify` は必ず一覧に出す。前提の状態はエラーより
-///   優先する（その項目にエラーがあっても `failed` にしない。エラーの場所は、標準エラーに出す Verus の診断の
-///   生成コードの位置で示される）。
-/// - `failed`：その項目にエラーがある。
-/// - `unknown`：Verus が見なかった（`#[cfg]` で消えた、など）か、エラーが副の位置としてその項目を指すか、
-///   割り当てられないエラーがあるか、
-///   Verus が検証の前に止まった（コンパイルエラーなど。#43）か、紛れ込んだ前提がある
-///   （[`ItemFacts::tainted`]、#37）。`verify` を成功にしない。
-pub fn decide(f: ItemFacts) -> &'static str {
-    if f.admitted {
-        "admit"
-    } else if f.unchecked {
-        "unchecked"
-    } else if f.external {
-        "external"
-    } else if f.error {
-        "failed"
-    } else if !f.checked || f.related || f.stray_errors || f.stopped || f.tainted {
-        "unknown"
-    } else {
-        "verified"
-    }
-}
-
-/// 全項目の状態を決める。`checked` は Verus の `func-details` の鍵（`None` なら一覧がない）。
-/// `summary` が [`Summary::Ran`] なら、Verus が数えたエラーの数が読み取ったエラーの見出しの数と違えば、
-/// エラーを項目に割り当てられていないとみなす。[`Summary::Stopped`] なら何も検証していない。`tainted` は
-/// [`ItemFacts::tainted`]（`--no-cheating` の照合の結果）。
-pub fn statuses(
-    files: &[OutFile],
-    output: &Output,
-    errors: &[ErrorSites],
-    checked: Option<&std::collections::BTreeSet<String>>,
-    summary: Summary,
-    tainted: bool,
-) -> Vec<ItemStatus> {
-    let (error_count, stopped) = match summary {
-        Summary::Ran { errors, .. } => (Some(errors), false),
-        Summary::Stopped { .. } => (None, true),
-    };
-    // 項目の Verus の名前。パスで決まらない項目（クレートの外の型への impl のメソッド）は、形に当たる
-    // 鍵がちょうど一つのときだけ決まる。
-    let verus_of = |item: &str| -> Option<String> {
-        match output.verus_patterns.get(item) {
-            Some(pat) => {
-                let (pre, post) = pat.split_once('*')?;
-                let hits: Vec<&String> = checked?
-                    .iter()
-                    .filter(|k| {
-                        k.strip_prefix(pre)
-                            .and_then(|r| r.strip_suffix(post))
-                            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-                    })
-                    .collect();
-                match hits.as_slice() {
-                    [k] => Some((*k).clone()),
-                    _ => None,
-                }
-            }
-            None => Some(verus_name(item)),
-        }
-    };
-    let names: Vec<(String, Option<String>)> = files
-        .iter()
-        .flat_map(|f| f.items.iter().map(|(_, _, i)| (i.clone(), verus_of(i))))
-        .collect();
-    // 同じ Verus の名前になる項目が二つ以上あれば、どれの証拠か分からないので数えない。
-    let shared = |n: &Option<String>| match n {
-        Some(n) => names.iter().filter(|(_, m)| m.as_ref() == Some(n)).count() > 1,
-        None => false,
-    };
-    let in_item = |file: &str, line: usize| {
-        files
-            .iter()
-            .any(|f| f.rel == file && f.items.iter().any(|(s, e, _)| *s <= line && line <= *e))
-    };
-    // 失敗の場所がないか、項目の外にあるエラーは、どの項目にも割り当てられない。
-    let stray = errors
-        .iter()
-        .any(|e| e.blamed.is_empty() || e.blamed.iter().any(|(file, line)| !in_item(file, *line)))
-        || error_count.is_some_and(|n| n != errors.len() as u64);
-    let mut out = Vec::new();
-    for f in files {
-        for (start, end, item) in &f.items {
-            let here =
-                |(file, line): &(String, usize)| *file == f.rel && start <= line && line <= end;
-            let error = errors.iter().any(|e| e.blamed.iter().any(here));
-            let related = errors.iter().any(|e| e.related.iter().any(here));
-            let facts = ItemFacts {
-                admitted: output.admitted.contains(item),
-                unchecked: output.unchecked.contains(item),
-                external: output.external.contains(item),
-                error,
-                related,
-                checked: {
-                    let n = verus_of(item);
-                    !shared(&n) && n.is_some_and(|n| checked.is_some_and(|c| c.contains(&n)))
-                },
-                stray_errors: stray,
-                stopped,
-                tainted,
-            };
-            out.push(ItemStatus {
-                item: item.clone(),
-                status: decide(facts),
-                via: None,
-            });
-        }
-        // 依存クレートの derive と属性マクロが作る項目は、Verus が検証しない（`verus!` の外の項目に
-        // なる）。証明なしの前提として、同じ一覧に必ず出す（#49）。
-        for m in output.macros.iter().filter(|m| m.rel == f.rel) {
-            out.push(ItemStatus {
-                item: m.item.clone(),
-                status: "macro",
-                via: Some((m.kind, m.path.clone())),
-            });
-        }
-    }
-    out
 }
 
 /// Verus の `func-details` の鍵での項目の名前（クレート名の `-` は `_`）。
@@ -965,6 +831,7 @@ pub fn status_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ebykn_lower::OutFile;
     use ebykn_syntax::diag::Lang;
 
     #[test]
@@ -1243,22 +1110,13 @@ mod tests {
         assert!(!json.contains("termination"), "{json}");
     }
 
-    fn facts() -> ItemFacts {
-        ItemFacts {
-            admitted: false,
-            unchecked: false,
-            external: false,
-            error: false,
-            related: false,
-            checked: true,
-            stray_errors: false,
-            stopped: false,
-            tainted: false,
-        }
+    /// 関数の名前の集合（`func-details` の鍵や、Verus が失敗とした関数）。
+    pub(super) fn names(v: &[&str]) -> std::collections::BTreeSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
     }
 
     /// 検証まで進んだ実行の要約（検証のエラーが `errors` 件）。
-    fn ran(errors: u64) -> Summary {
+    pub(super) fn ran(errors: u64) -> Summary {
         Summary::Ran {
             verified: 0,
             errors,
@@ -1333,88 +1191,6 @@ mod tests {
     }
 
     #[test]
-    fn verified_needs_verus_evidence() {
-        assert_eq!(decide(facts()), "verified");
-        // Verus が見なかった（#[cfg] で消えた、func-details にない）。
-        assert_eq!(
-            decide(ItemFacts {
-                checked: false,
-                ..facts()
-            }),
-            "unknown"
-        );
-        // エラーが副の位置としてこの項目を指す（PR #76 のレビューの B1）。
-        assert_eq!(
-            decide(ItemFacts {
-                related: true,
-                ..facts()
-            }),
-            "unknown"
-        );
-        // 割り当てられないエラーがある。
-        assert_eq!(
-            decide(ItemFacts {
-                stray_errors: true,
-                ..facts()
-            }),
-            "unknown"
-        );
-        // Verus が検証の前に止まった（#43）。func-details にあっても verified にしない。
-        assert_eq!(
-            decide(ItemFacts {
-                stopped: true,
-                ..facts()
-            }),
-            "unknown"
-        );
-        // 紛れ込んだ前提がある（#37）。
-        assert_eq!(
-            decide(ItemFacts {
-                tainted: true,
-                ..facts()
-            }),
-            "unknown"
-        );
-        assert_eq!(
-            decide(ItemFacts {
-                error: true,
-                ..facts()
-            }),
-            "failed"
-        );
-        assert_eq!(
-            decide(ItemFacts {
-                error: true,
-                stopped: true,
-                ..facts()
-            }),
-            "failed"
-        );
-        assert_eq!(
-            decide(ItemFacts {
-                external: true,
-                ..facts()
-            }),
-            "external"
-        );
-        assert_eq!(
-            decide(ItemFacts {
-                unchecked: true,
-                error: true,
-                ..facts()
-            }),
-            "unchecked"
-        );
-        assert_eq!(
-            decide(ItemFacts {
-                admitted: true,
-                ..facts()
-            }),
-            "admit"
-        );
-    }
-
-    #[test]
     fn status_marks_failed_items_by_error_lines() {
         let files = vec![OutFile {
             rel: "src/lib.rs".into(),
@@ -1439,11 +1215,13 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
+        let g = names(&["k::g"]);
         let st = statuses(
             &files,
             &output,
             &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
+            Some(&g),
             Summary::Ran {
                 verified: 1,
                 errors: 1,
@@ -1468,22 +1246,33 @@ mod tests {
             &output,
             &[ErrorSites::default()],
             Some(&checked),
+            Some(&g),
             ran(1),
             false,
         );
         assert_eq!(st[0].status, "unknown");
         // func-details がなければ unknown。
-        let st = statuses(&files, &output, &[], None, ran(0), false);
+        let st = statuses(&files, &output, &[], None, None, ran(0), false);
         assert_eq!(st[0].status, "unknown");
-        // Verus の数えたエラーと、読み取ったエラーの見出しの数が違えば unknown（nit 4）。
-        let st = statuses(&files, &output, &[], Some(&checked), ran(1), false);
-        assert_eq!(st[0].status, "unknown");
+        // Verus が失敗とした関数のエラーを読めなければ unknown（nit 4）。失敗した関数は failed。
+        let st = statuses(
+            &files,
+            &output,
+            &[],
+            Some(&checked),
+            Some(&g),
+            ran(1),
+            false,
+        );
+        let got: Vec<&str> = st.iter().map(|s| s.status).collect();
+        assert_eq!(got, ["unknown", "failed", "admit"]);
         // 紛れ込んだ前提があれば（#37）、失敗していない項目は unknown。前提と failed はそのまま。
         let st = statuses(
             &files,
             &output,
             &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
+            Some(&g),
             ran(1),
             true,
         );
@@ -1497,6 +1286,7 @@ mod tests {
             &output,
             &[ErrorSites::at("src/lib.rs", 7)],
             Some(&checked),
+            Some(&g),
             stopped,
             false,
         );
@@ -1563,7 +1353,7 @@ mod tests {
         };
         let checked: std::collections::BTreeSet<String> =
             ["k5::f", "k5::one"].iter().map(|s| s.to_string()).collect();
-        let st = statuses(&files, &output, &[], Some(&checked), ran2, false);
+        let st = statuses(&files, &output, &[], Some(&checked), None, ran2, false);
         assert_eq!(
             status_text(&st, ran2, &Cheating::Clean, &[]),
             "verified k5::f\nverified k5::one\nmacro serde::Serialize derive on k5::Foo\nmacro tokio::main on k5::one\nresults 2 verified, 0 errors\n"
@@ -1591,7 +1381,7 @@ mod tests {
             macros: vec![],
             ..output.clone()
         };
-        let st = statuses(&files, &none, &[], Some(&checked), ran2, false);
+        let st = statuses(&files, &none, &[], Some(&checked), None, ran2, false);
         assert!(st.iter().all(|s| s.status != "macro"));
     }
 
@@ -1634,7 +1424,16 @@ error: could not compile `drop` (lib) due to 1 previous error
 ";
         let (_, errors) = read_diagnostics(raw, false);
         let sites: Vec<ErrorSites> = errors.iter().map(|e| e.sites.clone()).collect();
-        let st = statuses(&files, &output, &sites, Some(&checked), ran(1), false);
+        let c = names(&["drop::C::drop"]);
+        let st = statuses(
+            &files,
+            &output,
+            &sites,
+            Some(&checked),
+            Some(&c),
+            ran(1),
+            false,
+        );
         let got: Vec<&str> = st.iter().map(|s| s.status).collect();
         assert_eq!(got, ["verified", "unknown", "failed", "verified"]);
         // 副の位置（`-` のラベル）だけが指す項目は、verified にしない。
@@ -1642,7 +1441,15 @@ error: could not compile `drop` (lib) due to 1 previous error
             blamed: vec![("src/lib.rs".into(), 16)],
             related: vec![("src/lib.rs".into(), 22)],
         };
-        let st = statuses(&files, &output, &[related], Some(&checked), ran(1), false);
+        let st = statuses(
+            &files,
+            &output,
+            &[related],
+            Some(&checked),
+            Some(&c),
+            ran(1),
+            false,
+        );
         let got: Vec<&str> = st.iter().map(|s| s.status).collect();
         assert_eq!(got, ["verified", "unknown", "failed", "unknown"]);
     }
@@ -1667,7 +1474,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let st = statuses(&files, &output, &[], Some(&checked), ran(0), false);
+        let st = statuses(&files, &output, &[], Some(&checked), None, ran(0), false);
         let got: Vec<&str> = st.iter().map(|s| s.status).collect();
         assert_eq!(got, ["unknown", "unknown", "verified"]);
     }
@@ -1692,7 +1499,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&one), ran(0), false)[0].status,
+            statuses(&files, &output, &[], Some(&one), None, ran(0), false)[0].status,
             "verified"
         );
         // 当たる鍵が二つ（同じ名前のメソッドを持つ別の impl）なら決められない。
@@ -1701,7 +1508,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             .map(|s| s.to_string())
             .collect();
         assert_eq!(
-            statuses(&files, &output, &[], Some(&two), ran(0), false)[0].status,
+            statuses(&files, &output, &[], Some(&two), None, ran(0), false)[0].status,
             "unknown"
         );
     }
@@ -1765,6 +1572,7 @@ error: could not compile `drop` (lib) due to 1 previous error
             results: j.results,
             errors,
             checked: Some(j.checked),
+            failed: j.failed,
             compiled: true,
         }
     }

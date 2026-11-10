@@ -35,6 +35,7 @@ impl Verified {
             output,
             &self.run.locations(),
             self.run.checked.as_ref(),
+            self.run.failed.as_ref(),
             self.summary,
             self.cheating.taints(),
         );
@@ -66,6 +67,7 @@ pub fn verify_build(verus: &Verus, build: &Path, output: &Output) -> Result<Veri
         output,
         &run.locations(),
         run.checked.as_ref(),
+        run.failed.as_ref(),
         summary,
         cheating.taints(),
     );

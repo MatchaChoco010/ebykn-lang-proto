@@ -567,7 +567,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 ### `ebykn verify` の項目の状態と出力
 
-`verify` は `cargo verus focus -- --triggers-mode silent --output-json` で検証します。この実行には `--no-cheating` を付けません（本体のない `lemma fn` の `admit()` と、`unchecked` の `external_body` が拒まれるため）。
+`verify` は `cargo verus focus -- --triggers-mode silent --output-json --time` で検証します（`--time` は関数ごとの成否を出させるため。§9.1）。この実行には `--no-cheating` を付けません（本体のない `lemma fn` の `admit()` と、`unchecked` の `external_body` が拒まれるため）。
 
 項目は書き下した関数（`spec fn`、trait の既定のメソッドを含む）です。状態は一つの関数（`crates/ebykn/src/verus.rs` の `decide`）で決めます。
 
@@ -577,7 +577,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 | `unchecked` | `unchecked` の項目 |
 | `external` | `#[test]`。Verus は見ない |
 | `macro` | 依存クレートの derive・属性マクロが付いた項目（§5 の「依存クレートの derive と属性マクロ」）。マクロが作る項目は Verus が検証しない |
-| `failed` | Verus のエラーの失敗の場所が、項目の行の範囲にある。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`） |
+| `failed` | Verus が失敗とした関数（§9.1 の関数ごとの成否で `success` が `false`）。成否が読めない、Verus が検証の前に止まった、項目の Verus の名前が決まらないかほかの項目と重なる、`func-details` に項目の関数がない、のどれかのときは、Verus のエラーの失敗の場所が項目の行の範囲にあること。失敗の場所は、エラーの診断の中の主な span（`^`）の行と `at this call-site` のラベルの行。ただし、呼ばれる側を示すだけのラベル（`failed precondition`、`invariants opened by callee`、`perhaps you need to mark this function as no_unwind?`）の行は数えない（`crates/ebykn/src/sites.rs`）。Verus が通したとする関数の行に失敗の場所があれば、`failed` ではなく `unknown` |
 | `unknown` | Verus の `--output-json` の `func-details` に項目の関数がない（Verus が見なかった。`#[cfg]` で消えた項目など）か、エラーの診断の副のラベル（`-`）か、終わりの印の見つからない複数行の span がその項目の行を指すか、どの項目にも割り当てられないエラー（失敗の場所がないか、項目の外にある。診断に `NN \|` の行がないエラーも含む）があるか、Verus が検証の前に止まった |
 | `verified` | それ以外。Verus 自身が検証した関数で、エラーがない |
 
@@ -586,7 +586,12 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 前提の状態（`admit` / `unchecked` / `external`）は、エラーより優先します（止まった実行に限りません）。コンパイルエラーを持つ `unchecked fn` も `failed` ではなく `unchecked` と出ます。そのエラーの場所は、標準エラーに出す Verus の診断の生成コードの位置で示します。
 
 - 項目の Verus の名前は、impl のメソッドなら型の完全なパスの下、trait の既定のメソッドなら trait の下です。クレートの外の型への impl のメソッドは `impl を置いたモジュール::impl&%N::名前` で、形に当たる鍵がちょうど一つのときだけ決まり、決まらなければ `unknown` です（表示は `<u32 as Tr>::名前`）。同じ Verus の名前になる項目が二つ以上あれば、全部 `unknown` です。
-- Verus の数えたエラーと読み取ったエラーの見出しの数が違えば、エラーを割り当てられないとみなします。
+- Verus が検証まで進んでエラーを数えたときは、次のすべてが成り立つときだけ、エラーを項目に割り当てられたとみなします（`crates/ebykn/src/verus.rs` の `statuses`。#79）。一つでも崩れれば、どの項目にも割り当てられないエラーがあるとして扱います。
+  - 関数ごとの成否が読めて、`success` が `false` の関数の数が、Verus の数えたエラー（`verification-results` の `errors`。失敗した問い合わせの数）と同じ。
+  - 各エラーの失敗の場所の項目が、どれも Verus が失敗とした関数（Verus が通した関数のせいにしていない）。
+  - Verus が失敗とした各関数に、その項目の行に失敗の場所を持つエラーがある（エラーを読み落としていない。呼ばれる側の行しか出ないエラーで、失敗した呼び出し元を見落としていない）。
+
+  エラーの見出しの数とは比べません。`ensures` の 2 項が成り立たない関数は、見出しが 2 つで、Verus の `errors` は 1 です。bit_vector の `assert` の失敗は `errors` に数えられても関数の `success` を `false` にしないので、1 つ目の条件で割り当てられないことになります。`tests/golden/two_errors/` で固定してあります。
 - `failed` か `unknown` があれば、`verify` は失敗します。
 - 証明なしの前提（`admit` / `unchecked` / `external` / `macro`）は、`verify item..` の絞り込みによらず全体から出します（絞り込むのは表示だけで、検証は全体）。
 - `macro` の行は、derive なら `macro <パス> derive on <項目>`、属性マクロなら `macro <パス> on <項目>` です（`macro serde::Serialize derive on k::Foo`、`macro tokio::main on k::main`）。ファイルごとに、項目の行の後に並べます。`--json` では `status` が `macro` で、`macro`（パス）と `kind`（`derive` / `attribute`）が付きます。
@@ -607,7 +612,7 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `tests/golden/smuggled/` と `crates/ebykn/tests/no_cheating.rs`（Verus が要るので `#[ignore]`。`cargo xtask golden-verify` が走らせる）で固定してあります。
 
 * 元の仕様：§9 は `verify` を「`check` ＋ Verus による検証」とし、項目の状態と出力の形を §9.1（`status`）に置く。`--no-cheating` に触れていない。
-* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）、#81（PR #116）。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。実行関数の `verified` が停止を含まないことは、人が読む出力と `--json` の両方で示す。
+* 根拠：#17（PR #26）、#43（PR #45）、#37（PR #42）、#81（PR #116）、#79。表示の根拠を Verus 自身の証拠（`func-details` とエラーの位置）にし、根拠のない verified を出さない。実行関数の `verified` が停止を含まないことは、人が読む出力と `--json` の両方で示す。
 * 状態：基準で決めた。
 
 ### 生成クレートの成果物は `build/verus/target`
@@ -664,10 +669,10 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 
 ### §9.1 Verus の結果の取り方（OPEN-7）
 
-Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。どの関数が失敗したかは JSON になく、標準エラーの診断（位置つき）にだけ出ます。そのため、失敗した関数は診断の位置から決めます（上の `failed`）。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。
+Verus の `--output-json` は、件数（`verification-results` の `verified` / `errors` / `success`）と、検証した関数の名前の一覧（`func-details`）を出します。`--time` を足すと、`times-ms.smt.smt-run-module-times[].function-breakdown[]` に関数ごとの成否（`function` と `success`）も出ます。エラーの場所は標準エラーの診断（位置つき）にだけ出ます。Ebykn は、関数ごとの成否で失敗した関数を決め、診断の位置と突き合わせます（上の `failed` と、割り当ての条件）。成否の項目が一つでも読めなければ、成否は読めないとします。決められないときに `--verify-function` で項目ごとに検証し直すかは、`status` の M5 で決めます。
 
 * 元の仕様：OPEN-7「JSON 出力があればそれ、無ければ標準出力の `verification results::` と関数名を解析」。
-* 根拠：#6（PR #13、`json_output.rs`、`json_output_failure.rs`）。
+* 根拠：#6（PR #13、`json_output.rs`、`json_output_failure.rs`）、#79（`json_time_function_success.rs`、`json_time_bit_vector.rs`）。
 * 状態：実測で決めた。
 
 ## §10 診断
