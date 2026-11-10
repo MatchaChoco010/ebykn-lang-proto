@@ -136,6 +136,12 @@ const UNSTABLE_POSITIONS: &[&str] = &[
     "pub fn f(a: u32) -> (u32, u32) { ($A a + 1, 1) }",
     "fn g(x: u32) -> u32 { x }\npub fn f(a: u32) -> u32 { g($A a + 1) }",
     "pub fn f(a: u32) -> [u64; 1] { [$A a as u64] }",
+    // 範囲の式は、許す位置でも属性を受けない（#130。`..b` の属性は構文解析器が E0001 にする）。
+    "pub fn f(a: u32) -> u32 { $A 0..a; a }",
+    "pub fn f(a: u32) -> u32 { $A a..; a }",
+    "pub fn f(a: u32) -> u32 { let r = { $A 0..=a }; a }",
+    "pub fn f(a: u32) -> usize { let r = [$A 0..a]; r.len() }",
+    "fn g<T>(x: T) -> T { x }\npub fn f(a: u32) -> u32 { let r = g($A 0..a); a }",
 ];
 
 /// 安定版の Rust が式の属性を許す位置（文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数）。
@@ -177,6 +183,26 @@ const MACRO_UNSTABLE_POSITIONS: &[&str] = &[
     "pub fn f(a: u32) -> u32 { assert!({ let x = $A a; x == a }); a }",
     "pub fn f(a: u32) -> u32 { assert!(match a { _ => $A true }); a }",
     "pub fn f(a: u32) -> u32 { assert!(vec![a].len() == $A 1); a }",
+    // 許す位置でも、続く式が代入・二項演算・型変換・範囲なら、構文解析器が属性を左の項に移す（#130）
+    "pub fn f(a: u32) -> u32 { assert!({ let mut x = 0u32; $A x = 1; x == 1 }); a }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A a == a }); a }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A a + 1]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![1, $A a as u64]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![1u8; $A a as usize]; v.len() }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A 0..a; true }); a }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A ..a; true }); a }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A a.clone() + 1 } == a + 1); a }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A match a { _ => a }.clone() + 1 } == a + 1); a }",
+    // ブロックのような式の終わりを見分けられない形と、波括弧で呼んだ入れ子のマクロと、戻り値の型を書いた
+    // クロージャ（PR #140 のレビュー）
+    "pub struct S<T> { pub v: T }\npub fn f(s: S<u32>) -> usize { let v = vec![{ $A if let S { v } = s { (v,) } else { (0,) }.0 & 1 }]; v.len() }",
+    "pub fn f(a: u32, b: bool) -> usize { let v = vec![{ $A if { b } { a } else { a }.clone() + 1 }]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![{ $A match { a } { _ => a }.clone() + 1 }]; v.len() }",
+    "pub fn f(b: bool) -> usize { let v = vec![vec!{$A if b { 1u8 } else { 2 } & 1}]; v.len() }",
+    "pub unchecked fn show(a: u32) { println!(\"{}\", format!{\"{}\", $A a}); }",
+    "pub fn f(a: u32) -> u32 { assert!({ println!{\"{}\", $A a}; true }); a }",
+    "pub fn f(a: u32) -> u32 { assert!(vec!{$A {a} + 1}.len() == 1); a }",
+    "pub unchecked fn show() -> usize { let v = vec![$A || -> u32 { 1 } as fn() -> u32]; v.len() }",
 ];
 
 const MACRO_STABLE_POSITIONS: &[&str] = &[
@@ -189,6 +215,17 @@ const MACRO_STABLE_POSITIONS: &[&str] = &[
     "pub fn f(a: u32) -> u32 { assert!({ let y = 1u32; $A let x = a; x == a }); a }",
     "pub fn f(a: u32) -> u32 { assert!({ $A { a == a } }); a }",
     "pub fn f(a: u32) -> u32 { assert!(match a { $A 0 => true, $A _ => true }); a }",
+    // 続く式が属性をそのまま受ける形（#130）
+    "pub fn f(a: u32) -> usize { let v = vec![$A a.clone(), $A *&a]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A (a + 1), $A u32::max(a, 1)]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A if a == 1 { 1 } else { a }]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A <u32 as Clone>::clone(&a)]; v.len() }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A if a == 1 { } a == a }); a }",
+    "pub fn f(a: u32) -> u32 { assert!(match a { $A 0 | 1 => a + 1 == 2, _ => true }); a }",
+    "pub fn f(a: u32) -> u32 { assert!({ $A let y = a + 1; y > a }); a }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A |y: u32| y + a]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![vec!{$A a, 1}]; v.len() }",
+    "pub fn f(a: u32) -> usize { let v = vec![$A (a + 1), $A (a as u32)]; v.len() }",
 ];
 
 #[test]

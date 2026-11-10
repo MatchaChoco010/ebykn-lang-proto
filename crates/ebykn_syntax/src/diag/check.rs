@@ -195,6 +195,10 @@ pub enum Unimpl {
     ImplSpec,
     /// `check --base`（M3）。
     Base,
+    /// `uses` を持つ `async fn`（Verus が `Tracked(..)` の引数を扱えない。#101）。
+    AsyncUses,
+    /// `gives` を持つ `async fn`（`.await` の位置で §6.2 が権限を追えない。#101）。
+    AsyncGives,
     /// `build --verified`（M5）。
     BuildVerified,
     /// クレートの外の型への `impl Invariant` / `impl View`（性質ファイル、M5）。
@@ -273,6 +277,18 @@ impl Unimpl {
             (Unimpl::ImplSpec, Lang::Ja) => "`impl spec` は M5 で実装します",
             (Unimpl::Base, Lang::En) => "`check --base` is implemented in M3",
             (Unimpl::Base, Lang::Ja) => "`check --base` は M3 で実装します",
+            (Unimpl::AsyncUses, Lang::En) => {
+                "an `async fn` cannot have `uses` yet, because Verus cannot read the `Tracked(..)` parameters it is lowered to; move the code that uses the permissions or regions into a non-async `fn` with `uses`, and call it from the `async fn`"
+            }
+            (Unimpl::AsyncUses, Lang::Ja) => {
+                "`async fn` にはまだ `uses` を書けません。書き下した `Tracked(..)` の引数を Verus が読めないためです。権限や領域を使う処理を `uses` を持つ async でない `fn` に移し、`async fn` からそれを呼びます"
+            }
+            (Unimpl::AsyncGives, Lang::En) => {
+                "an `async fn` cannot have `gives` yet, because Ebykn does not track the permissions that `.await` hands back; return the permissions from a non-async `fn` with `gives`, and call it from the `async fn`"
+            }
+            (Unimpl::AsyncGives, Lang::Ja) => {
+                "`async fn` にはまだ `gives` を書けません。`.await` が返す権限を Ebykn が追わないためです。権限は `gives` を持つ async でない `fn` から返し、`async fn` からそれを呼びます"
+            }
             (Unimpl::BuildVerified, Lang::En) => {
                 "`build --verified` needs `ebykn status`, which is implemented in M5"
             }
@@ -340,10 +356,10 @@ impl Unimpl {
                 "権限を操作する（`take`、`put`、`leak`、`free`、権限を消費する・返す呼び出し、仕様の代入 `x@f = e`）か、ブロックを抜ける（`return`、`break`、`continue`）文・式（配列とタプルの要素、引数など）・構造体リテラルの欄に付けた `#[cfg]` と、代入・二項演算・型変換の文と `take` / `put` / `leak` / 仕様の代入に付けた属性は、まだ扱えません。§6 の検査が、コンパイルされないコードを見てしまうためです（代入・二項演算・型変換の文の属性は、安定版の Rust でも書けない）。条件付きのコードは別の関数に分けます"
             }
             (Unimpl::ExprAttr, Lang::En) => {
-                "an attribute on this expression is not supported, because stable Rust accepts attributes on expressions only at the start of a statement, on the tail expression of a block, on array and tuple elements and on call and method arguments (elsewhere it is `attributes on expressions are experimental`, so the build without Verus fails); move the attribute to the statement"
+                "an attribute on this expression is not supported, because stable Rust accepts attributes on expressions only at the start of a statement, on the tail expression of a block, on array and tuple elements and on call and method arguments, and never on a range expression (elsewhere it is `attributes on expressions are experimental`, so the build without Verus fails); move the attribute to the statement, or, for a range expression, wrap it in parentheses (`#[..] (0..a)`)"
             }
             (Unimpl::ExprAttr, Lang::Ja) => {
-                "この式の属性は扱えません。安定版の Rust が式の属性を許すのは、文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数だけで、それ以外では「attributes on expressions are experimental」になり、Verus なしのビルドが落ちるためです。属性は文に付けます"
+                "この式の属性は扱えません。安定版の Rust が式の属性を許すのは、文の先頭、ブロックの末尾、配列とタプルの要素、呼び出しとメソッドの引数だけです（範囲の式は除く）。ほかの位置では「attributes on expressions are experimental」になり、Verus なしのビルドが落ちるためです。属性は文に付けます。範囲の式なら、括弧で囲みます（`#[..] (0..a)`）"
             }
             (Unimpl::AttrInMacro, Lang::En) => {
                 "attributes other than `cfg`, `cfg_attr` and lint attributes (`allow`, `warn`, `deny`, `forbid`, `expect`) are not supported yet inside the arguments of this macro, because Ebykn does not read them (a derive or attribute macro there could generate code that is not checked); move the code out of the macro"
@@ -352,10 +368,10 @@ impl Unimpl {
                 "このマクロの引数の中では、`cfg`・`cfg_attr`・lint の属性（`allow`、`warn`、`deny`、`forbid`、`expect`）のほかの属性はまだ扱えません。Ebykn が引数を読まないためです（derive や属性マクロが、検査しないコードを作りうる）。コードをマクロの外に出します"
             }
             (Unimpl::AttrPosInMacro, Lang::En) => {
-                "an attribute at this position inside the arguments of this macro is not supported, because Ebykn keeps the arguments as tokens and can tell only these positions where stable Rust accepts an attribute: the elements of `vec!` and the start of statements, match arms and fields inside `{ .. }` (outer attributes only); stable Rust rejects some other positions with `attributes on expressions are experimental`, so the build without Verus would fail; move the attribute or the code out of the macro"
+                "an attribute at this position inside the arguments of this macro is not supported, because Ebykn keeps the arguments as tokens and accepts an attribute only where it can tell that stable Rust accepts it (elsewhere stable Rust may reject it with `attributes on expressions are experimental`, so the build without Verus would fail): an outer attribute at the start of an element of `vec!` or of a statement, match arm or field inside `{ .. }`, followed by an expression that Ebykn can read and that is not an assignment, binary operation, cast or range (the parser moves the attribute to the left operand), or by a `let`, an item, a closure without a return type, or a block-like expression whose end Ebykn can tell; if the expression after the attribute is an assignment, binary operation, cast or range, wrap it in parentheses (`#[..] (a + 1)`); otherwise move the attribute or the code out of the macro"
             }
             (Unimpl::AttrPosInMacro, Lang::Ja) => {
-                "このマクロの引数の中のこの位置の属性は扱えません。Ebykn は引数をトークンのまま持つので、安定版の Rust が属性を許す位置のうち見分けられるのは、`vec!` の要素と、`{ .. }` の中の文・match の腕・欄の頭（外側の属性だけ）です。ほかには安定版の Rust が「attributes on expressions are experimental」で拒否する位置があり、Verus なしのビルドが落ちうるためです。属性かコードをマクロの外に出します"
+                "このマクロの引数の中のこの位置の属性は扱えません。Ebykn は引数をトークンのまま持つので、安定版の Rust が受け付けると見分けられる形の属性だけを許すためです（ほかは安定版の Rust が「attributes on expressions are experimental」で拒否しうるので、Verus なしのビルドが落ちうる）。許すのは、`vec!` の要素と、`{ .. }` の中の文・match の腕・欄の先頭の外側の属性で、後ろが、Ebykn が読める式（代入・二項演算・型変換・範囲は除く。構文解析器が属性を左の項に移すため）、`let`、項目、戻り値の型のないクロージャ、終わりを見分けられるブロックのような式のどれかのときです。属性の後ろの式が代入・二項演算・型変換・範囲なら、括弧で囲みます（`#[..] (a + 1)`）。ほかは属性かコードをマクロの外に出します"
             }
             (Unimpl::PermInMacro, Lang::En) => {
                 "permissions cannot be used in the arguments of this macro yet, because Ebykn does not read them; compute the value outside the macro"
