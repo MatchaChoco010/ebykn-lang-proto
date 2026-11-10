@@ -256,6 +256,7 @@ impl W<'_> {
             | ItemKind::TypeAlias(_)
             | ItemKind::Subset(_)
             | ItemKind::Use(_)
+            | ItemKind::ForeignMod(_)
             | ItemKind::Rust(_) => {}
         }
     }
@@ -286,7 +287,7 @@ impl W<'_> {
             ItemKind::Static(s) => named("static", &s.ident),
             ItemKind::LemmaGroup(g) => named("lemma group", &g.ident),
             ItemKind::UseLemmas(p) => format!("use lemmas {}", self.slice(p.span)),
-            ItemKind::Use(tk) | ItemKind::Rust(tk) => {
+            ItemKind::Use(tk) | ItemKind::ForeignMod(tk) | ItemKind::Rust(tk) => {
                 let s = self.slice(tk.span);
                 match s.char_indices().nth(40) {
                     Some((i, _)) => format!("{} ..", &s[..i]),

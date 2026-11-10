@@ -149,10 +149,15 @@ pub(super) fn parse_item(input: ParseStream, ctx: Ctx) -> syn::Result<ast::Item>
         check_rust_item(&it);
         let ts = tokens_between(&begin, input);
         let span = span_between(&begin, input);
+        let tk = ast::Tokens { tokens: ts, span };
+        let kind = match it {
+            syn::Item::ForeignMod(_) => ast::ItemKind::ForeignMod(tk),
+            _ => ast::ItemKind::Rust(tk),
+        };
         return Ok(ast::Item {
             attrs: attrs(&a),
             vis: vis(&v),
-            kind: ast::ItemKind::Rust(ast::Tokens { tokens: ts, span }),
+            kind,
             span,
         });
     }

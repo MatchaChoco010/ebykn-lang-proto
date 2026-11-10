@@ -986,3 +986,64 @@ fn shared_receiver_through_a_reference_reads() {
     );
     lacks(&src, "borrow_mut");
 }
+
+/// 書き下した `src/lib.rs` を、`verus!` の外と中に分ける（どちらも空白を詰めた形）。
+fn split_verus(src: &str) -> (String, String) {
+    let (p, d) = project::single(src);
+    assert!(d.is_empty(), "{d:?}");
+    let c = ebykn_check::check(&p);
+    assert!(
+        c.diags.iter().all(|d| d.code().is_warning()),
+        "{:?}",
+        c.diags
+    );
+    let text = lower(&p, &c).unwrap().files[0].text.clone();
+    let (mut outside, mut inside, mut depth) = (String::new(), String::new(), 0);
+    for l in text.lines() {
+        match l {
+            "verus! {" => depth += 1,
+            "} // verus!" => depth -= 1,
+            _ if depth == 0 => outside.push_str(&format!("{l}\n")),
+            _ => inside.push_str(&format!("{l}\n")),
+        }
+        assert!(
+            (0..=1).contains(&depth),
+            "verus! の開き閉じが合わない:\n{text}"
+        );
+    }
+    assert_eq!(depth, 0, "verus! が閉じていない:\n{text}");
+    (squash(&outside), squash(&inside))
+}
+
+/// `extern` ブロックは、Verus のときだけ `#[verifier::external]` を付けて `verus!` の外に書き下す（#169。
+/// 付けないと Verus が `extern function cannot be checked` で拒否し、`verus!` の中に置くと Verus なしの
+/// ビルドが止まる。`tests/verus-probes/extern_block*.rs`、`tests/golden/extern_block/`）。ブロックの属性と
+/// 可視性を残し、`external_body` は付けない（空の仕様で信用してしまう）。前後の項目は `verus!` の中に残る。
+#[test]
+fn extern_blocks_are_written_outside_verus() {
+    let src = "pub fn a() {}\n#[link(name = \"m\")]\nunsafe extern \"C\" {\n    fn cos(x: f64) -> f64;\n    pub safe fn abs(x: i32) -> i32;\n    pub static FOO: u64;\n}\npub unchecked fn b(x: f64) -> f64 { unsafe { cos(x) } }\n";
+    let (outside, inside) = split_verus(src);
+    assert!(
+        outside.contains(&squash("#[cfg_attr(verus_keep_ghost, verifier::external)] #[link(name = \"m\")] unsafe extern \"C\" { fn cos(x: f64) -> f64; pub safe fn abs(x: i32) -> i32; pub static FOO: u64; }")),
+        "verus! の外にない:\n{outside}"
+    );
+    assert!(
+        !inside.contains("unsafe extern"),
+        "verus! の中にある:\n{inside}"
+    );
+    assert!(inside.contains(&squash("pub fn a() {}")), "{inside}");
+    assert!(
+        inside.contains(&squash(
+            "#[verifier::external_body] pub fn b(x: f64) -> f64"
+        )),
+        "{inside}"
+    );
+    assert!(!outside.contains("external_body"), "{outside}");
+    // ほかの Rust の項目は `verus!` の中に残る。
+    let (outside, inside) = split_verus("extern crate core;\npub union U { a: u32, b: f32 }\n");
+    assert!(
+        !outside.contains("extern") && !outside.contains("union"),
+        "{outside}"
+    );
+    assert!(inside.contains(&squash("extern crate core;")), "{inside}");
+}

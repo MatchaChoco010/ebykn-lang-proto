@@ -215,6 +215,9 @@ pub enum Unimpl {
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
     NestedAssumption,
+    /// ファイルの直下でない（インラインの `mod` か関数の本体の中の）`extern` ブロック。書き下しは `extern`
+    /// ブロックを `verus!` の外に出すが、そこからは出せない（#169）。
+    ForeignModPlacement,
     /// ジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。#95）。
     CfgOnGenericParam,
     /// パターン（クロージャの引数、構造体パターンの欄と `@x`）に付けた `#[cfg(..)]`（#95）。
@@ -318,6 +321,12 @@ impl Unimpl {
             }
             (Unimpl::NestedAssumption, Lang::Ja) => {
                 "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
+            }
+            (Unimpl::ForeignModPlacement, Lang::En) => {
+                "an `extern` block is supported only at the top level of a file (the crate root or the file of a module declared with `mod m;`), not inside an inline `mod` or a function body, because Ebykn writes it outside `verus!`; move it there and call its functions from an `unchecked fn`"
+            }
+            (Unimpl::ForeignModPlacement, Lang::Ja) => {
+                "`extern` ブロックは、ファイルの直下（クレートの根か、`mod m;` で宣言したモジュールのファイル）にだけ書けます。インラインの `mod` と関数の本体の中には書けません。Ebykn は `extern` ブロックを `verus!` の外に書き下すためです。そこに移し、中の関数は `unchecked fn` から呼びます"
             }
             (Unimpl::TryInBorrowMut, Lang::En) => {
                 "`?` inside `borrow mut` is supported only when the function's return type is written as `Option<..>` or `Result<..>`, because the permission is put back before returning on the failure path, which needs the shape of the failure value; write the `match` explicitly"

@@ -20,6 +20,9 @@ use crate::{Cx, Piece, attr};
 /// （`tests/verus-probes/exec_no_decreases_warning.rs`、`exec_no_decreases_allow.rs`）。
 const EXEC_NO_DECREASES: &str = "#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]";
 
+/// `extern` ブロックに付ける属性（#169。[`item_pieces`]）。
+const FOREIGN_MOD_EXTERNAL: &str = "#[cfg_attr(verus_keep_ghost, verifier::external)]";
+
 /// 項目の列を一片ずつ書き下す。
 pub(crate) fn items(cx: &Cx, items: &[ast::Item], indent: usize, out: &mut Vec<Piece>) {
     for item in items {
@@ -78,6 +81,29 @@ fn item_pieces(cx: &Cx, item: &ast::Item, indent: usize, out: &mut Vec<Piece>) {
         }
         ItemKind::Impl(imp) => impl_pieces(cx, item, imp, indent, out),
         ItemKind::Trait(t) => trait_pieces(cx, item, t, indent, out),
+        // `extern` ブロックの宣言は本体がなく、Verus は検証できないとして拒否する（`extern function cannot be
+        // checked`）。`#[verifier::external]` で Verus から外す。外した関数は、検証する関数からは呼べず（Verus が
+        // 拒否する）、`unchecked fn`（`external_body`）の本体からだけ呼べる（#169。
+        // `tests/verus-probes/extern_block*.rs`）。
+        // - `verus!` の中に残すと、Verus なしのビルドで、`verus!` が宣言に付ける `#[verus::internal(..)]` を
+        //   解決できずに止まる。そこで、ファイルの直下の `verus!` を閉じ、その外に書いて開き直す。`indent` が
+        //   0 なのはファイルの直下だけ（インラインの `mod` と関数の本体の中は、検査が E0003 にする）。
+        // - `verus!` の外でも `external` は要る。`verus!` の中で宣言したモジュール（`mod m;`）のファイルでは、
+        //   Verus は `verus!` の外の項目も検証の対象にする。`verus!` の外の属性は Verus なしのビルドでは消え
+        //   ないので、`cfg_attr(verus_keep_ghost, ..)` で Verus のときだけ付ける。
+        // - `external_body` は、空の仕様で信用して検証する関数から呼べてしまうので付けない。
+        ItemKind::ForeignMod(tk) if indent == 0 => {
+            note_item_macros(cx, item);
+            out.push(Piece::Raw("} // verus!".into()));
+            out.push(Piece::Raw(String::new()));
+            out.push(tokens(
+                format!("{FOREIGN_MOD_EXTERNAL} {}", tk.tokens),
+                None,
+                0,
+            ));
+            out.push(Piece::Raw("verus! {".into()));
+            out.push(Piece::Raw(String::new()));
+        }
         _ => {
             let (text, name) = item_text(cx, item);
             if !text.is_empty() {
@@ -207,6 +233,9 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
         ),
         // `use` と Rust の項目のトークン列は、可視性と属性を含む。
         ItemKind::Use(tk) | ItemKind::Rust(tk) => (tk.tokens.to_string(), None),
+        // `extern` ブロックはファイルの直下なら [`item_pieces`] が `verus!` の外に出す。インラインの `mod` と
+        // 関数の本体の中は検査が E0003 にする。
+        ItemKind::ForeignMod(tk) => (tk.tokens.to_string(), None),
         ItemKind::LemmaGroup(_) => crate::eykp_only("lemma group"),
         ItemKind::UseLemmas(_) => crate::eykp_only("use lemmas"),
         // 部分集合型と `impl spec` は検査が E0003 にする。`mod` と `impl` は [`item_pieces`]。
@@ -233,6 +262,10 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
         // AST を持たないので、トークン列から宣言ごとの属性を見る（PR #57 のレビューの N1）。
         ItemKind::Use(tk) | ItemKind::Rust(tk) => {
             cx.note_macros(&item.attrs, || rust_item_name(cx, &tk.tokens));
+            return;
+        }
+        ItemKind::ForeignMod(tk) => {
+            cx.note_macros(&item.attrs, || rust_item_name(cx, &tk.tokens));
             for decl in foreign_items(&tk.tokens) {
                 cx.note_macros_in_tokens(&decl, || rust_item_name(cx, &decl));
             }
@@ -245,22 +278,14 @@ fn note_item_macros(cx: &Cx, item: &ast::Item) {
     cx.note_macros(&item.attrs, || cx.item_path(&name.name));
 }
 
-/// `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）なら、中の宣言ごとのトークン列。
+/// `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）の、中の宣言ごとのトークン列。
 fn foreign_items(ts: &proc_macro2::TokenStream) -> Vec<proc_macro2::TokenStream> {
     use proc_macro2::{Delimiter, TokenTree};
-    let tts: Vec<TokenTree> = ts.clone().into_iter().collect();
-    let is_extern = tts
-        .iter()
-        .any(|t| matches!(t, TokenTree::Ident(i) if i == "extern"))
-        && !tts
-            .iter()
-            .any(|t| matches!(t, TokenTree::Ident(i) if i == "crate"));
-    let Some(TokenTree::Group(g)) = tts.last() else {
-        return Vec::new();
+    // 構文解析器は `syn::Item::ForeignMod` だけを `ItemKind::ForeignMod` にするので、末尾は `{ .. }`。
+    let g = match ts.clone().into_iter().last() {
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => g,
+        _ => unreachable!("extern ブロックのトークン列が `{{ .. }}` で終わらない: {ts}"),
     };
-    if !is_extern || g.delimiter() != Delimiter::Brace {
-        return Vec::new();
-    }
     let mut out = vec![proc_macro2::TokenStream::new()];
     for t in g.stream() {
         let end = matches!(&t, TokenTree::Punct(p) if p.as_char() == ';');

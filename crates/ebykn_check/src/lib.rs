@@ -129,22 +129,34 @@ pub fn check_items(
                 }
             }
             ItemKind::Static(s) => plain_expr(index, module, &s.expr, diags, facts),
-            // Ebykn の検査のない Rust の項目。インラインの `mod` の中は
-            // [`project::Project::for_each_module`] がたどる。
+            // インラインの `mod` の中の `extern` ブロックは、書き下しが `verus!` の外に出せない（#169）。
+            // 中のほかの項目は [`project::Project::for_each_module`] がたどる。
+            ItemKind::Mod(m) => {
+                for inner in m.content.iter().flat_map(|(_, items)| items) {
+                    if matches!(inner.kind, ItemKind::ForeignMod(_)) {
+                        diags.push(
+                            inner.span,
+                            Message::Check(CheckMsg::Unimplemented(Unimpl::ForeignModPlacement)),
+                        );
+                    }
+                }
+            }
+            // Ebykn の検査のない Rust の項目。
             ItemKind::Struct(_)
             | ItemKind::Enum(_)
             | ItemKind::TypeAlias(_)
-            | ItemKind::Mod(_)
             | ItemKind::Use(_)
             | ItemKind::LemmaGroup(_)
             | ItemKind::UseLemmas(_)
+            | ItemKind::ForeignMod(_)
             | ItemKind::Rust(_) => {}
         }
     }
 }
 
 /// 関数の本体の中の項目。索引に入らないので、Ebykn の項目（`impl Invariant` / `impl View`、
-/// `owns` / `spec` を持つ構造体、インラインの `mod`）は `E0003` にする。
+/// `owns` / `spec` を持つ構造体、インラインの `mod`）は `E0003` にする。`extern` ブロックも `E0003`
+/// にする（書き下しが `verus!` の外に出せるのはファイルの直下だけ。#169）。
 pub fn check_nested_items(
     index: &Index,
     module: &[String],
@@ -171,6 +183,11 @@ pub fn check_nested_items(
             diags.push(
                 item.span,
                 Message::Check(CheckMsg::Unimplemented(Unimpl::NestedAssumption)),
+            );
+        } else if matches!(item.kind, ItemKind::ForeignMod(_)) {
+            diags.push(
+                item.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::ForeignModPlacement)),
             );
         } else if ebykn {
             diags.push(
@@ -432,6 +449,7 @@ fn check_impl(
             | ItemKind::Mod(_)
             | ItemKind::Static(_)
             | ItemKind::Use(_)
+            | ItemKind::ForeignMod(_)
             | ItemKind::UseLemmas(_) => diags.push(
                 item.span,
                 Message::NotAllowedHere {

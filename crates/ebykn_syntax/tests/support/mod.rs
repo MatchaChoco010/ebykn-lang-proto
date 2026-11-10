@@ -849,6 +849,7 @@ pub fn item_head(i: &Item) -> String {
             g.members.iter().map(path).collect::<Vec<_>>().join(", ")
         ),
         ItemKind::UseLemmas(p) => format!("use lemmas {}", path(p)),
+        ItemKind::ForeignMod(t) => format!("extern`{}`", t.tokens),
         ItemKind::Rust(t) => format!("rust`{}`", t.tokens),
     };
     format!("{v}{k}")
