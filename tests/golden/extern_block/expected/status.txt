@@ -1,0 +1,4 @@
+unchecked extern_block::magnitude
+unchecked extern_block::magnitude64
+verified extern_block::distance
+results 1 verified, 0 errors

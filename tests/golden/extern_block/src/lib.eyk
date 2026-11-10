@@ -1,0 +1,32 @@
+// `extern` ブロック（#169）。書き下しは `extern` ブロックを `verus!` の外に出し、Verus は中の宣言を見ない。
+// 中の関数は `unchecked fn` の本体から呼び、検証する関数はその契約に頼る。検証する関数から直接は呼べない
+// （Verus が拒否する。`tests/verus-probes/extern_block_outside_call.rs`）。
+
+mod ffi;
+
+unsafe extern "C" {
+    fn abs(x: i32) -> i32;
+    pub safe fn labs(x: i64) -> i64;
+}
+
+// C の `abs` を包む。契約は証明なしの前提（`unchecked`）。
+pub unchecked fn magnitude(x: i32) -> (r: i32)
+    requires x > i32::MIN,
+    ensures r >= 0, r == x || r == -x,
+{
+    unsafe { abs(x) }
+}
+
+pub unchecked fn magnitude64(x: i64) -> (r: i64)
+    requires x > i64::MIN,
+    ensures r >= 0,
+{
+    if labs(x) == unsafe { ffi::llabs(x) } { labs(x) } else { 0 }
+}
+
+pub fn distance(a: i32, b: i32) -> (r: i32)
+    requires a >= 0, b >= 0,
+    ensures r >= 0,
+{
+    magnitude(a - b)
+}

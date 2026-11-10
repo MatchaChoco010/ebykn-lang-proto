@@ -217,6 +217,7 @@ impl Walker<'_, '_> {
             | ItemKind::Use(_)
             | ItemKind::LemmaGroup(_)
             | ItemKind::UseLemmas(_)
+            | ItemKind::ForeignMod(_)
             | ItemKind::Rust(_) => {}
         }
     }

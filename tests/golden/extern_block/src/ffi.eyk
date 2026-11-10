@@ -1,0 +1,5 @@
+// モジュールのファイルの直下の `extern` ブロックも、`verus!` の外に出す。
+
+unsafe extern "C" {
+    pub fn llabs(x: i64) -> i64;
+}

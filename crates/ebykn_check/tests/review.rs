@@ -811,3 +811,32 @@ pub fn grow(t: Pool, v: u64) -> Pool {{
     let (_, lines) = run(&src);
     assert!(lines.is_empty(), "{lines:?}");
 }
+
+// ---- #169：`extern` ブロック ----
+
+#[test]
+fn extern_blocks_pass_only_at_the_top_level_of_a_file() {
+    // ファイルの直下の `extern` ブロックは通す（書き下しが `verus!` の外に出す）。
+    accepts(
+        "unsafe extern \"C\" {\n    pub fn foo(x: u64) -> u64;\n    fn bar(x: u64) -> u64;\n}\n",
+    );
+    accepts(
+        "#[link(name = \"m\")]\nunsafe extern \"C\" { pub safe fn cos(x: f64) -> f64; pub static FOO: u64; }\npub unchecked fn c(x: f64) -> f64 { cos(x) }\n",
+    );
+    // インラインの `mod` の中と関数の本体の中は、`verus!` の外に出せないので E0003。`unchecked fn` の中も同じ。
+    for src in [
+        "pub mod m { unsafe extern \"C\" { pub safe fn abs(x: i32) -> i32; } }",
+        "pub mod m { pub mod n { unsafe extern \"C\" { fn abs(x: i32) -> i32; } } }",
+        "pub fn f(x: u64) -> u64 { unsafe extern \"C\" { fn foo(x: u64) -> u64; } x }",
+        "pub unchecked fn f(x: u64) -> u64 { unsafe extern \"C\" { fn foo(x: u64) -> u64; } unsafe { foo(x) } }",
+        "pub fn f() { fn g() { unsafe extern \"C\" { fn foo(); } } }",
+    ] {
+        rejects(
+            src,
+            "E0003",
+            "an `extern` block is supported only at the top level of a file",
+        );
+    }
+    // ほかの項目はインラインの `mod` の中でも通る。
+    accepts("pub mod m { extern crate core; pub fn f() {} }");
+}

@@ -478,6 +478,20 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 * 根拠：#17（PR #26）、#6（PR #13）、#61、#101。プローブ `when_used_as_spec.rs`、`async_tracked_param.rs`、`async_tracked_return.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
 * 状態：`spec fn` は基準で決めた。ほかは実測で決めた（`async fn` の `uses` と `gives` は、固定した Verus で確かめた）。`drop` から呼べる関数は判断待ち（#94）。
 
+### §7.2 `extern` ブロックは `verus!` の外に書き下す
+
+ファイルの直下（クレートの根か、`mod m;` で宣言したモジュールのファイル）の `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）は、そのファイルの `verus!` をいったん閉じ、その外に `#[cfg_attr(verus_keep_ghost, verifier::external)]` を付けて書き下します。ブロックの属性（`#[link(..)]` など）と中の宣言は、書いたとおり写します。
+
+- Verus は中の関数と `static` を見ません。検証する関数からは使えません（Verus が検証の前に拒否します）。使えるのは `unchecked fn` の本体だけです。FFI の関数は `unchecked fn` で包み、その契約を前提として `ebykn verify` の一覧に出します（`unchecked`）。
+- 検証する関数から使ったときの誤りは、Verus の文言のまま（生成コードの位置）出ます。呼び出しが `extern` ブロックの関数かを Ebykn が見分けるには名前解決が要るためです（設計ノート §3.2「規則に型情報が要るか」）。
+- インラインの `mod` の中と関数の本体の中の `extern` ブロックは `E0003` です（`unchecked fn` の本体の中も同じ）。`verus!` の外に出せないためです。ファイルの直下に移します。
+- 宣言に `external_body` は付けません。付けると、Verus は空の仕様で信用し、検証する関数から `unchecked` の印なしに呼べてしまいます（設計ノート §3.1 の A4）。
+- `verus!` の中に残さないのは、Verus なしの cargo のビルドが止まるためです（`verus!` が宣言に付ける属性を解決できない）。`verus!` の外でも `external` が要るのは、`verus!` の中で宣言したモジュールのファイルでは、Verus が `verus!` の外の項目も検証の対象にするためです。`cfg_attr` にするのは、Verus なしのビルドで `verifier` を解決できないためです。
+
+* 元の仕様：§7.2 の表は `extern` ブロックを挙げていない（§5.1 の `RustItem` として書いたとおり写すと、Verus が「extern function cannot be checked」で拒否する）。§5.2 は `unchecked fn` を FFI の包みに使うと書いている。
+* 根拠：#169。プローブ `extern_block.rs`、`extern_block_outside.rs`、`extern_block_outside_call.rs`、`extern_block_outside_no_cheating.rs`、`extern_block_external_body.rs`、`extern_block_in_body.rs`（`OPEN.md` の「M0 の実測」）。golden `tests/golden/extern_block/`。
+* 状態：外すか拒否するかは基準で決めた。書き下しの形と置き場所は実測で決めた。
+
 ### §7.2 実行関数の `decreases` は任意
 
 本体を検証する実行関数（`unchecked` でも `#[test]` でもない、本体がブロックの `fn`。impl のメソッドと trait の既定のメソッドを含む）には、書き下しで `#[verifier::exec_allows_no_decreases_clause]` と `#[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]` を付けます。Verus は実行関数のループと再帰に `decreases` を求めますが、前の属性の下では `decreases` のないループと再帰を、停止を示さずに検証します。
@@ -680,7 +694,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | --- | --- | --- | --- | --- |
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文、拒否リスト（§5 の「マクロ」。#27）に当たる cfg とマクロも、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn`、ファイルの直下にない `extern` ブロックなど） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |

@@ -42,8 +42,10 @@ pub enum ItemKind {
     LemmaGroup(LemmaGroup),
     /// `use lemmas g;`（`.eykp` だけ。モジュールとブロックの中に書ける）。
     UseLemmas(Path),
-    /// それ以外の Rust の項目（`extern crate`、`macro_rules!`、項目の位置のマクロ、
-    /// `union`、`extern` ブロック）。
+    /// `extern` ブロック（`extern "C" { .. }`、`unsafe extern "C" { .. }`）。中の宣言は Verus が
+    /// 検証できない外の関数なので、書き下しが `#[verifier::external]` を付ける（#169）。
+    ForeignMod(Tokens),
+    /// それ以外の Rust の項目（`extern crate`、`macro_rules!`、項目の位置のマクロ、`union`）。
     Rust(Tokens),
 }
 
