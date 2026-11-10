@@ -234,6 +234,16 @@ pub enum Unimpl {
     /// std のマクロの引数の中の、安定版の Rust が許さない位置の属性（`assert!(#[allow(..)] (a > 0))`）。
     /// Verus の toolchain では通るが、Verus なしのビルドで落ちる（PR #59 の再確認）。
     AttrPosInMacro,
+    /// 消去フィールドのパターン（`@x`）で束縛した名前を、match のガードで使った（#152。書き下しは腕の本体の
+    /// 先頭で束縛し直す）。
+    ErasedBindInGuard,
+    /// 同上を、`if let` / `while let` の `&&` で続く条件で使った（本体の先頭で束縛し直す）。
+    ErasedBindInCond,
+    /// 同上を、`for` / `while let` のパターンで束縛し、そのループの `invariant` / `decreases` で使った（本体の
+    /// 先頭で束縛し直す）。
+    ErasedBindInLoopClause,
+    /// 同上を、関数・クロージャの引数のパターンで束縛し、その契約で使った（本体の先頭で束縛し直す）。
+    ErasedBindInContract,
 }
 
 impl Unimpl {
@@ -378,6 +388,30 @@ impl Unimpl {
             }
             (Unimpl::PermInMacro, Lang::Ja) => {
                 "このマクロの引数は Ebykn が読まないので、その中ではまだ権限を使えません。値はマクロの外で求めます"
+            }
+            (Unimpl::ErasedBindInGuard, Lang::En) => {
+                "a name bound by an erased-field pattern (`@x`) cannot be used in the match guard yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern in a match arm, so the lowering binds the name at the start of the arm body; move the condition into the arm body, or bind the whole value in the arm and destructure it with `let` in the body"
+            }
+            (Unimpl::ErasedBindInGuard, Lang::Ja) => {
+                "消去フィールドのパターン（`@x`）で束縛した名前は、match のガードではまだ使えません。Verus が match の腕の `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前を腕の本体の先頭で束縛するためです。条件を腕の本体に移すか、腕では値全体を名前に束縛し、本体の `let` で分けます"
+            }
+            (Unimpl::ErasedBindInCond, Lang::En) => {
+                "a name bound by an erased-field pattern (`@x`) in an `if let` / `while let` condition cannot be used in a later condition of the same `&&` chain yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern there, so the lowering binds the name at the start of the body; move the later condition into an inner `if`"
+            }
+            (Unimpl::ErasedBindInCond, Lang::Ja) => {
+                "`if let` / `while let` の条件の消去フィールドのパターン（`@x`）で束縛した名前は、同じ `&&` で続く条件ではまだ使えません。Verus がそこの `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前を本体の先頭で束縛するためです。続く条件を内側の `if` に移します"
+            }
+            (Unimpl::ErasedBindInLoopClause, Lang::En) => {
+                "a name bound by an erased-field pattern (`@x`) in a `for` / `while let` pattern cannot be used in the loop's `invariant` / `decreases` yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern in a loop, so the lowering binds the name at the start of the loop body; for a `for` loop, bind the element to a name (`for b in v`), write `b@x` in the clause, and destructure it with `let` in the body"
+            }
+            (Unimpl::ErasedBindInLoopClause, Lang::Ja) => {
+                "`for` / `while let` のパターンの消去フィールドのパターン（`@x`）で束縛した名前は、そのループの `invariant` / `decreases` ではまだ使えません。Verus がループの `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前をループの本体の先頭で束縛するためです。`for` なら要素を名前で受け（`for b in v`）、句では `b@x` と書き、本体の `let` で分けます"
+            }
+            (Unimpl::ErasedBindInContract, Lang::En) => {
+                "a name bound by an erased-field pattern (`@x`) in a parameter cannot be used in the contract of the function or closure yet: Verus does not accept the `Tracked(x)` / `Ghost(x)` pattern inside a parameter, so the lowering binds the name at the start of the body; name the parameter (`b: B`), write `b@x` in the contract, and destructure it with `let` in the body"
+            }
+            (Unimpl::ErasedBindInContract, Lang::Ja) => {
+                "引数の消去フィールドのパターン（`@x`）で束縛した名前は、その関数・クロージャの契約ではまだ使えません。Verus が引数の中の `Tracked(x)` / `Ghost(x)` のパターンを受けないので、書き下しはその名前を本体の先頭で束縛するためです。引数を名前で受け（`b: B`）、契約では `b@x` と書き、本体の `let` で分けます"
             }
         }
     }

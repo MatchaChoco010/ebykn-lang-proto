@@ -10,6 +10,7 @@ use ebykn_syntax::ast::{
     TypeKind, UsesItem, Vis,
 };
 
+use crate::erased_pat::prepend_block;
 use crate::expr::{PermKind, ident, perm_var};
 use crate::{Cx, Piece, attr};
 
@@ -565,7 +566,7 @@ fn sig_text(
             }
             Param::Typed {
                 attrs: at, pat, ty, ..
-            } => format!("{}{}: {}", attrs(at), c.pat(pat), c.ty(ty)),
+            } => format!("{}{}: {}", attrs(at), c.pat_wrapped(pat), c.ty(ty)),
         })
         .collect();
     let mut requires = Vec::new();
@@ -742,6 +743,7 @@ fn fn_text(cx: &Cx, item: &ast::Item, f: &ast::Fn, drop_fn: bool) -> String {
             }
             let sig = sig(&mut c);
             let body = c.body_block(b);
+            let body = prepend_block(body, &c.sub(false).params_rebind(&f.sig));
             format!("{a}{v}{sig} {}", rebind_owned(&f.contract, body))
         }
         Some(ast::FnBody::Pure(e)) => pure_fn(&mut c, &a, &item.vis, f, e, &exp),
@@ -793,7 +795,8 @@ fn pure_fn(c: &mut Cx, a: &str, v: &Vis, f: &ast::Fn, e: &ast::Expr, exp: &FnExp
     for p in &f.sig.params {
         match p {
             Param::Receiver { .. } => recv = Some("self"),
-            Param::Typed { pat, .. } => args.push(c.pat(pat)),
+            // 引数のパターンを式として渡す。`@x` は引数のパターンが束縛した包みの値（#152）。
+            Param::Typed { pat, .. } => args.push(c.pat_wrapped(pat)),
         }
     }
     let call = match recv {
@@ -831,12 +834,13 @@ fn pure_fn(c: &mut Cx, a: &str, v: &Vis, f: &ast::Fn, e: &ast::Expr, exp: &FnExp
         }
         s
     };
-    let exec_body = c.sub(false).expr(e);
+    let exec_body = c.sub(false).params_rebind(&f.sig) + &c.sub(false).expr(e);
     let spec_body = c.sub(true).expr(e);
     let spec_body = match ret {
         Some(r) if int_type(&r.ty) => format!("({spec_body}) as {rty}"),
         _ => spec_body,
     };
+    let spec_body = c.sub(true).params_rebind(&f.sig) + &spec_body;
     let pubv = vis(v);
     let open = if matches!(v, Vis::Inherited) {
         ""
@@ -859,7 +863,7 @@ fn pure_fn(c: &mut Cx, a: &str, v: &Vis, f: &ast::Fn, e: &ast::Expr, exp: &FnExp
                     ""
                 }
             ),
-            Param::Typed { pat, ty, .. } => format!("{}: {}", c.pat(pat), c.ty(ty)),
+            Param::Typed { pat, ty, .. } => format!("{}: {}", c.pat_wrapped(pat), c.ty(ty)),
         })
         .collect();
     format!(
@@ -880,7 +884,11 @@ fn spec_fn_text(cx: &Cx, a: &str, v: &Vis, f: &ast::SpecFn) -> String {
         (_, false) => format!("{}open spec ", vis(v)),
     };
     match &f.body {
-        Some(e) => format!("{a}{kw}{sig} {{ {} }}", c.sub(true).expr(e)),
+        Some(e) => format!(
+            "{a}{kw}{sig} {{ {}{} }}",
+            c.sub(true).params_rebind(&f.sig),
+            c.sub(true).expr(e)
+        ),
         None => format!("{a}{kw}{sig};"),
     }
 }
@@ -954,7 +962,9 @@ fn trait_pieces(cx: &Cx, item: &ast::Item, t: &ast::Trait, indent: usize, out: &
                             a = format!("{EXEC_NO_DECREASES} {a}");
                             c.report.borrow_mut().exec.push(path.clone());
                         }
-                        (fc.block(b), Some(path))
+                        let body = fc.block(b);
+                        let rebind = fc.sub(false).params_rebind(&f.sig);
+                        (prepend_block(body, &rebind), Some(path))
                     }
                     _ => (";".into(), None),
                 };
@@ -1061,7 +1071,7 @@ fn impl_pieces(cx: &Cx, item: &ast::Item, imp: &ast::Impl, indent: usize, out: &
                         let body = f
                             .body
                             .as_ref()
-                            .map(|e| fc.sub(true).expr(e))
+                            .map(|e| fc.sub(true).params_rebind(&f.sig) + &fc.sub(true).expr(e))
                             .unwrap_or_default();
                         out.push(tokens(
                             format!("{}{kwv} spec {sig} {{ {body} }}", attrs(&m.attrs)),

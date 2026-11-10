@@ -1,0 +1,4 @@
+failed erased_pat_duplicate::pick
+failed erased_pat_duplicate::pick2
+unknown erased_pat_duplicate::caller
+results not verified: Verus stopped before verification (2 errors)

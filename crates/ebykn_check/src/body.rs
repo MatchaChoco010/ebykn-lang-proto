@@ -7,6 +7,7 @@
 mod attrs;
 mod calls;
 mod erased;
+mod erased_pat;
 mod proof;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -170,15 +171,18 @@ impl<'a> Walker<'a> {
                     _ => false,
                 }
         });
+        let mut pats = Vec::new();
         for p in &sig.params {
             if let ast::Param::Typed { pat, ty, .. } = p {
+                // 消去フィールドのパターンも、本体の中と同じに読む（`@x` の種類と領域。#152）。
+                self.bind(pat);
                 if let Some(i) = pat_ident(pat) {
                     self.var_types.insert(i.name.clone(), ty.clone());
                 }
-                self.add_locals(pat);
-                self.param_pattern_cfg(pat);
+                pats.push(pat);
             }
         }
+        self.erased_in_contract(&pats, contract);
         for u in contract.uses() {
             match u {
                 ast::UsesItem::Perm { mode, ident, .. } => {
@@ -920,8 +924,15 @@ impl<'a> Walker<'a> {
             }
             PatKind::Struct { fields, .. } => {
                 for f in fields {
-                    if let FieldPat::Field { pat, .. } = f {
-                        self.bind(pat);
+                    match f {
+                        FieldPat::Field {
+                            attrs, pat, span, ..
+                        } => {
+                            self.no_cfg_pattern(attrs, *span);
+                            self.bind(pat);
+                        }
+                        FieldPat::Erased { attrs, ident } => self.no_cfg_pattern(attrs, ident.span),
+                        FieldPat::ErasedRest { .. } => {}
                     }
                 }
             }
@@ -1478,6 +1489,7 @@ impl<'a> Walker<'a> {
         let saved_borrows = std::mem::take(&mut self.borrows);
         self.closure_outer = Some(outer);
         let prev = std::mem::replace(&mut self.logic, true);
+        self.erased_in_contract(&c.params.iter().collect::<Vec<_>>(), &c.contract);
         self.contract(&c.contract);
         self.logic = prev;
         self.expr(&c.body);
@@ -1519,6 +1531,7 @@ impl<'a> Walker<'a> {
     }
 
     fn if_expr(&mut self, e: &Expr, cond: &Expr, then: &Block, else_: Option<&Expr>) -> bool {
+        self.erased_in_cond(cond);
         self.expr(cond);
         let start = self.env.clone();
         let d1 = self.block(then);
@@ -1543,6 +1556,7 @@ impl<'a> Walker<'a> {
             self.builtin_attrs_only(&arm.attrs);
             self.bind(&arm.pat);
             if let Some(g) = &arm.guard {
+                self.erased_before_rebind(&[&arm.pat], [g], Unimpl::ErasedBindInGuard);
                 self.expr(g);
             }
             let d = self.expr(&arm.body);
@@ -1589,8 +1603,10 @@ impl<'a> Walker<'a> {
             }
             self.logic = prev;
         }
+        self.erased_in_loop_clauses(l);
         match &l.kind {
             LoopKind::While(cond) => {
+                self.erased_in_cond(cond);
                 self.expr(cond);
             }
             LoopKind::For { pat, .. } => self.bind(pat),
