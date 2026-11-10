@@ -195,9 +195,13 @@ fn item_text(cx: &Cx, item: &ast::Item) -> (String, Option<String>) {
             ),
             None,
         ),
+        // Verus は `verus!` の中の `static` に `exec` を求める（`tests/verus-probes/static_without_exec.rs`）。
+        // `exec` のない `pub static` は `open` を付けられて拒否される（`static_pub_without_exec.rs`）。
+        // `exec static` は通る（`static_items.rs`。#163）。`static mut` と関数の本体の中の `static` は検査が
+        // E0003 にする。
         ItemKind::Static(s) => (
             format!(
-                "{a}{v}static {}{}: {} = {};",
+                "{a}{v}exec static {}{}: {} = {};",
                 if s.mutable { "mut " } else { "" },
                 ident(&s.ident),
                 cx.ty(&s.ty),

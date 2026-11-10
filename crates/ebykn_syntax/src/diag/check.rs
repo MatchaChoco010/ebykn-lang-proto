@@ -215,6 +215,10 @@ pub enum Unimpl {
     CfgDuplicate,
     /// 関数の本体の中の `unchecked fn` / `lemma fn`（`verify` が証明なしの前提として一覧に出せない）。
     NestedAssumption,
+    /// `static mut`（Verus が扱わない。#163）。
+    StaticMut,
+    /// 関数の本体の中の `static`（Verus が `exec static` を文の位置で読めない。#163）。
+    NestedStatic,
     /// ジェネリクスの引数に付けた `#[cfg(..)]`（`fn f<#[cfg(x)] T>`。#95）。
     CfgOnGenericParam,
     /// パターン（クロージャの引数、構造体パターンの欄と `@x`）に付けた `#[cfg(..)]`（#95）。
@@ -318,6 +322,18 @@ impl Unimpl {
             }
             (Unimpl::NestedAssumption, Lang::Ja) => {
                 "関数の本体の中の `unchecked fn` と `lemma fn` はまだ扱えません。`verify` が証明なしの前提として一覧に出せないためです。モジュールの直下に移します"
+            }
+            (Unimpl::StaticMut, Lang::En) => {
+                "`static mut` is not supported, because Verus does not support it; pass the state as an argument to the functions that read or change it"
+            }
+            (Unimpl::StaticMut, Lang::Ja) => {
+                "`static mut` は書けません。Verus が扱わないためです。状態は、それを読み書きする関数に引数で渡します"
+            }
+            (Unimpl::NestedStatic, Lang::En) => {
+                "`static` inside a function body is not supported, because Verus cannot read the `exec static` it is lowered to in that position; move it to the module level"
+            }
+            (Unimpl::NestedStatic, Lang::Ja) => {
+                "関数の本体の中の `static` は書けません。書き下した `exec static` を Verus がその位置で読めないためです。モジュールの直下に移します"
             }
             (Unimpl::TryInBorrowMut, Lang::En) => {
                 "`?` inside `borrow mut` is supported only when the function's return type is written as `Option<..>` or `Result<..>`, because the permission is put back before returning on the failure path, which needs the shape of the failure value; write the `match` explicitly"

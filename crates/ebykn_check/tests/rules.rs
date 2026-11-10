@@ -198,6 +198,38 @@ fn unimplemented_features_fail_loudly() {
 }
 
 #[test]
+fn statics_that_verus_rejects_fail_loudly() {
+    // #163：Verus は `static mut` を扱わない（`tests/verus-probes/static_mut.rs`）。
+    for src in [
+        "static mut A: u64 = 1;",
+        "pub static mut A: u64 = 1;",
+        "mod m { pub static mut A: u64 = 1; }",
+        "fn f() -> u64 { static mut A: u64 = 1; 0 }",
+    ] {
+        rejects(src, "E0003", "`static mut` is not supported");
+    }
+    // 関数の本体の中の `static` は、`exec` の有無によらず Verus が拒否する
+    // （`static_nested.rs`、`static_nested_exec.rs`）。
+    for src in [
+        "fn f() -> u64 { static A: u64 = 1; A }",
+        "pub fn f() -> u64 { if true { static A: u64 = 1; A } else { 0 } }",
+        "unchecked fn f() -> u64 { static A: u64 = 1; A }",
+        "impl S { fn f(&self) -> u64 { static A: u64 = 1; A } }\nstruct S { a: u64 }",
+    ] {
+        rejects(
+            src,
+            "E0003",
+            "`static` inside a function body is not supported",
+        );
+    }
+    // モジュールの直下の `static` は `exec static` に書き下して通る（`static_items.rs`）。
+    accepts(
+        "pub static A: u64 = 1;\nstatic B: &'static u64 = &A;\npub(crate) static S: &'static str = \"hi\";\nfn f() -> u64 { *B }",
+    );
+    accepts("mod m { pub static A: u64 = 1; }\nfn f() -> u64 { m::A }");
+}
+
+#[test]
 fn async_fns_cannot_have_uses_or_gives_yet() {
     // #101：Verus は `async fn` の `Tracked(..)` の引数を読めずに内部エラーで止まる。
     for f in [

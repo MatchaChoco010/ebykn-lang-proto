@@ -419,6 +419,29 @@ fn lemmas_without_bodies_are_admitted_and_listed() {
 }
 
 #[test]
+fn statics_are_exec_statics() {
+    // #163：Verus は `verus!` の中の `exec` のない `static` を拒否する（`tests/verus-probes/static_without_exec.rs`、
+    // `static_pub_without_exec.rs`）。可視性と型と初期化の式はそのまま写す。
+    let src = "pub static A: u64 = 1;\nstatic B: &'static u64 = &A;\npub(crate) static S: &'static str = \"hi\";\nmod m { pub static C: u64 = 2; }\n";
+    for want in [
+        "pub exec static A: u64 = 1;",
+        "exec static B: &'static u64 = &A;",
+        "pub(crate) exec static S: &'static str = \"hi\";",
+        "pub exec static C: u64 = 2;",
+    ] {
+        has(src, want);
+    }
+    // `exec` のない `static` は残らない（`'static` の寿命は除く）。
+    let got = lowered(src);
+    assert_eq!(got.matches("exec static").count(), 4, "{got}");
+    assert_eq!(
+        got.matches(" static ").count(),
+        4 + got.matches("' static ").count(),
+        "{got}"
+    );
+}
+
+#[test]
 fn quantifiers_and_and_or() {
     has(
         "pub spec fn f(s: Seq<int>) -> bool = forall i in 0..s.len(), s[i] > 0;",

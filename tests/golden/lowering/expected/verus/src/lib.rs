@@ -191,4 +191,25 @@ ensures final(r).contains(p), final(r).index(p).val == 2, {
     }
 }
 
+pub exec static GREETING: &'static str = "hi";
+
+exec static LIMIT: u64 = 10;
+
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn limit() -> u64 { LIMIT }
+
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn greeting() -> &'static &'static str { &GREETING }
+
+pub enum Shape { Dot, Line(u64) }
+
+pub type Count = u64;
+
+pub const MAX: Count = 100;
+
+#[verifier::exec_allows_no_decreases_clause] #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)] pub fn len_of(s: Shape) -> (r: Count)
+ensures r <= MAX, {
+    match s {
+        Shape::Dot => 0, Shape::Line(n) => if n <= MAX { n } else { MAX },
+    }
+}
+
 } // verus!

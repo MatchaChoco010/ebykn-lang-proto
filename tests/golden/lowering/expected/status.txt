@@ -23,4 +23,7 @@ verified lowering::Bag::with_node
 verified lowering::wrap
 verified lowering::set_owned
 verified lowering::set_and_put
-results 21 verified, 0 errors
+verified lowering::limit
+verified lowering::greeting
+verified lowering::len_of
+results 27 verified, 0 errors
