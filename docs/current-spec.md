@@ -501,10 +501,13 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - `-> (q: Ptr<T>) gives q@` は `-> (__eyk_ret: (Ptr<T>, Tracked<PointsTo<T>>))` にします。`ensures` の `q` を `__eyk_ret.0`、`q@` を `__eyk_ret.1@` に付け替え、`ensures __eyk_ret.1@.pptr() == __eyk_ret.0` を足します。本体の末尾と `return e` は `(e, Tracked(__eyk_perm_q))` です。§7.3 の `-> (q: Ptr<T>, Tracked<PointsTo<T>>)` は Verus の構文にありません。
 - 権限の変数を渡すときは、権限そのものなら `Tracked(&x)` / `Tracked(&mut x)`、借用（`uses &p@`、`uses &mut p@`、`borrow`）なら `Tracked(&*x)` / `Tracked(&mut *x)` です。
 - 型を書いた `let`（`let p: Ptr<u8> = Ptr::new(..)`。`Ptr::empty`、`Cell::new`、`gives` の呼び出しも同じ）は、`let (p, Tracked(__eyk_perm_p)): (Ptr<u8>, Tracked<_>) = ..` にして型注釈を残します。型注釈を落とすと値の型が変わります。
+- メソッドの受け手の `(*p).f` / `(*p)`（`(*p).out.push(x)`）は、実行文脈で権限を変更できる（権限そのもの、`uses &mut p@`）なら `p.borrow_mut(Tracked(&mut ..)).out.push(x)` にします。借用（`uses &p@`、`borrow`）なら、値が要る位置と同じ `(*p.read(..)).out` です。Ebykn は型を見ないので、メソッドが `&self` か `&mut self` かは区別しません。`&self` のメソッドを `borrow_mut` を通して呼んでも、Verus は値が変わらないことを示せます（`tests/golden/lowering` の `count_items`）。
+  - 制限：受け手が権限の `&mut` を取るので、指す値を借用したまま、同じ権限を通して `&self` のメソッドを呼ぶと、Rust の借用検査が `E0502` で止めます（`let s = &(*p).out; let m = (*p).out.len(); s.len()`）。誤って verified にはなりません。受け手を参照の式で包んだ `(&(*p).out).len()` は `read` を通るので、こう書けば通ります（`crates/ebykn_lower/tests/rules.rs` の `shared_receiver_through_a_reference_reads`）。
+- 括弧で包んだ `(*p) = e;` は `*p = e;` と同じ `p.write(..)` です。`(*p) += e;` は `(*p.borrow_mut(..)) += e;` です。
 - 値で受けた領域 `uses r: Region<L>` と、移動で受けた権限 `uses p@` は、引数を `Tracked(r): Tracked<Region<L>>` / `Tracked(__eyk_perm_p): Tracked<PointsTo<T>>` のまま、本体の先頭で `let tracked mut r = r;` / `let tracked mut __eyk_perm_p = __eyk_perm_p;` と束縛し直します。`take` / `put` / `borrow mut` と、`*p = e` / `(*p).f = e` で変更できるようにするためです。Verus は引数のパターン `Tracked(mut r)` を受け付けません（「ill-formed `unwrap_parameter` header」）。変更しない関数でも、Verus と Verus なしの cargo は `unused_mut` の警告を出しません。
 
-* 元の仕様：§7.3 の表（`put` は `<r>.insert(..);`、論理の `<r>` は `self.r.borrow()`、`gives` は `-> (q: Ptr<T>, Tracked<PointsTo<T>>)`、`uses r: Region<L>` は `Tracked(r): Tracked<Region<L>>` だけ）。
-* 根拠：#6（PR #13、プローブ `tracked_field_forms.rs`、`tracked_field_a3_literal.rs`）、#17（PR #26）、#90、#102（`tests/golden/lowering` の `Bag`、`set_owned`、`set_and_put`）。
+* 元の仕様：§7.3 の表（`put` は `<r>.insert(..);`、論理の `<r>` は `self.r.borrow()`、`gives` は `-> (q: Ptr<T>, Tracked<PointsTo<T>>)`、`uses r: Region<L>` は `Tracked(r): Tracked<Region<L>>` だけ）。メソッドの受け手の `*p` は、表に挙げていない（OPEN-5）。
+* 根拠：#6（PR #13、プローブ `tracked_field_forms.rs`、`tracked_field_a3_literal.rs`）、#17（PR #26）、#90、#102（`tests/golden/lowering` の `Bag`、`set_owned`、`set_and_put`）、#82・#88（`tests/golden/lowering` の `push_item`・`count_items`・`paren_write`）。
 * 状態：`put`、論理の `<r>`、値で受けた領域と移動で受けた権限の束縛し直しは実測で決めた。ほかは基準で決めた。
 
 ### §7.3 消去フィールドの名前

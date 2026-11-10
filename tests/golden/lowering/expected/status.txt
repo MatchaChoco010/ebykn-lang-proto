@@ -23,4 +23,7 @@ verified lowering::Bag::with_node
 verified lowering::wrap
 verified lowering::set_owned
 verified lowering::set_and_put
-results 21 verified, 0 errors
+verified lowering::push_item
+verified lowering::count_items
+verified lowering::paren_write
+results 24 verified, 0 errors

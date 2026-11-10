@@ -163,3 +163,33 @@ fn set_and_put(p: Ptr<Node>) uses p@, r: &mut Region<Ptr<Node>>
     (*p).val = 2;
     put r[p];
 }
+
+// メソッドの受け手の `(*p).f` は、権限を変更できれば `borrow_mut` を通す（#82）。`&self` のメソッドでも
+// 値は変わらないと示せる。
+pub struct Bucket { pub items: Vec<u64> }
+
+pub fn push_item(p: Ptr<Bucket>, x: u64) uses &mut p@
+    requires p@.is_init(),
+    ensures final(*p).items.view() == old(*p).items.view().push(x),
+{
+    (*p).items.push(x);
+}
+
+pub fn count_items(p: Ptr<Bucket>) -> (n: usize) uses &mut p@
+    requires p@.is_init(),
+    ensures n == old(*p).items.view().len(), final(*p) == old(*p),
+{
+    (*p).items.len()
+}
+
+// 括弧で包んだ `(*q) = e` も `*q = e` と同じく `write`（#88）。
+pub fn paren_write() -> (r: u64)
+    ensures r == 3,
+{
+    let q = Ptr::new(0u64);
+    (*q) = 1;
+    (*q) += 2;
+    let x = *q;
+    let n = q.free();
+    x
+}
