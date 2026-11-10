@@ -469,14 +469,20 @@ prelude の `PointsTo<T>` は型不変条件として `size_of::<T>() != 0` を�
 - 純粋関数（`fn f(..) -> T = e;`）：戻り値の型が整数の基本型なら、spec 側の本体を `(e) as T` で包みます。spec 側では整数の算術が `int` になり、同じ式を写すと型が合わないからです。それ以外（引数の位置の算術など）は Verus のエラーに任せます。
 - 関数単位の `by(m)`：`.eykp` が入る M3 からの規則です。書き下しは署名の直後（`requires` の前）に出します。`ensures` の後に置くと Verus の構文エラーです。`.eyk` では、`by(m)` は証明の構文として拒否します（`E0303`）。
 - `uses` か `gives` を持つ `async fn` は `E0003` です（`unchecked` と `impl` の中を含む）。`uses` は、§7.3 どおり `Tracked(..)` の引数に書き下すと、Verus が内部エラー（「ill-formed `unwrap_parameter` header」）で止まるためです。`gives` は、Verus は定義も呼ぶ側の `.await` の分解も検証しますが、`.await` は Rust のまま写すので、§6.2 が `.await` の位置で受け取る権限を追えず、権限が黙って捨てられるためです。`uses` も `gives` も持たない `async fn` は Verus が検証します。権限や領域を受け取る処理は `uses` を持つ async でない `fn` に、権限を返す処理は `gives` を持つ async でない `fn` に移し、`async fn` から呼べば書けます。
+- `static`：`exec static` に書き下します（可視性・型・初期化の式はそのまま）。Verus は `verus!` の中の `exec` のない `static` を拒否するためです（`pub` でなければ `exec` と `ensures` を求め、`pub` なら `open` を付けて拒否する）。
+  - `.eyk` に `static` の `ensures` を書く形はないので、値は検証から見えません。初期化の式が `1` でも、読んだ値について何も示せず、`+ 1` のあふれも示せません。値を契約や証明で使うなら `const` にします。
+  - 初期化の式は実行の式として検証します（呼んだ関数の `requires` など）。エラーは、`const` の初期化の式と同じく、どの項目にも割り当てず、項目を `unknown` にします（§9「`ebykn verify` の項目の状態と出力」）。
+  - `static` は spec と proof の文脈（契約、`spec fn`、`lemma fn`）から読めません。Verus が「cannot read static with mode exec」で拒否します（`exec` の関数の呼び出しと同じく、モードの検査は Verus に任せる）。
+  - `static mut` は `E0003` です。Verus が `exec` の有無によらず「Verus does not support 'static mut'」で拒否するためです。関数の本体の中の `static` も `E0003` です。Verus は、`exec` のない形は `exec` と `ensures` を求めて拒否し、`exec static` は文の位置で構文解析できません。モジュールの直下（インラインの `mod` の中を含む）に移せば書けます。
+  - 型の参照の寿命を省いた形（`&str`）は、`const` と同じく Verus が `missing lifetime specifier` で拒否します（#177）。`&'static str` と書きます。
 - 利用者の `impl Drop`：std の `Drop` の impl の `fn drop` に、書き下しが `opens_invariants none` と `no_unwind` を足します。Verus はこの 2 つのない `Drop` の実装を拒否し、利用者は `.eyk` にどちらも書けないためです。std の `Drop` は、裸の `Drop`、`std::ops::Drop` / `core::ops::Drop`、`std::prelude::<版>::Drop` と、`use` の別名・glob の `use`・`pub use` の再公開でそれを指すパスです。クレートで定義した同じ名前のトレイトには、glob の `use` の先で見えるものも含めて何も足しません。
   - `drop` の本体は検証します。`drop` は何も前提にしません（`requires` を持てず、型の不変条件も前提にしない）。`unchecked fn drop` は、ほかの `unchecked` と同じく前提の一覧に出ます。
   - `drop` の本体から呼べるのは、`opens_invariants none` の関数だけです。利用者の `fn` は `.eyk` に `opens_invariants` を書けず、Verus の既定の `opens_invariants any` になるので、`drop` から呼ぶと `callee may open invariants that caller cannot` で失敗します（`no_panic` を付けても同じ）。vstd の `Vec::new` などや、`assert!`、`unwrap()`、添字、`panic!` も同じエラーになります。今の `drop` に書けるのは、フィールドへの単純な書き込みのような、関数を呼ばない本体です。扱いは判断待ちです（#94）。
   - 型の不変条件を持つ型（`impl Invariant for T`）の `impl Drop` は、ほかの trait の impl で §6.4 の展開が契約を足すメソッドと同じく E0003（M4）です。§6.4 のとおりなら `drop` に `requires old(self).invariant()` が付きますが、Verus は `Drop` の `requires` を拒否するので、M4 で扱いを決めます。
 
-* 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。
-* 根拠：#17（PR #26）、#6（PR #13）、#61、#101。プローブ `when_used_as_spec.rs`、`async_tracked_param.rs`、`async_tracked_return.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`。
-* 状態：`spec fn` は基準で決めた。ほかは実測で決めた（`async fn` の `uses` と `gives` は、固定した Verus で確かめた）。`drop` から呼べる関数は判断待ち（#94）。
+* 元の仕様：§7.2 の表（`spec fn` は「`open spec fn f(..)`（`pub` はそのまま）」、純粋関数は同じ式を `fn` と `spec fn` に写す）、§5.2 の正規順（`by` が最後）。§7.2 の表は `static` を挙げていない（§5 の文法は Rust の項目として受け付ける）。
+* 根拠：#17（PR #26）、#6（PR #13）、#61、#101、#163。プローブ `when_used_as_spec.rs`、`static_items.rs`、`static_without_exec.rs`、`static_pub_without_exec.rs`、`static_mut.rs`、`static_nested.rs`、`static_nested_exec.rs`、`static_opaque.rs`、`static_spec_read.rs`、`static_init_precondition.rs`、`async_tracked_param.rs`、`async_tracked_return.rs`、`prover_mode_by_last.rs`、`drop_opens_none.rs`、`drop_requires.rs`、`drop_calls_opens_any.rs`、`opens_none_vec.rs`。golden `tests/golden/drop`、`tests/golden/lowering`（`static`）。
+* 状態：`spec fn` は基準で決めた。ほかは実測で決めた（`async fn` の `uses` と `gives`、`static` は、固定した Verus で確かめた）。`drop` から呼べる関数は判断待ち（#94）。
 
 ### §7.2 実行関数の `decreases` は任意
 
@@ -677,7 +683,7 @@ Verus の `--output-json` は、件数（`verification-results` の `verified` /
 | --- | --- | --- | --- | --- |
 | `E0001` | 構文エラー。Verus にあって Ebykn にない書き方、性質ファイルだけの構文、拒否リスト（§5 の「マクロ」。#27）に当たる cfg とマクロも、文言を分けて `E0001`。`.eyk` の証明構文は `E0303`（#64） | コードがない（§10.1 の形式はコードを要する） | #7（PR #15） | 基準で決めた |
 | `E0002` | プロジェクトの誤り。`Ebykn.toml` がない・読めない・知らない鍵・型が違う・`[verus]` が `ebykn` の固定値と違う、`mod foo;` のファイルがない・二つある、同じモジュールの二度の宣言、クレートルートがない・二つある | コードがない | #17（PR #20） | 基準で決めた |
-| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
+| `E0003` | まだ実装しない機能。文言にどのマイルストーンで実装するかを書く（`.eykp` があるときの `verify` / `build`、`props/`、`[props]`、`[ebykn-dependencies]`、部分集合型、契約・`spec fn`・`lemma fn` を持つ trait、`impl spec`、型の不変条件を持つ型の `impl Drop`、`build --verified`、権限の操作・発散を含む文・式・欄に付けた `#[cfg]`、ジェネリクスの引数とパターンに付けた `#[cfg]`、代入・二項演算・型変換の文の属性、安定版の Rust が許さない位置の式の属性、マクロの引数の中の cfg・lint のほかの属性、`uses` か `gives` を持つ `async fn`、`static mut`、関数の本体の中の `static` など） | コードがない（§1.1 は段階 1 の機能を挙げるだけ） | #17（PR #20） | 基準で決めた |
 | `E0004` | `ensures` / `returns` の裸の `&mut` 引数、`old` / `final` の引数が `&mut` の引数でないもの、マクロの引数の中の `final(..)`（§6.4） | §6.4 は `ensures` の裸の `x` を事後の値と読む | #10（PR #35） | 作者が決めた |
 | `E0103` | 局所の名前に Rust の予約語の raw の綴り（`r#type`）（§4） | 識別子の raw の綴りに触れない | #119（PR #148） | 基準で決めた |
 | `E0404` | 消去フィールドを `.` で書いた（`e.f`、リテラルの `f: e`、パターンの `f`。§5.4） | `.` の形に触れていない | #99 | 基準で決めた |

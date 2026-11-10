@@ -128,7 +128,16 @@ pub fn check_items(
                     plain_expr(index, module, e, diags, facts);
                 }
             }
-            ItemKind::Static(s) => plain_expr(index, module, &s.expr, diags, facts),
+            ItemKind::Static(s) => {
+                // Verus は `static mut` を扱わない（`tests/verus-probes/static_mut.rs`。#163）。
+                if s.mutable {
+                    diags.push(
+                        item.span,
+                        Message::Check(CheckMsg::Unimplemented(Unimpl::StaticMut)),
+                    );
+                }
+                plain_expr(index, module, &s.expr, diags, facts);
+            }
             // Ebykn の検査のない Rust の項目。インラインの `mod` の中は
             // [`project::Project::for_each_module`] がたどる。
             ItemKind::Struct(_)
@@ -162,6 +171,16 @@ pub fn check_nested_items(
             ItemKind::Mod(_) => true,
             _ => false,
         };
+        // 関数の本体の中の `static` は、`static` のままでも `exec static` でも Verus が拒否する
+        // （`tests/verus-probes/static_nested.rs`、`static_nested_exec.rs`。#163）。
+        // `static mut` は [`check_items`] が `StaticMut` にする。
+        if matches!(&item.kind, ItemKind::Static(s) if !s.mutable) {
+            diags.push(
+                item.span,
+                Message::Check(CheckMsg::Unimplemented(Unimpl::NestedStatic)),
+            );
+            continue;
+        }
         let assumption = match &item.kind {
             ItemKind::Fn(f) => f.unchecked.is_some(),
             ItemKind::LemmaFn(_) => true,

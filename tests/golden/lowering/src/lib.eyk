@@ -163,3 +163,33 @@ fn set_and_put(p: Ptr<Node>) uses p@, r: &mut Region<Ptr<Node>>
     (*p).val = 2;
     put r[p];
 }
+
+// `static` は `exec static` に書き下す（#163）。Verus は `verus!` の中の `exec` のない `static` を拒否する。
+// 値は検証から見えない（`ensures` を持たない `exec static`）ので、契約で値を使うなら `const` にする。
+pub static GREETING: &'static str = "hi";
+
+static LIMIT: u64 = 10;
+
+pub fn limit() -> u64 {
+    LIMIT
+}
+
+pub fn greeting() -> &'static &'static str {
+    &GREETING
+}
+
+// 列挙型・型の別名・`const`。`const` の値は検証から見える（`static` と違う）。
+pub enum Shape { Dot, Line(u64) }
+
+pub type Count = u64;
+
+pub const MAX: Count = 100;
+
+pub fn len_of(s: Shape) -> (r: Count)
+    ensures r <= MAX,
+{
+    match s {
+        Shape::Dot => 0,
+        Shape::Line(n) => if n <= MAX { n } else { MAX },
+    }
+}
