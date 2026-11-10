@@ -10,6 +10,6 @@ mod seq;
 
 pub use cell::{Cell, CellId, CellPointsTo};
 pub use ptr::{PointsTo, Ptr};
-pub use region::{Loc, Region};
+pub use region::{Loc, LocArg, Region};
 pub use seq::SeqExt;
 pub use vstd::view::View;
