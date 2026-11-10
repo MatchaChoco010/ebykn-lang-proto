@@ -118,6 +118,7 @@ impl Walker<'_> {
         }
         self.env.insert(name.to_string(), Perm { state, block });
         self.known.insert(name.to_string());
+        self.ever_held.insert(name.to_string());
         true
     }
 }

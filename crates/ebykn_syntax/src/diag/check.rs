@@ -505,6 +505,9 @@ pub enum CheckMsg {
     },
     /// `assert .. by { }` の本体の中の `borrow r[p] { }`（Verus はその中で権限を借りられない。#67）。
     BorrowInAssertBy,
+    /// 証明の文の中の項目（`use` を含む。`use lemmas` は除く）。中の項目が名前を覆うと、証明の呼び出しの
+    /// 指すものを Ebykn が決められない（#67）。
+    ItemInProof,
     /// `lemma group` の要素が、モジュールの直下の `lemma fn` に解決しない（#67）。
     LemmaGroupMember {
         written: String,
@@ -731,6 +734,7 @@ impl CheckMsg {
             | InvariantImplShape
             | LemmaGroupMember { .. }
             | BorrowInAssertBy
+            | ItemInProof
             | ViewImplShape
             | EbyknTraitSpelling { .. } => Code::E0001,
             MissingErasedField { .. } | NotErasedField { .. } => Code::E0402,
@@ -854,6 +858,8 @@ impl CheckMsg {
             ),
             (BorrowInAssertBy, En) => "syntax error: `borrow r[p] { .. }` cannot be written in the body of `assert .. by { .. }`, because Verus cannot borrow a permission there; write it in a `proof { .. }` block instead (`proof { borrow r[p] { assert P; } }`)".into(),
             (BorrowInAssertBy, Ja) => "構文エラー: `assert .. by { .. }` の本体の中には `borrow r[p] { .. }` を書けません。Verus がそこでは権限を借りられないためです。`proof { .. }` の中に書きます（`proof { borrow r[p] { assert P; } }`）".into(),
+            (ItemInProof, En) => "syntax error: an item (including `use`) cannot be written in a proof statement; only `use lemmas g;` can. An item there could shadow the names the proof calls, so Ebykn cannot tell which function a call reaches; move the item out of the proof (to the module or the function body)".into(),
+            (ItemInProof, Ja) => "構文エラー: 証明の文の中には項目（`use` を含む）を書けません。書けるのは `use lemmas g;` だけです。中の項目が名前を覆うと、証明の呼び出しがどの関数に届くかを Ebykn が決められないためです。項目は証明の外（モジュールか関数の本体）に移します".into(),
             (LemmaGroupMember { written }, En) => format!(
                 "syntax error: `{written}` in `lemma group` is not a `lemma fn` at the module level of this crate; a lemma group can list only such lemmas (they become Verus `broadcast proof fn`s), not lemmas in an `impl` or in a function body, nor other groups"
             ),

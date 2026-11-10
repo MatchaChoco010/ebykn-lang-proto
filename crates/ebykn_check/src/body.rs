@@ -131,6 +131,12 @@ pub struct Walker<'a> {
     in_assert_by: bool,
     /// 証明の中のメソッドの受け手を見ているか（権限を持つポインタも資源とみなす。[`guard`]）。
     guard_ptrs: bool,
+    /// 関数の中で一度でも領域だった名前と、一度でも権限を持った名前（単調。パターンで覆っても忘れない。
+    /// 証明の中のガードが使う。[`guard`]）。
+    ever_regions: BTreeSet<String>,
+    ever_held: BTreeSet<String>,
+    /// 囲むブロックの中の項目と `use` が束縛する名前（glob の `use` と Rust のままの項目は `*`。[`guard`]）。
+    local_items: Vec<String>,
 }
 
 impl<'a> Walker<'a> {
@@ -158,6 +164,9 @@ impl<'a> Walker<'a> {
             proof_ops: None,
             in_assert_by: false,
             guard_ptrs: false,
+            ever_regions: BTreeSet::new(),
+            ever_held: BTreeSet::new(),
+            local_items: Vec::new(),
         }
     }
 
@@ -208,9 +217,11 @@ impl<'a> Walker<'a> {
                         },
                     );
                     self.known.insert(ident.name.clone());
+                    self.ever_held.insert(ident.name.clone());
                 }
                 ast::UsesItem::Named { ident, ty, .. } => {
                     self.regions.insert(ident.name.clone());
+                    self.ever_regions.insert(ident.name.clone());
                     self.region_modes
                         .insert(ident.name.clone(), region_mode(ty));
                 }
@@ -441,6 +452,7 @@ impl<'a> Walker<'a> {
     fn add_region(&mut self, name: &str) {
         self.proof_op(name);
         self.regions.insert(name.to_string());
+        self.ever_regions.insert(name.to_string());
         self.region_modes.insert(name.to_string(), PermMode::Move);
         self.moved_regions.remove(name);
     }
@@ -509,12 +521,19 @@ impl<'a> Walker<'a> {
     fn block(&mut self, b: &Block) -> bool {
         // `known`（一度でも権限を持った名前）は関数で一つ。Γ と同じく、ブロックで減らさない。
         let saved = self.save_scope();
+        let n = self.local_items.len();
+        for s in &b.stmts {
+            if let StmtKind::Item(item) = &s.kind {
+                self.local_items.extend(guard::item_names(item));
+            }
+        }
         let mut diverges = false;
         for s in &b.stmts {
             if self.stmt(s) {
                 diverges = true;
             }
         }
+        self.local_items.truncate(n);
         self.restore_scope(saved);
         diverges
     }
@@ -523,6 +542,9 @@ impl<'a> Walker<'a> {
         match &s.kind {
             StmtKind::Let(l) => self.local(l, s.span),
             StmtKind::Item(item) => {
+                if self.proof_ops.is_some() && !matches!(item.kind, ast::ItemKind::UseLemmas(_)) {
+                    self.push(item.span, CheckMsg::ItemInProof);
+                }
                 crate::check_nested_items(
                     self.cx.index,
                     self.cx.module,

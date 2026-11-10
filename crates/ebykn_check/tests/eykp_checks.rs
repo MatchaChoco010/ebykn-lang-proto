@@ -306,10 +306,126 @@ fn proofs_cannot_change_regions_through_other_spellings() {
     }
 }
 
+/// `match` の対象に置いた資源は、腕のパターンが束縛し直すので E0520（#149 の 5 回目の再レビューの B6）。
+#[test]
+fn proofs_cannot_rebind_resources_through_match() {
+    for body in [
+        "proof { match r { x => { x.remove(p); } } }",
+        "proof { match a { x => match b { y => { y.insert(x.remove(p)); } } } }",
+        "proof { match r { x => match p@ { q => { x.insert(q); } } } }",
+    ] {
+        let proof = RES.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        assert_ne!(proof, RES);
+        let d = run(RES, &proof);
+        assert!(d.iter().any(|l| l.contains("E0520")), "{body}: {d:?}");
+    }
+    let body = "proof { match r.len() { _ => {} } }";
+    let proof = RES.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+    let d = run(RES, &proof);
+    assert!(d.is_empty(), "{body}: {d:?}");
+}
+
+/// クレートの `spec fn` に資源を渡す形は、名前が本当にその `spec fn` を指すと決められるときだけ通す（B7）。
+/// 証明の文の中の項目と `use` は書けず、本体の `use` や cfg で消える項目を通した名前は E0520。
+#[test]
+fn proofs_pass_resources_only_to_crate_spec_fns() {
+    let spec = "pub struct S { pub v: u64 }\nimpl S { pub spec fn remove(a: Region<Ptr<Node>>, p: Ptr<Node>) -> bool = true; }\n";
+    let src = format!("{spec}{RES}");
+    let insert = |src: &str, body: &str| {
+        let out = src.replace("    leak p@;\n", &format!("    {body}\n    leak p@;\n"));
+        assert_ne!(out, src);
+        out
+    };
+    // 証明の中の `use`。
+    let proof = insert(
+        &src,
+        "proof { use ebykn_prelude::Region as S; S::remove(r, p); }",
+    );
+    let d = run(&src, &proof);
+    assert!(
+        d.iter()
+            .any(|l| l.contains("cannot be written in a proof statement")),
+        "{d:?}"
+    );
+    // `.eyk` の本体の `use` が名前を覆う。
+    let local = src.replace(
+        "    leak p@;\n    leak c@;\n",
+        "    use ebykn_prelude::Region as S;\n    leak p@;\n    leak c@;\n",
+    );
+    assert_ne!(local, src);
+    let d = run(&local, &insert(&local, "proof { S::remove(r, p); }"));
+    assert!(d.iter().any(|l| l.contains("E0520")), "{d:?}");
+    // cfg で消える項目。
+    let gated = format!(
+        "#[cfg(test)]\npub struct T {{ pub v: u64 }}\n#[cfg(test)]\nimpl T {{ pub spec fn remove(a: Region<Ptr<Node>>, p: Ptr<Node>) -> bool = true; }}\n#[cfg(not(test))]\nuse ebykn_prelude::Region as T;\n{RES}"
+    );
+    let d = run(&gated, &insert(&gated, "proof { T::remove(r, p); }"));
+    assert!(d.iter().any(|l| l.contains("E0520")), "{d:?}");
+    // 名前が決まるクレートの `spec fn` には渡せる。
+    let d = run(
+        &src,
+        &insert(
+            &src,
+            "proof { assert S::remove(*r, p) == S::remove(*r, p); }",
+        ),
+    );
+    assert!(d.is_empty(), "{d:?}");
+}
+
+/// パターンで領域の名前を覆ったあとも、ガードはその名前を領域とみなす（B8）。
+#[test]
+fn proofs_remember_shadowed_region_names() {
+    let src = format!(
+        "{NODE}pub fn g1(p: Ptr<Node>) uses r: &mut Region<Ptr<Node>>\n    requires old(r).contains(p),\n    ensures !final(r).contains(p),\n{{\n    if let Some(r) = Some(0u64) {{ }}\n}}\n"
+    );
+    let proof = src.replace(
+        "    if let Some(r) = Some(0u64) { }\n",
+        "    if let Some(r) = Some(0u64) { }\n    proof { r.remove(p); }\n",
+    );
+    assert_ne!(proof, src);
+    let d = run(&src, &proof);
+    assert!(d.iter().any(|l| l.contains("E0520")), "{d:?}");
+}
+
 /// prelude の関数を、ソースのすべてのファイル（トレイトとトレイトの impl のメソッドを含む）から集め、一つずつ
 /// 証明の中で呼んで確かめる（B4・B5 の再発防止）。資源の型の spec の関数は許すリストにあり、許すリストの名前は
 /// どの資源の型でも spec でない関数の名前でない。spec でない関数は、包んだ形でもすべて E0520。prelude に
 /// 関数・型・ファイルを足すと、分類を求めてこのテストが落ちる。
+/// prelude の関数の宣言で `fn` の前に置く語。
+const FN_QUALIFIERS: &[&str] = &[
+    "pub",
+    "pub(crate)",
+    "pub(super)",
+    "open",
+    "closed",
+    "spec",
+    "proof",
+    "exec",
+    "broadcast",
+    "uninterp",
+    "const",
+    "unsafe",
+];
+
+/// 行の先頭の属性（`#[..]`。入れ子の括弧を数える）を外す。
+fn strip_attrs(mut t: &str) -> &str {
+    while let Some(rest) = t.strip_prefix("#[") {
+        let mut depth = 1;
+        let Some(end) = rest.char_indices().find_map(|(i, c)| {
+            match c {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(i)
+        }) else {
+            return t;
+        };
+        t = rest[end + 1..].trim_start();
+    }
+    t
+}
+
 #[test]
 fn every_prelude_fn_is_classified() {
     let spec_list = ebykn_check::body::PRELUDE_SPEC_FNS;
@@ -344,7 +460,8 @@ fn every_prelude_fn_is_classified() {
         let mut head: Option<(usize, String, bool)> = None;
         for line in text.lines() {
             let indent = line.len() - line.trim_start().len();
-            let t = line.trim_start();
+            // 行の先頭の属性（`#[..]`）は外して読む（`#[verifier::external_body] pub proof fn ..`）。
+            let t = strip_attrs(line.trim_start());
             if let Some((h, _, _)) = &head
                 && indent <= *h
                 && !t.is_empty()
@@ -385,6 +502,13 @@ fn every_prelude_fn_is_classified() {
             if !(pos == 0 || t[..pos].ends_with(' ')) || t.starts_with("//") {
                 continue;
             }
+            // `fn` の前は修飾子だけ。読めない行は分類できないので失敗にする（読めない入力に黙らない）。
+            assert!(
+                t[..pos]
+                    .split_whitespace()
+                    .all(|w| FN_QUALIFIERS.contains(&w)),
+                "{file}: 関数の行を読めません: `{line}`"
+            );
             let name: String = t[pos + 3..]
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')

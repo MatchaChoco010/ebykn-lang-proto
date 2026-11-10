@@ -105,7 +105,7 @@ impl Walker<'_> {
             ExprKind::Perm(x) => Some(format!("{}@", x.name)),
             ExprKind::Path { qself: None, path } => {
                 let x = path.as_ident()?;
-                let held = self.env.contains_key(&x.name) || self.known.contains(&x.name);
+                let held = self.is_held(&x.name);
                 (self.is_region(&x.name) || self.guard_ptrs && held).then(|| x.name.clone())
             }
             ExprKind::Erased { base, field } => {
@@ -226,7 +226,9 @@ impl Walker<'_> {
                 a.or(b)
             }
             ExprKind::Match { expr, arms } => {
-                let mut t = self.taint(expr);
+                // 対象は腕のパターンが束縛するので、資源を含めば E0520（`let` と同じ）。
+                self.guard_value(expr);
+                let mut t = None;
                 for arm in arms {
                     if let Some(g) = &arm.guard {
                         self.guard_value(g);
@@ -358,7 +360,7 @@ impl Walker<'_> {
             ExprKind::Perm(x) => Some(format!("{}@", x.name)),
             ExprKind::Path { qself: None, path } => {
                 let x = path.as_ident()?;
-                let held = self.env.contains_key(&x.name) || self.known.contains(&x.name);
+                let held = self.is_held(&x.name);
                 (self.is_region(&x.name) || held).then(|| x.name.clone())
             }
             ExprKind::Erased { field, .. } if self.is_owns(&field.name) => {
@@ -371,8 +373,16 @@ impl Walker<'_> {
         }
     }
 
+    /// 関数の中で一度でも領域だった名前か（パターンで覆った名前も含む。多めに止める）。
     fn is_region(&self, name: &str) -> bool {
-        self.regions.contains(name) || self.region_modes.contains_key(name)
+        self.ever_regions.contains(name)
+            || self.regions.contains(name)
+            || self.region_modes.contains_key(name)
+    }
+
+    /// 関数の中で一度でも権限を持った名前か。
+    fn is_held(&self, name: &str) -> bool {
+        self.ever_held.contains(name) || self.env.contains_key(name) || self.known.contains(name)
     }
 
     /// クレートのどれかの構造体の `owns` にある名前（型を決めずに、多めに数える）。
@@ -384,20 +394,31 @@ impl Walker<'_> {
             .any(|s| s.erased_kind(field) == Some(crate::index::ErasedKind::Owns))
     }
 
-    /// 呼び出しの頭が、索引で解決したクレートの `spec fn` か。
+    /// 呼び出しの頭が、クレートの `spec fn` だと決められるか。次をすべて満たすときだけ：パスの先頭の名前を、
+    /// 囲むブロックの項目と `use` も、関数と `impl` の型の引数も束縛していない。囲むブロックに glob の
+    /// `use` と Rust のままの項目がない。索引で解決した先が cfg で消えない `spec fn`。
     fn is_crate_spec(&self, func: &Expr) -> bool {
         let ExprKind::Path { qself: None, path } = &func.kind else {
             return false;
         };
         let segs: Vec<String> = path.segments.iter().map(|s| s.ident.name.clone()).collect();
+        let Some(head) = segs.first() else {
+            return false;
+        };
+        let bound = |n: &String| n == head || n == "*";
+        if self.local_items.iter().any(bound) || self.cx.type_params.contains(head) {
+            return false;
+        }
         let r = self
             .cx
             .index
             .resolve(self.cx.module, path.leading_colon, &segs, self.cx.self_ty);
-        self.cx
-            .index
-            .callee(&r)
-            .is_some_and(|f| f.kind == crate::index::FnKind::Spec)
+        self.cx.index.is_live_def(&r)
+            && self
+                .cx
+                .index
+                .callee(&r)
+                .is_some_and(|f| f.kind == crate::index::FnKind::Spec)
     }
 
     /// 呼び出しの頭が prelude の型の spec でない関連関数（`Region::empty`、`R::remove`）なら、その名前。
@@ -439,7 +460,7 @@ impl Walker<'_> {
                         matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '@');
                     let at_before = i > 0
                         && matches!(tts.get(i - 1), Some(TokenTree::Punct(p)) if p.as_char() == '@');
-                    let held = self.env.contains_key(&n) || self.known.contains(&n);
+                    let held = self.is_held(&n);
                     let dot_after =
                         matches!(tts.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '.');
                     if self.is_region(&n)
@@ -459,4 +480,36 @@ impl Walker<'_> {
 fn is_old_final(func: &Expr) -> bool {
     matches!(&func.kind, ExprKind::Path { qself: None, path }
         if path.as_ident().is_some_and(|i| i.is("old") || i.is("final")))
+}
+
+/// ブロックの中の項目が束縛する名前（[`Walker::block`] が集める）。glob の `use` と、名前を決められない
+/// Rust のままの項目は `*`。
+pub(super) fn item_names(item: &ast::Item) -> Vec<String> {
+    use ast::ItemKind as K;
+    let ident = match &item.kind {
+        K::Fn(f) => &f.sig.ident,
+        K::SpecFn(f) => &f.sig.ident,
+        K::LemmaFn(f) => &f.sig.ident,
+        K::Struct(x) => &x.ident,
+        K::Enum(x) => &x.ident,
+        K::Trait(x) => &x.ident,
+        K::TypeAlias(x) => &x.ident,
+        K::Subset(x) => &x.ident,
+        K::Mod(x) => &x.ident,
+        K::Const(x) => &x.ident,
+        K::Static(x) => &x.ident,
+        K::LemmaGroup(x) => &x.ident,
+        K::Use(t) => {
+            return crate::index::parse_use(&t.tokens)
+                .into_iter()
+                .map(|i| match i {
+                    crate::index::Import::Name { alias, .. } => alias,
+                    crate::index::Import::Glob { .. } => "*".to_string(),
+                })
+                .collect();
+        }
+        K::Rust(_) => return vec!["*".to_string()],
+        K::Impl(_) | K::ImplSpec(_) | K::UseLemmas(_) => return Vec::new(),
+    };
+    vec![ident.name.clone()]
 }
